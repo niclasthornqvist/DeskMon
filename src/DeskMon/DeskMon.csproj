@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Only for the notification-area icon: WinForms has a NotifyIcon, WPF
+         has no equivalent. Both are part of the Desktop runtime that is already
+         installed, so this costs nothing at deployment. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>DeskMon</AssemblyName>
+    <RootNamespace>DeskMon</RootNamespace>
+    <!-- Keep in step with the top entry of Changelog.cs, which is what the
+         versions window reports as the running version. -->
+    <Version>1.61.1</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The exe's own icon, for Explorer, the taskbar and DeskMon's windows.
+         The same tile as the tray icon (TrayIcon.BuildIcon), drawn out at
+         16-256 px: the tray one is only made at run time, so the exe had the
+         blank default. -->
+    <ApplicationIcon>DeskMon.ico</ApplicationIcon>
+    <!-- LibreHardwareMonitor ships a per-architecture build of its library, so
+         naming the RID keeps the publish folder to just the x64 files instead
+         of a runtimes\ tree full of Linux and Android copies. Not self-contained:
+         the .NET 8 Desktop runtime is already installed. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <!-- Bundle every library into DeskMon.exe so app\ holds only the exe and
+         the user's own data (settings, notes, sessions). Safe because the code
+         finds its folder through AppContext.BaseDirectory / ProcessPath, which
+         still point at the exe; Assembly.Location would come back empty.
+         The two native helpers LibreHardwareMonitor ships for Linux are
+         bundled too; .NET unpacks them to %TEMP%\.net\DeskMon\<hash> the first
+         time each build starts, then reuses them. Build.ps1 deletes old copies. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Note: do NOT turn on InvariantGlobalization - WPF's font fallback needs
+         real culture data and throws while measuring the first TextBlock. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Background GC keeps a dedicated thread and extra committed memory alive
+         for a process that allocates almost nothing once it's up. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <DebugType>embedded</DebugType>
+    <!-- WFAC010 tells WinForms apps to move DPI settings out of the manifest.
+         This is a WPF app that only borrows WinForms for the tray icon, and WPF
+         needs the per-monitor-v2 declaration in the manifest itself.
+         SYSLIB1054 suggests [LibraryImport] over [DllImport], which builds the
+         marshalling code at compile time. That only pays off for Native AOT or
+         trimming, and DeskMon uses neither; converting would mean partial
+         classes, explicit marshalling attributes and rewriting every
+         StringBuilder buffer, across code that works. -->
+    <NoWarn>$(NoWarn);WFAC010;SYSLIB1054</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <!-- WMI, for the per-module memory brand and part numbers in the hardware
+         window. Only queried when that window is opened. -->
+    <!-- Version matches what LibreHardwareMonitorLib already pulls in, so the
+         two don't fight. -->
+    <PackageReference Include="System.Management" Version="10.0.2" />
+    <!-- Steam's app-info servers, logged in anonymously, for a game's logo:
+         newer games keep it under a hashed address that only the app info
+         gives out - the store's web API and pages don't. Only used by the
+         sessions window, once per game, when the logo isn't on this PC or at
+         the old fixed address. See SteamAppInfo.cs. -->
+    <PackageReference Include="SteamKit2" Version="3.0.0" />
+  </ItemGroup>
+
+</Project>

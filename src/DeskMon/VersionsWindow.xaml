@@ -1,0 +1,64 @@
+<ui:PanelWindow x:Class="DeskMon.VersionsWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Versions"
+                Width="440" Height="400"
+                MinWidth="300" MinHeight="180"
+                ShowInTaskbar="False"
+                ShowActivated="False"
+                TextOptions.TextFormattingMode="Display"
+                FontFamily="Consolas">
+
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+    </ui:PanelWindow.Resources>
+
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0"
+                           Text="VERSIONS"
+                           Margin="12,8,8,6"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- What DeskMon needs installed, as one line above the history
+                 rather than in it, so it doesn't scroll away. Filled in code:
+                 the status of each is looked up on this machine. -->
+            <StackPanel x:Name="Requirements" DockPanel.Dock="Top" Margin="12,7,12,7" />
+
+            <!-- Whether a newer DeskMon is out, from the daily check - or how to
+                 turn the check on. Filled in code (RefreshUpdate); a newer
+                 version is a link to its release page. -->
+            <TextBlock x:Name="UpdateLine" DockPanel.Dock="Top" Margin="12,0,12,7"
+                       TextWrapping="Wrap" />
+            <Border x:Name="RequirementsRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- Scrolls rather than sizing to content: the list only grows, and
+                 a window that grew with it would eventually be taller than the
+                 screen. Built in code - a heading per day that folds its
+                 releases away - see BuildHistory. -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Margin="12,6,4,10">
+                <StackPanel x:Name="History" Margin="0,0,8,0" />
+            </ScrollViewer>
+        </DockPanel>
+    </Border>
+</ui:PanelWindow>

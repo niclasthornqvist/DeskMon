@@ -1,0 +1,181 @@
+<ui:PanelWindow x:Class="DeskMon.PicturesWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Pictures"
+                Width="600" Height="520"
+                MinWidth="300" MinHeight="240"
+                ShowInTaskbar="False"
+                ShowActivated="False"
+                TextOptions.TextFormattingMode="Display"
+                FontFamily="Consolas">
+
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+    </ui:PanelWindow.Resources>
+
+    <!-- The open game's screenshots, as thumbnails: when each was taken, how
+         big it is, whether the notes still show it, and a way to delete it.
+         Follows the notes window to whichever game it has open. -->
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0"
+                           Text="PICTURES"
+                           Margin="12,8,8,6"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- What can be done here, in the row every window has under its
+                 header (ActionRow, in PanelStyles.xaml). -->
+            <StackPanel Style="{StaticResource ActionRow}" Orientation="Horizontal">
+                <!-- A folder: tab on top, body below. -->
+                <Button Style="{StaticResource ToolButton}"
+                        ToolTip="Open this game&apos;s screenshots folder in Explorer"
+                        Click="OpenFolder_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M0.5,2.5 H4 L5,3.5 H9.5 V9.5 H0.5 Z M0.5,4.5 H9.5" />
+                        <TextBlock Text="FOLDER" />
+                        <Path Style="{StaticResource OpensWindowMark}" />
+                    </StackPanel>
+                </Button>
+
+                <!-- The order of the tiles. Filled and wired in code, so picking
+                     the saved choice at startup doesn't count as a change. -->
+                <ComboBox x:Name="SortPicker" Style="{StaticResource DarkCombo}"
+                          Width="150" Margin="6,0,4,0" Focusable="False"
+                          VerticalAlignment="Center"
+                          ToolTip="The order the pictures are shown in" />
+
+                <!-- Only there when there is something to clean up, so it comes
+                     last: appearing, it doesn't push FOLDER or the order along.
+                     The same bin as each picture's own. -->
+                <Button x:Name="CleanButton" Style="{StaticResource ToolButton}"
+                        Visibility="Collapsed" Click="Clean_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M1.5,2.5 H9.5 M4.5,2.5 V0.5 H6.5 V2.5
+                                    M2.5,2.5 V9.5 H8.5 V2.5
+                                    M4.5,4.5 V7.5 M6.5,4.5 V7.5" />
+                        <TextBlock x:Name="CleanText" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Which notes, how many pictures, how much space and how many
+                 are unused, as cards - the same cards as the session history's
+                 STEAM PLAYTIME and LOGGED (Ui/StatCard), so the two windows
+                 read alike. Filled in code; wraps in a narrow window. -->
+            <WrapPanel x:Name="Stats" DockPanel.Dock="Top" Margin="12,6,4,0" />
+
+            <!-- Under the cards, only when something needs reading: many
+                 pictures in the notes, a folder that couldn't be read, a
+                 delete that failed. Collapsed otherwise, so it leaves no gap. -->
+            <TextBlock x:Name="SummaryText" DockPanel.Dock="Top"
+                       Margin="12,0,12,8" TextWrapping="Wrap" />
+
+            <Grid>
+                <ScrollViewer x:Name="Scroller"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              Margin="12,0,4,10" Focusable="False">
+                    <WrapPanel x:Name="Tiles" Margin="0,0,0,0" />
+                </ScrollViewer>
+
+                <!-- What an empty folder shows instead of a blank window: a
+                     stack of photo cards with a camera on them, and how to take
+                     the first picture. Drawn rather than an image file, so it is
+                     sharp at any size and in DeskMon's own colours. Shown only
+                     when there is nothing to list; it never takes a click. -->
+                <StackPanel x:Name="EmptyState" Visibility="Collapsed" IsHitTestVisible="False"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Margin="16,0,16,28">
+                    <StackPanel.RenderTransform>
+                        <TranslateTransform x:Name="EmptyShift" />
+                    </StackPanel.RenderTransform>
+
+                    <Viewbox Width="170" Height="134" HorizontalAlignment="Center">
+                        <Canvas Width="150" Height="118">
+                            <!-- Two cards behind, fanned out. -->
+                            <Rectangle Canvas.Left="25" Canvas.Top="20" Width="100" Height="78"
+                                       RadiusX="8" RadiusY="8"
+                                       Fill="{DynamicResource Theme.Ov.0A}" Stroke="{DynamicResource Theme.Ov.1F}" StrokeThickness="1.2"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <RotateTransform Angle="-11" />
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="25" Canvas.Top="20" Width="100" Height="78"
+                                       RadiusX="8" RadiusY="8"
+                                       Fill="{DynamicResource Theme.Ov.0F}" Stroke="{DynamicResource Theme.Ov.2B}" StrokeThickness="1.2"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <RotateTransform Angle="7" />
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+
+                            <!-- The front card, a print with a white strip under the picture. -->
+                            <Rectangle Canvas.Left="23" Canvas.Top="18" Width="104" Height="82"
+                                       RadiusX="8" RadiusY="8"
+                                       Fill="{DynamicResource Theme.Popup}" Stroke="{DynamicResource Theme.Ov.4D}" StrokeThickness="1.5" />
+
+                            <!-- The picture on it: a dusk sky, two ranges of hills and a sun. -->
+                            <Canvas Canvas.Left="0" Canvas.Top="0">
+                                <Canvas.Clip>
+                                    <RectangleGeometry Rect="29,24,92,58" RadiusX="5" RadiusY="5" />
+                                </Canvas.Clip>
+                                <Rectangle Canvas.Left="29" Canvas.Top="24" Width="92" Height="58">
+                                    <Rectangle.Fill>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                            <GradientStop Color="{DynamicResource Theme.AccentColor.40}" Offset="0" />
+                                            <GradientStop Color="{DynamicResource Theme.AccentColor.14}" Offset="1" />
+                                        </LinearGradientBrush>
+                                    </Rectangle.Fill>
+                                </Rectangle>
+                                <Ellipse Canvas.Left="95" Canvas.Top="32" Width="13" Height="13" Fill="#E6FBBF24" />
+                                <Path Data="M29,82 L56,50 L76,68 L93,56 L121,76 L121,82 Z" Fill="{DynamicResource Theme.Accent.4D}" />
+                                <Path Data="M29,82 L47,64 L61,74 L82,58 L110,82 Z" Fill="{DynamicResource Theme.Accent.99}" />
+                            </Canvas>
+
+                            <!-- A caption line on the strip. -->
+                            <Rectangle Canvas.Left="33" Canvas.Top="88" Width="38" Height="3"
+                                       RadiusX="1.5" RadiusY="1.5" Fill="{DynamicResource Theme.Ov.33}" />
+
+                            <!-- The camera, in a badge on the corner. -->
+                            <Ellipse Canvas.Left="108" Canvas.Top="78" Width="32" Height="32"
+                                     Fill="{DynamicResource Theme.Popup}" Stroke="{DynamicResource Theme.Accent.99}" StrokeThickness="1.5" />
+                            <Path Data="M116,91 H119.5 L121,88.5 H127 L128.5,91 H132 V101 H116 Z"
+                                  Stroke="{DynamicResource Theme.Accent}" StrokeThickness="1.4" StrokeLineJoin="Round" />
+                            <Ellipse Canvas.Left="120.5" Canvas.Top="92.5" Width="7" Height="7"
+                                     Stroke="{DynamicResource Theme.Accent}" StrokeThickness="1.4" />
+                        </Canvas>
+                    </Viewbox>
+
+                    <TextBlock x:Name="EmptyTitle" Text="No pictures yet"
+                               HorizontalAlignment="Center" FontWeight="SemiBold"
+                               Margin="0,16,0,6" />
+                    <TextBlock x:Name="EmptyText" HorizontalAlignment="Center"
+                               TextAlignment="Center" TextWrapping="Wrap" MaxWidth="320" />
+                    <TextBlock x:Name="EmptyHint" HorizontalAlignment="Center"
+                               TextAlignment="Center" TextWrapping="Wrap" MaxWidth="320"
+                               Margin="0,10,0,0" />
+                </StackPanel>
+            </Grid>
+        </DockPanel>
+    </Border>
+</ui:PanelWindow>

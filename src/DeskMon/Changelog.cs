@@ -1,0 +1,533 @@
+namespace DeskMon;
+
+/// <summary>
+/// ===========================================================================
+///  ADD A LINE HERE WHEN YOU CHANGE SOMETHING.
+/// ===========================================================================
+/// What the versions window shows, newest first. Kept in the source rather than
+/// in a file beside the exe for the same reason the metrics are: it is edited
+/// in the same breath as the code it describes, and it cannot go missing.
+///
+/// Keep each entry to a handful of one-line notes. This is a summary of what
+/// changed, not a commit log - the window is small on purpose, and a wall of
+/// text in it would never be read. Put the detail in README.md.
+///
+/// The top entry's version is what the program reports as its own, so bump it
+/// and add notes in the same edit. <c>Version</c> in DeskMon.csproj should
+/// match it.
+/// </summary>
+public static class Changelog
+{
+    /// <param name="Version">Semantic-ish: bump the middle number for a feature.</param>
+    /// <param name="Date">yyyy-MM-dd, the day it was built.</param>
+    /// <param name="Changes">One short line each, the user-visible part first.</param>
+    public sealed record Release(string Version, string Date, params string[] Changes);
+
+    /// <summary>The version this build reports as its own.</summary>
+    public static string Current => Releases[0].Version;
+
+    public static readonly Release[] Releases =
+    {
+        new("1.61.1", "2026-10-21",
+            "Safer: the update link only ever opens a page on github.com, and the update repository must look like owner/name",
+            "Safer: pictures in the notes are only read from drives on this PC - a link to a network share is never opened, even just by showing the notes",
+            "Safer: downloaded game art is only kept and shown if it really is a PNG or JPEG of sensible size, fetched over https"),
+
+        new("1.61.0", "2026-10-21",
+            "Notes: HISTORY lists the note's earlier copies - click one to put it back; the notes it replaces are kept as a copy too",
+            "Notes: H1 and H2 make the line a heading, click again for plain text",
+            "Notes: strikethrough button beside underline",
+            "Notes: the to-do popup takes the items themselves - Enter for the next, Enter on an empty one to put the list in; pasted lines become an item each",
+            "Notes: the to-do popup is tidier - the kind is a row of three buttons, and the item count is gone",
+            "Notes: pictures fill the width of the notes, up from 90%, centred on the page rather than a little to the right",
+            "Fixed: notes just over a screenful long bounced - pictures and the text under them kept resizing as the scrollbar came and went",
+            "DeskMon.exe and its windows have DeskMon's icon, not the blank default",
+            "RESET button removed from the widget; Reset peaks is still on the right-click menu",
+            "Notes colour picker: the second small swatch is now a Normal button",
+            "Colour picker keeps its size instead of following the hex value's width"),
+
+        new("1.60.0", "2026-10-21",
+            "Safer: PresentMon is only started when it is signed by Intel, and DeskMon's own Windows DLLs are only loaded from System32 - it runs as administrator, from a folder other programs can write to",
+            "The widget's version number says (Developer mode) while DeveloperRebuild is on",
+            "Settings: PresentMon location is gone from the settings window - it is found automatically, and PresentMonPath in settings.json still overrides it",
+            "Horizontal layout: Settings > Widget > Layout puts the sections side by side, a column each, for the top or bottom of a screen - drag a heading left or right to move it",
+            "Pictures window: the header is a row of cards - NOTES, PICTURES, SIZE and NOT IN NOTES - like the session history's",
+            "For working on DeskMon: \"DeveloperRebuild\": true in settings.json adds a BUILD button that checks the source compiles, then rebuilds and restarts"),
+
+        new("1.59.1", "2026-10-21",
+            "Fixed: new notes holding only a screenshot were never saved, and lost the picture",
+            "Fixed: a settings.json that won't read is kept as settings.unreadable-<time>.json instead of being written over with the defaults",
+            "An unexpected error no longer closes DeskMon - it goes in error.log and the widget carries on",
+            "No more freezes: when a game starts, on Delete unused with many pictures, or in the sessions window's All games when a game exits",
+            "Notes with many screenshots pause less often while you type",
+            "Quicker: notes decode their screenshots two at a time when opened, the pictures window rebuilds faster, and Steam game names are read once",
+            "Two screenshots taken in the same second no longer save over each other"),
+
+        new("1.59.0", "2026-10-20",
+            "Pictures: a built-in viewer - zoom, pan, arrow keys between pictures, Ctrl+C to copy, F to favourite, Del to delete - opened by clicking a picture in the notes or the pictures window",
+            "Mark up a picture: arrows, circles, boxes, pen and text in a choice of colours, saved in place or as a copy - from the viewer, or right-click a picture in the notes",
+            "Pictures window: favourites with a star, sorted first if you like, copy a picture to the clipboard, and its own drawn background",
+            "Delete a picture from the notes or the pictures window with the DELETE badge in its corner - click once to arm, again to delete; deleted pictures go to the Recycle Bin",
+            "The date on a screenshot in the notes moved to the bottom-left corner",
+            "Right-clicking text shows the dark Cut, Copy and Paste menu, following the theme",
+            "Game icons for games outside Steam - GOG's own, or looked up in the Steam store by name",
+            "Sessions: easier to read over the game's picture - frosted cards and a darker backdrop behind the numbers",
+            "The pictures window stays docked right beside the notes, whatever the theme and glow"),
+
+        new("1.58.0", "2026-10-20",
+            "Themes: one setting changes the look of the whole program - Dark, Light, Cyberpunk, Neon, Fantasy, Futuristic, Retro terminal, Minimalist, Ocean, Sunset, Forest, Dracula and Nord",
+            "Custom keeps your own colours: picking a theme saves them first, and picking Custom brings them back; changing anything a theme set makes it Custom",
+            "New settings: accent colour, window font, corner roundness, and a glow around the widget and windows with a colour of its own",
+            "Buttons, boxes, dropdowns, sliders, scrollbars, tooltips and both right-click menus follow the theme - light themes included",
+            "DeskMon picture setting: how strongly the logo shows behind the widget's readings, and stronger by default",
+            "Window background and text colour apply at once, without a reload"),
+
+        new("1.57.0", "2026-10-20",
+            "Performance score: every session and every game scored out of 100 in the sessions window - green, amber or red, with what cost the points in the tooltip",
+            "The score weighs frame rate, 1% lows, stability, frame-time consistency, and CPU and GPU heat and RAM; a game's is its last 10 sessions",
+            "Target frame rate setting (TargetFps): the FPS a game needs for full marks - your monitor's refresh rate is a good choice; changing it re-scores every session",
+            "Sessions log the 1% and 0.1% lows and frame-time jitter over the whole session, not just the lowest the widget showed - which was mostly a loading screen",
+            "Sessions: a Score column in both tables, lowest first on the first click, a SCORE card, and Performance score in the chart"),
+
+        new("1.56.0", "2026-10-20",
+            "Gradient bars on the widget and in the sessions chart, with their colours in Settings",
+            "Game icons in the notes and sessions game pickers: Steam's own icon, or a coloured tile with the game's initials",
+            "Pictures in the notes light up on hover, as in the pictures window",
+            "RAM and SWAP unfold the five programs using the most memory, every process of a program counted together - what to close when they turn red",
+            "New DISK section: read and write speed, and FULL - the fullest drive - which unfolds every drive with its free space",
+            "New NETWORK section: download and upload in Mb/s, and PING to a server of your choice while a game runs (PingHost)",
+            "Alerts: a reading that stays red for a minute - CPU or GPU too hot, memory or a drive nearly full - says so in the notification area, and under the FPS overlay during a game",
+            "Separate layout for games: sections folded while a game runs are remembered apart from the desktop's, and the widget switches by itself - DISK and NETWORK start folded in games",
+            "Sessions: every bar in the chart has its value above it - or, with too many bars for the numbers to fit, the highest and lowest do",
+            "Alerts: a reading that stays red is announced once, and again only after it recovers - not every ten minutes all day",
+            "Fixed: one network adapter that wouldn't report its counts made DOWN and UP read n/a; a VPN connecting no longer shows as a huge spike; Hyper-V's virtual switch (WSL, Docker) is no longer counted twice",
+            "Fixed: a long program name in the memory lists could make the widget wider for good",
+            "Sessions opens on the game you looked at last - All games included - when opened from the widget or the tray",
+            "Fixed: reopening a window whose picture changed while it was closed could fade in the old game's picture, or stop half way; every opening is now one clean fade in of the right one",
+            "Fixed: reopening a window flashed its banner up at full strength for a moment before fading it in - Windows showed its last picture of the window; the banner is now put out on screen as the window closes",
+            "Opening a window waits half a second, then its banner fades in slowly over 1.6 seconds, so the window settles first and the picture follows; changing game fades in over 0.7 seconds",
+            "Fixed: setting the release page in Settings now checks for updates within seconds, and the versions window shows it when opened",
+            "Settings: Sections shown - tick which sections the widget shows, one column for the desktop and one for games; an unticked one is left off entirely, heading and all",
+            "Update check: once a day, a newer release on GitHub is announced in the notification area and the versions window (set the release page in Settings); nothing is downloaded"),
+
+        new("1.55.0", "2026-10-20",
+            "Sessions: the game's picture as a banner behind the top of the window - Steam's library art, your newest screenshot of it, its banner from the Steam store (downloaded once, can be turned off), or a drawn gamepad - and a collage of the most played for All games",
+            "Sessions: the game's logo - or its name in large type - in the banner's bottom-right corner; newer games' logos come from Steam's app info, asked anonymously",
+            "Sessions: changing game fades the old banner and logo out before the new ones come in, and the chart no longer jumps between a logo and a name",
+            "Every window has a banner behind its header: the open game's picture in the notes and pictures windows, a drawn notepad, gear, chip or timeline in the others",
+            "The widget has a faint DeskMon logo behind its readings, and every window's banner fades in each time it is opened",
+            "Sessions: every session has an ID, its number in the game's history, shown as the table's first column and on the DELETE button - \"DELETE: SESSION ID 2\"",
+            "Every row on the widget has a tooltip: what it measures, how to read it, and when it turns amber and red",
+            "The headings say what their section is about, and whether a click folds it away or shows it again",
+            "Rows light up softly under the mouse, and their label brightens",
+            "Rows that unfold more - CPU and GPU temperature, FPS - show a hand cursor",
+            "Unfolded sensor rows show the sensor's full name on hover",
+            "Drag a heading - USAGE, TEMPERATURE, GAME - up or down to change the order of the sections; it is remembered",
+            "A heading now folds its section when you let go of the click, so a press can turn into a drag instead",
+            "Fixed: switching the FPS overlay on from Settings mid-game could put it in the settings window's corner",
+            "Fixed: a program could be taken for a listed game it had nothing to do with, by being handed the game's old process number",
+            "The FPS overlay's twice-a-second refresh no longer sorts the whole frame history for lows it never shows",
+            "The FPS overlay hides while another program is in front, and comes back when you return to the game",
+            "Pictures: docked to the notepad - it opens against its side, as tall as it, and the two move and resize together",
+            "Pictures: sort them - newest, oldest, largest, smallest, or not in notes first - from the dropdown by FOLDER",
+            "Notes: the file's path at the bottom is a button - folder icon, hover and ↗ - that shows the file in Explorer, on the right",
+            "Notes: no \"Notes for\" label - the list of games takes the full width",
+            "Notes: the status line starts with \"Status:\" and says what worked - Loaded successfully, Saved successfully",
+            "Notes: anything that went wrong in the status line is in the warning colour",
+            "Notes: a little space above and below every picture, so the text either side isn't pressed against it",
+            "Notes: pictures have rounded corners and a thin outline, like the panels around them",
+            "Notes: pictures are 90% of the window's width rather than all of it",
+            "Notes: PICTURES works like the widget's buttons - click to open, click again to close, lit blue while open",
+            "Notes: ALL SESSIONS does too, and lights up together with the widget's LOG",
+            "Pictures: a game with none shows a picture of a photo stack and a camera, and how to take the first one",
+            "Notes: pictures are centred in the notes window",
+            "Fixed: the empty space round a picture in the notes opened it too - only the picture itself does now",
+            "Notes: new text starts at 10 pt, and 10.5 is gone from the size list; text at 10.5 becomes 10",
+            "Fixed: the widget could end up behind other always-on-top windows - a borderless game, Task Manager - and stay there",
+            "Fixed: the pictures window could dock right over the widget and hide it; it takes the other side of the notes instead",
+            "Fixed: the FPS overlay could end up under a borderless game that keeps itself on top",
+            "Fixed: a thin line - the link's underline - showed under every picture in the notes",
+            "Notes: a picture pasted in is fitted to the window straight away, not at the next resize"),
+
+        new("1.54.0", "2026-10-20",
+            "Sessions are saved every minute while you play, so a crash or power cut no longer loses the whole session",
+            "A session DeskMon couldn't finish is logged on the next start, marked \"cut short, DeskMon stopped unexpectedly\"",
+            "New setting: Always treat as a game - for games played in a window, which were never noticed before",
+            "A listed game stays measured while you click past it, and the FPS overlay sits in its window's corner",
+            "GAME section: new GPU row - how busy the graphics card is, to tell whether it or the CPU limits the frame rate",
+            "The GPU row reads n/a while no game is running, like FPS",
+            "Settings window: ticks follow changes made elsewhere - the tray, the widget's menu, the FPS overlay hotkey",
+            "Build.ps1 closes DeskMon properly instead of killing it, so the session being recorded is saved",
+            "Fixed: the hint in the Add program list was cut off once you typed a name that isn't running"),
+
+        new("1.53.1", "2026-10-20",
+            "FPS overlay: no background any more - just the figures, with a thin dark outline to keep them readable",
+            "FPS overlay: sits the same small distance from the top and right edges of the screen",
+            "FPS overlay: a little more see-through by default (0.7)",
+            "Fixed: the FPS overlay's \"FPS\" could be cut off at the right edge of the screen when the number got wider"),
+
+        new("1.53.0", "2026-10-20",
+            "New FPS overlay: the frame rate in large figures in the top-right corner of the screen the game is on",
+            "It is coloured like the FPS row - green, amber below 60, red below 30 - and refreshes twice a second",
+            "Clicks go through it to the game, and it is kept out of screenshots like DeskMon's other windows",
+            "Ctrl+Shift+F11 shows and hides it from inside the game; on by default, and remembered",
+            "New settings under Games and FPS: FPS overlay, its hotkey, size and opacity"),
+
+        new("1.52.0", "2026-10-19",
+            "Notes: NEW, DELETE, SCREENSHOT and PICTURES are labelled buttons like the widget's, first under the header",
+            "Notes: the \"Notes for\" picker sits under those buttons, above the font picker",
+            "Notes: the search box is always there at the top right - it searches as you type, no button or Enter",
+            "Notes: a magnifier beside the search box, and \"Search…\" written in it while it is empty",
+            "Notes: Esc in the search box clears it, Ctrl+F still jumps to it",
+            "Notes: the last session is a table - CPU, CPU and FPS line up, and so does every reading after them",
+            "Notes: ALL SESSIONS is a button with the clock icon, lit on hover like the others",
+            "Notes: General is always first in the list, and DELETE says it can only be cleared, not deleted",
+            "Tooltips are dark like the menus instead of white boxes, and wrap instead of running across the screen",
+            "Every tooltip reworded: what it does on the first line, any detail under it",
+            "Pictures: Add to notes puts a picture taken out of the notes back in, at the end of them",
+            "Pictures: the picture under the mouse is outlined in blue, and its tile lights up",
+            "Pictures: unused pictures are badged NOT IN NOTES on the picture, and counted on the summary line",
+            "Pictures: tidier tiles and summary, and capital-letter buttons like the notes window's",
+            "Every window laid out like the notes: title and ✕ on top, its buttons in a row under the line",
+            "Sessions, Pictures, Hardware and Settings buttons moved into that row - Settings' RELOAD from the bottom, Hardware's copy is COPY",
+            "No minimise button on the notes window any more - ✕ hides it, and the widget's NOTES brings it back",
+            "Buttons that open another window - PICTURES, ALL SESSIONS, FOLDER, OPEN LOG, Browse - end in a small ↗",
+            "Fixed: Always on top could stop working until a restart - Windows sometimes takes it away, and now it is put back",
+            "Pictures: clicking into the window no longer re-reads every game's notes from disk - only ones that changed",
+            "Fixed: Enter in the search box with one letter opened a match the list wasn't showing",
+            "Fixed: a picture added back while switching notes could land in the other game's notes",
+            "Sessions: the lowest bar in the chart is pink, beside the orange highest, with both in the key",
+            "Sessions: hovering a session shows a tidy card - the day, then time and length, then the readings in lined-up columns",
+            "Sessions: the totals at the top are cards - PLAYTIME, LOGGED, SESSIONS, AVERAGE - with the dates on a quiet line below",
+            "Sessions: playtime shows where it is from - a Steam icon, a save disk for the game's saves, a clock for DeskMon's logs",
+            "GOG games show GOG Galaxy's own playtime, like Steam games show Steam's - read from Galaxy's database on this PC",
+            "New setting: Playtime from GOG Galaxy, under Games and FPS"),
+
+        new("1.51.0", "2026-10-19",
+            "Notes: the status line shows where the notes are saved - the full path, not just the file name",
+            "Notes: click the status line to show the file in Explorer"),
+
+        new("1.50.0", "2026-10-19",
+            "Notes: + beside the picker makes a note of your own, listed alongside the games'",
+            "Notes: the bin deletes the open note, game notes too - click twice, it goes to the Recycle Bin",
+            "Notes: deleting General clears it to a fresh page instead - it is always in the list"),
+
+        new("1.49.1", "2026-10-19",
+            "Notes: the to-do popup no longer cuts off its text, and Create looks like a button",
+            "Notes: to-do items wrap under their text instead of under the box, with space between them",
+            "Notes: open and ticked boxes are drawn alike - the ticked one was a bigger emoji",
+            "Notes: the status line says \"Saved 19 Oct, 02:52\" after a save too, not the long date",
+            "Fixed: to-do boxes couldn't be clicked to tick them off after the new layout"),
+
+        new("1.49.0", "2026-10-19",
+            "Notes: new Pictures window - the open game's screenshots as thumbnails, from the button beside the camera",
+            "Pictures: each says whether the notes still show it; Delete unused clears the ones taken out of them",
+            "Pictures: deleting goes to the Recycle Bin, and takes a picture still in the notes out of them too",
+            "Pictures: one game at a time, following the notes - no Witcher 3 pictures under Last Epoch",
+            "Pictures: thumbnails load as they scroll into view, so hundreds of pictures stay light on memory",
+            "Pictures: warns when the notes show 20+ pictures, which makes saving them pause after typing"),
+
+        new("1.48.0", "2026-10-19",
+            "Versions: changes grouped by day, newest first - older days fold away, click to open",
+            "Versions: each version's number beside its changes, with the area (Sessions, Fixed…) in blue",
+            "Versions: what DeskMon needs is one line at the top, with a ✓ or how to install it",
+            "Hardware window: stops at the bottom of the screen and scrolls, instead of running off it",
+            "Notes: toolbar, page and last session each on a soft panel of their own - easier to tell apart",
+            "Notes: the size box shows 10.5 in full, and the header no longer repeats the game's name",
+            "Notes: the status line is short - when it was saved and the file's name, the full path on hover"),
+
+        new("1.47.0", "2026-10-19",
+            "Steam games show Steam's own playtime on the GAME heading - the same hours as in your Steam library",
+            "Read from Steam's files on this PC; other games still use DeskMon's logged time",
+            "New setting: Playtime from Steam, under Games and FPS",
+            "Dawnwalker's playtime comes from its own saves - the time its save menu shows",
+            "Other games can be added the same way, in PlaytimeFromSaves in settings.json",
+            "Sessions: each game's total playtime from Steam or its saves, and a Playtime column in All games",
+            "Fixed: typing straight after a new link carried on the link",
+            "Fixed: linking a whole line picked by triple-click joined it to the next line",
+            "An overlay in front of a game shows its name without a made-up \"0 min\" playtime",
+            "A fault redrawing the notes or Sessions window after a game no longer closes DeskMon"),
+
+        new("1.46.0", "2026-10-19",
+            "The GAME heading shows your total playtime: \"GAME: Dawnwalker (playtime: 13.3 hours)\"",
+            "It counts up while you play, and reads GAME: N/A when no game is running",
+            "Fixed: one sitting could be logged as two sessions a minute apart",
+            "A game that restarts itself, or an overlay (Alt+Z, Game Bar) in front, no longer starts a new session",
+            "A session is written 3 minutes after the game quits, in case it is only restarting"),
+
+        new("1.45.0", "2026-10-18",
+            "Notes: Link button (Ctrl+K) makes the selected text a web link, or edits the one under the cursor",
+            "Ctrl+click a link to open it; Remove link keeps the text",
+            "Every button in every window shows the hand cursor, not just some of them"),
+
+        new("1.44.0", "2026-10-18",
+            "Sessions: the chart can show any reading - lows, latency, temperatures, length - not just FPS",
+            "Sessions: click a column heading to sort by it, again to reverse",
+            "Sessions: Columns button picks which readings the table shows",
+            "Sessions: All games, at the top of the picker, shows every game's playtime side by side",
+            "Sessions: the highest bar in the chart is orange, so it is easy to spot",
+            "Sessions: click a session, then Delete (twice, to be sure) to take it out of the log",
+            "Sessions: Refresh reads the logs again, for changes made in Notepad",
+            "Sessions: the buttons have icons, like the widget's toolbar"),
+
+        new("1.43.2", "2026-10-18",
+            "Hardware window: checks NVIDIA for a newer driver every time it opens, not once per start",
+            "A driver installed while DeskMon runs shows on the next open, without a restart"),
+
+        new("1.43.1", "2026-10-17",
+            "The widget's buttons show a hand cursor on hover, like the version number"),
+
+        new("1.43.0", "2026-10-17",
+            "Notes: screenshots fill the width of the window, and follow it when you resize",
+            "They stay sharp - shown from the full-size file - while the notes file keeps its small preview"),
+
+        new("1.42.1", "2026-10-17",
+            "Notes: a screenshot's date is stamped in its corner instead of written on a line under it"),
+
+        new("1.42.0", "2026-10-17",
+            "Notes: click a screenshot to open it full size - no more \"open full size\" link under it",
+            "New setting: Screenshot quality - lower saves the full-size file as a much smaller JPEG"),
+
+        new("1.41.0", "2026-10-17",
+            "The widget's right-click menu and the tray menu now have the same items, in the same order",
+            "Tray menu: Always on top, Lock position and Reset peaks",
+            "Widget menu: Hide widget - the tray icon brings it back"),
+
+        new("1.40.2", "2026-10-17",
+            "The widget's right-click menu is dark, like the tray icon's, instead of Windows' light one"),
+
+        new("1.40.1", "2026-10-17",
+            "Hardware window opens with less of a pause: logos are prepared only for the brands shown",
+            "The NVIDIA driver check gives up after 10 s in total, not 10 s per request",
+            "Graphics details still show if another display adapter's registry key can't be read",
+            "Build.ps1 deletes the helper files older builds left in %TEMP%\\.net\\DeskMon"),
+
+        new("1.40.0", "2026-10-17",
+            "Hardware window: AMD, Intel and NVIDIA logos on the CPU and graphics rows",
+            "...and the maker's logo on the motherboard and each memory module",
+            "Hardware window: cores, threads, clock and L3 under the CPU; VRAM and driver under the GPU",
+            "Hardware window: new Storage, OS, Up since and Network rows",
+            "Hardware window: says when a newer NVIDIA driver is out, or the driver or BIOS is over a year old",
+            "Settings: sliders beside every number - opacity, text size, widths, refresh - and the box still works",
+            "The program is one DeskMon.exe - no more DLLs beside it in app"),
+
+        new("1.39.0", "2026-10-17",
+            "Start with Windows is a switch in Settings - no script needed",
+            "It makes the same logon task as Install-Autostart.ps1, so either can be used"),
+
+        new("1.38.0", "2026-10-17",
+            "Left-click the tray icon to hide or show the widget",
+            "The tray menu says Hide widget or Show widget, for what it will do"),
+
+        new("1.37.0", "2026-10-17",
+            "Session history window: totals, an FPS chart and every session - the LOG button",
+            "The last session under the notes is laid out by section instead of one long line",
+            "Click the version number to see what changed; the VER button is gone",
+            "Session lengths use the logged length, which is exact to the second"),
+
+        new("1.36.0", "2026-10-17",
+            "Notes: checkbox to-do items - click a box to tick it off, Enter adds the next",
+            "Notes: search every game's notes (Ctrl+F), and jump straight to a match",
+            "Notes: screenshot of the game into its notes with Ctrl+Shift+F12 or the camera button",
+            "New setting: ScreenshotHotkey"),
+
+        new("1.35.0", "2026-10-17",
+            "Settings: font dropdown, and a colour picker with opacity for every colour",
+            "Never treat as a game: tags, added from a list of running programs",
+            "Browse buttons for PresentMon and the notes and session folders",
+            "Font lists show each font in itself"),
+
+        new("1.34.1", "2026-10-17",
+            "Fixed: tabbing out of a game could freeze DeskMon for up to 5 s while PresentMon stopped",
+            "Less work per tick in a game, and no full memory trim on every Alt+Tab back",
+            "Typing in the settings window no longer re-measures the widget on each key",
+            "Notes and settings are flushed to disk before they replace the old file"),
+
+        new("1.34.0", "2026-10-17",
+            "Click FPS to show or hide LOW, WORST and LAT, like the CPU and GPU sensor lists",
+            "They keep their bars, colours and peaks, and stay in the session history",
+            "General notes no longer show another game's last session"),
+
+        new("1.33.0", "2026-10-17",
+            "Says when PawnIO or PresentMon is missing, with the command to install it",
+            "Shown in the widget's tooltip and under Missing in the hardware window",
+            "The versions window lists what DeskMon needs, and whether each is installed"),
+
+        new("1.32.0", "2026-10-17",
+            "The FPS section stays on the widget, reading n/a until a game runs",
+            "New setting: HideFpsWithoutGame, to hide it again while no game runs"),
+
+        new("1.31.0", "2026-10-17",
+            "Settings window: plain names, a description under each, units beside the boxes",
+            "Regrouped, everyday settings first; controls line up in one column",
+            "\"Needs a reload\" tag replaces the * marker",
+            "The game heading no longer adds its own colon; put one in its heading if you want it"),
+
+        new("1.30.0", "2026-10-17",
+            "To-do list button in the notepad: pick how many items, bulleted or numbered",
+            "The last session played is shown under the notes, read-only"),
+
+        new("1.29.0", "2026-10-17",
+            "Font and size pickers on the notes toolbar, for the selection or what you type next",
+            "Sizes are in points, as Word shows them; the old default 14 is 10.5",
+            "Settings NotesFontFamily and NotesFontSize removed; new text starts in Calibri"),
+
+        new("1.28.3", "2026-10-16",
+            "Fixed: General notes were emptied every time DeskMon started (since 1.20.1)",
+            "Nothing is written until a game's notes have actually been loaded",
+            "Each notes file is backed up before its first change, in notes\\backups"),
+
+        new("1.28.2", "2026-10-16",
+            "Heading text nudged down 2 px to sit level with its icon"),
+
+        new("1.28.1", "2026-10-16",
+            "Heading icons are larger and grow with FontSize",
+            "Heading text is centred on its icon instead of sitting above it"),
+
+        new("1.28.0", "2026-10-16",
+            "Icons on the section headings: a pulse, a thermometer, a gamepad",
+            "Set per section in MetricRegistry.cs, like everything else there"),
+
+        new("1.27.0", "2026-10-16",
+            "The bars now run much closer to the peak figure beside them",
+            "The gap was slack in the peak column, not a short bar",
+            "New setting: PeakWidth, which is that gap"),
+
+        new("1.26.0", "2026-10-16",
+            "The running version sits in the widget's top right corner",
+            "Taken from this list, so there is no second copy to forget"),
+
+        new("1.25.0", "2026-10-16",
+            "The five colour swatches are gone - the picker replaced them",
+            "Its small swatch is the way back to uncoloured text",
+            "NotesColors is no longer a setting; an old entry is ignored"),
+
+        new("1.24.0", "2026-10-16",
+            "A colour picker in the notes: any colour, not just the five swatches",
+            "Saturation/value square, hue strip and a hex box that works both ways",
+            "Opens on the colour the caret is already in"),
+
+        new("1.23.0", "2026-10-16",
+            "LAT: display latency, from starting a frame to it being on screen",
+            "Not the frame time - a steady 10 ms frame can still land 60 ms late",
+            "High is the bad direction on this one; n/a in a windowed game"),
+
+        new("1.22.0", "2026-10-16",
+            "An opacity setting per window: notes, hardware, versions, settings",
+            "During a game an unfocused window takes the lower of its own and GameOpacity"),
+
+        new("1.21.0", "2026-10-16",
+            "The notes, hardware, versions and settings windows fade back during a game too",
+            "A window you click into returns to full opacity while you use it",
+            "Same GameOpacity setting as the widget"),
+
+        new("1.20.1", "2026-10-16",
+            "Fixed: bold and italic were only saved if you also typed something",
+            "Removing them stuck especially - the file kept the old formatting",
+            "A save now compares the notes with the file instead of trusting a flag"),
+
+        new("1.20.0", "2026-10-16",
+            "Scrollbars match the windows: a thin gutter, no arrows",
+            "Applies everywhere, the notepad's editor included"),
+
+        new("1.19.0", "2026-10-16",
+            "The bar has a height and a colour of its own now",
+            "BarWidth renamed BarTrackWidth - it sizes the groove, not the fill",
+            "BarColor empty keeps the old behaviour: the bar follows the value",
+            "Section headings are editable in the settings window"),
+
+        new("1.18.0", "2026-10-16",
+            "A settings window: CFG on the widget, or the tray menu",
+            "Changes apply as you make them and save themselves",
+            "Colours, fonts and column widths no longer need a restart",
+            "Hand edits in settings.json are still left alone"),
+
+        new("1.17.0", "2026-10-16",
+            "HW, VER and NOTES are toggles - they light up while the window is up",
+            "Clicking a lit button puts that window away again",
+            "Drawn icons on all four buttons"),
+
+        new("1.16.0", "2026-10-16",
+            "HW, VER, NOTES and RESET buttons above the first section",
+            "One click each for what the right-click menu also has"),
+
+        new("1.15.0", "2026-10-16",
+            "The panel fades back while a game runs",
+            "New setting: GameOpacity"),
+
+        new("1.14.0", "2026-10-16",
+            "Session summaries moved out of the notes into app\\sessions",
+            "One line per game quit, not one per Alt+Tab",
+            "Time, average FPS and peaks span the whole sitting",
+            "New settings: LogSessionToFile, SessionFolder"),
+
+        new("1.13.0", "2026-10-16",
+            "The 1% and 0.1% FPS rows are now called LOW and WORST",
+            "Hovering a row explains what it means"),
+
+        new("1.12.0", "2026-10-16",
+            "Temperatures re-read every 4 s instead of every tick",
+            "Cuts time spent inside the graphics driver by 77%",
+            "Load and memory still update every second",
+            "New setting: SensorIntervalMs"),
+
+        new("1.11.0", "2026-10-15",
+            "Notes no longer store the panel's text colour",
+            "Fixes notes opening near-white on white in WordPad and Word",
+            "Old notes are repaired the next time they are saved"),
+
+        new("1.10.0", "2026-10-15",
+            "Colour buttons in the notes toolbar",
+            "The palette comes from NotesColors in settings.json"),
+
+        new("1.9.0", "2026-10-15",
+            "This window, from the widget's and the tray's right-click menus"),
+
+        new("1.8.0", "2026-10-15",
+            "A game's notes get a session summary line when it ends",
+            "Average frame rate now tracked across a whole session"),
+
+        new("1.7.0", "2026-10-15",
+            "1% and 0.1% FPS lows - the stutter an average hides",
+            "Peaks: the worst each row has seen, reset when a game starts",
+            "Reset peaks added to the right-click menu",
+            "Notes say the date they were saved, not just the time",
+            "Opening notes says when they were last written"),
+
+        new("1.6.0", "2026-10-15",
+            "Panel width is fixed - folding a section no longer resizes it",
+            "Larger fold and unfold arrows",
+            "The GPU temperature row lists its sensors too"),
+
+        new("1.5.0", "2026-10-15",
+            "The CPU temperature row unfolds to every sensor behind it",
+            "Which rows are unfolded is remembered in ExpandedMetrics"),
+
+        new("1.4.0", "2026-10-15",
+            "Errors from background threads now reach error.log",
+            "error.log rotates at 256 KB instead of growing forever",
+            "A hand-edited settings.json full of nulls no longer stops startup",
+            "Build.ps1 asks DeskMon to close before resorting to killing it",
+            "Fixed a handle leak on every memory trim"),
+
+        new("1.3.0", "2026-10-15",
+            "settings.json is written atomically and keeps your hand edits",
+            "Notes are written atomically too - no truncation on a crash",
+            "Window placement saves when you stop dragging, not per pixel"),
+
+        new("1.2.0", "2026-10-15",
+            "NotGames: browsers and media players are never a game",
+            "A fullscreen video no longer starts a game session"),
+
+        new("1.1.0", "2026-10-15",
+            "--list-sensors and --selftest work while the widget is running",
+            "Overlay windows are no longer mistaken for games",
+            "PresentMon stays off when PauseWhenFullscreen hides the panel",
+            "CPU load re-baselines after a lock or sleep instead of spiking",
+            "FPS ignores swap chains that have stopped presenting"),
+
+        new("1.0.0", "2026-10-14",
+            "The widget: CPU load, memory, swap, CPU and GPU temperature",
+            "FPS while a game runs, per-game notes, hardware window, tray icon"),
+    };
+}

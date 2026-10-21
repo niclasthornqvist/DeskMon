@@ -1,0 +1,122 @@
+<ui:PanelWindow x:Class="DeskMon.HardwareWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Hardware"
+                Width="560" Height="340"
+                MinWidth="360" MinHeight="200"
+                SizeToContent="Height"
+                ShowInTaskbar="False"
+                ShowActivated="False"
+                TextOptions.TextFormattingMode="Display"
+                FontFamily="Consolas">
+
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+    </ui:PanelWindow.Resources>
+
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0"
+                           Text="HARDWARE"
+                           Margin="12,8,8,6"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- What can be done here, in the row every window has under its
+                 header (ActionRow, in PanelStyles.xaml). It was a bare ⤓ beside
+                 the close button, which said nothing until hovered. -->
+            <StackPanel Style="{StaticResource ActionRow}" Orientation="Horizontal">
+                <!-- Two pages, one over the other: copy. -->
+                <Button Style="{StaticResource ToolButton}"
+                        ToolTip="Copy everything to the clipboard" Click="Copy_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M3.5,0.5 H9.5 V7.5 H3.5 Z M1.5,2.5 V9.5 H7.5" />
+                        <TextBlock Text="COPY" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- One row per fact. Values can be long (a full GPU name, a BIOS
+                 string), so they wrap rather than being cut off.
+
+                 In a scroller, like every other window's list: the window sizes
+                 to its rows, and a machine with four sticks, several drives and
+                 a few network adapters - or a long Missing list - used to run
+                 the bottom of it off the screen with no way to reach it. The
+                 window stops at the screen's edge (FitToScreen) and the rest
+                 scrolls. The right margin moves inside, as in the other
+                 windows, so the scroll bar has a gutter of its own. -->
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          Margin="12,2,4,10" Focusable="False">
+            <ItemsControl x:Name="Rows" Margin="0,0,8,0" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding Label}"
+                                       Width="{Binding LabelWidth}"
+                                       VerticalAlignment="Top"
+                                       Foreground="{Binding LabelBrush}" />
+
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Value}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{Binding ValueBrush}" />
+
+                            <!-- Vendor logo at the far right rather than in a
+                                 column of its own before the value: that column
+                                 would sit empty on every other row and push all
+                                 the values out of line. Collapsed rows give the
+                                 value the full width.
+                                 The Path only gets maximums, and Uniform stretch
+                                 fits each shape inside them: a square mark fills
+                                 the height, a wide wordmark hits the width cap
+                                 and comes out shorter. The fixed-height Grid
+                                 around it centres those shorter ones on the
+                                 first line of text, where a wrapped module row
+                                 would otherwise drift them up or down. -->
+                            <Grid Grid.Column="2"
+                                  Height="{Binding LogoHeight}"
+                                  Visibility="{Binding LogoVisibility}"
+                                  VerticalAlignment="Top"
+                                  Margin="10,1,0,0">
+                                <Path Data="{Binding LogoShape}"
+                                      Fill="{Binding LogoFill}"
+                                      MaxHeight="{Binding LogoHeight}"
+                                      MaxWidth="{Binding LogoMaxWidth}"
+                                      Stretch="Uniform"
+                                      HorizontalAlignment="Right"
+                                      VerticalAlignment="Center" />
+                            </Grid>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            </ScrollViewer>
+        </DockPanel>
+    </Border>
+</ui:PanelWindow>

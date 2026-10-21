@@ -1,0 +1,143 @@
+<UserControl x:Class="DeskMon.Ui.ColorPicker"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             TextOptions.TextFormattingMode="Display">
+
+    <!-- A saturation/value square beside a hue strip, which is the arrangement
+         every graphics program uses - so it needs no explaining.
+
+         The square is three layers rather than a generated bitmap: the hue at
+         full strength, white fading out to the right, and black fading in
+         downwards. Multiplied together by ordinary alpha blending that is
+         exactly the HSV square, drawn by the GPU, with nothing to regenerate
+         when the hue changes - only the bottom layer's colour. -->
+    <Grid Margin="10">
+        <!-- Fixed to the square (188 + border) and the strip (margin 8 + 18 +
+             border) rather than Auto: the hex row spans both, and with Auto
+             columns its text's width became the picker's width - so the popup
+             grew and shrank as the hex value changed. -->
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="190" />
+            <ColumnDefinition Width="28" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Grid.Column="0"
+                BorderThickness="1" BorderBrush="{DynamicResource Theme.Ov.33}" CornerRadius="3"
+                ClipToBounds="True">
+            <Grid x:Name="Square" Width="188" Height="140"
+                  Background="Transparent"
+                  MouseLeftButtonDown="Square_MouseDown"
+                  MouseMove="Square_MouseMove"
+                  MouseLeftButtonUp="Pointer_MouseUp"
+                  Cursor="Cross">
+                <Rectangle x:Name="HueLayer" />
+                <Rectangle>
+                    <Rectangle.Fill>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                            <GradientStop Offset="0" Color="#FFFFFFFF" />
+                            <GradientStop Offset="1" Color="#00FFFFFF" />
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+                <Rectangle>
+                    <Rectangle.Fill>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Offset="0" Color="#00000000" />
+                            <GradientStop Offset="1" Color="#FF000000" />
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+
+                <!-- The crosshair. Two rings, light over dark, so it stays
+                     visible on both a white corner and a black one. -->
+                <Canvas>
+                    <Ellipse x:Name="Crosshair" Width="13" Height="13"
+                             IsHitTestVisible="False"
+                             Stroke="#FFFFFFFF" StrokeThickness="1.5">
+                        <Ellipse.Effect>
+                            <DropShadowEffect Color="Black" BlurRadius="3"
+                                              ShadowDepth="0" Opacity="0.9" />
+                        </Ellipse.Effect>
+                    </Ellipse>
+                </Canvas>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="0" Grid.Column="1" Margin="8,0,0,0"
+                BorderThickness="1" BorderBrush="{DynamicResource Theme.Ov.33}" CornerRadius="3"
+                ClipToBounds="True">
+            <Grid x:Name="HueStrip" Width="18" Height="140"
+                  Background="Transparent"
+                  MouseLeftButtonDown="Hue_MouseDown"
+                  MouseMove="Hue_MouseMove"
+                  MouseLeftButtonUp="Pointer_MouseUp"
+                  Cursor="Hand">
+                <Rectangle>
+                    <Rectangle.Fill>
+                        <!-- Red at both ends: hue is a circle. -->
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Offset="0.00" Color="#FFFF0000" />
+                            <GradientStop Offset="0.17" Color="#FFFFFF00" />
+                            <GradientStop Offset="0.33" Color="#FF00FF00" />
+                            <GradientStop Offset="0.50" Color="#FF00FFFF" />
+                            <GradientStop Offset="0.67" Color="#FF0000FF" />
+                            <GradientStop Offset="0.83" Color="#FFFF00FF" />
+                            <GradientStop Offset="1.00" Color="#FFFF0000" />
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+
+                <Canvas>
+                    <Border x:Name="HueMarker" Width="18" Height="3"
+                            IsHitTestVisible="False"
+                            Background="#FFFFFFFF">
+                        <Border.Effect>
+                            <DropShadowEffect Color="Black" BlurRadius="3"
+                                              ShadowDepth="0" Opacity="0.9" />
+                        </Border.Effect>
+                    </Border>
+                </Canvas>
+            </Grid>
+        </Border>
+
+        <!-- The hex box is the way back out as well as in: a colour you found
+             here can be copied into settings.json, and one from anywhere else
+             can be pasted in. -->
+        <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,9,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="Preview" Grid.Column="0"
+                    Width="24" Height="24" CornerRadius="3"
+                    BorderThickness="1" BorderBrush="{DynamicResource Theme.Ov.33}" />
+
+            <TextBox x:Name="HexBox" Grid.Column="1" Margin="8,0,8,0"
+                     VerticalContentAlignment="Center"
+                     TextChanged="Hex_TextChanged" />
+
+            <!-- The way back to uncoloured text, shown only if the host says
+                 what its normal colour is. Hidden otherwise, since a picker
+                 with no document behind it has no "normal" to return to.
+                 A word rather than a swatch of the normal colour: next to the
+                 preview that read as a second, smaller preview - two white
+                 squares with no clue which was which. -->
+            <Button x:Name="NormalButton" Grid.Column="2" Margin="0,0,4,0"
+                    Width="Auto" Padding="8,0" Content="Normal"
+                    Visibility="Collapsed"
+                    Click="Normal_Click" />
+
+            <Button x:Name="ApplyButton" Grid.Column="3"
+                    Width="Auto" Padding="10,0" Content="Apply"
+                    ToolTip="Colour the selected text&#x0a;With nothing selected, it colours what you type next."
+                    Click="Apply_Click" />
+        </Grid>
+    </Grid>
+</UserControl>

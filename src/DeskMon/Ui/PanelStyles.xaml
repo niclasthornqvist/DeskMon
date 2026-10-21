@@ -1,0 +1,754 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:ui="clr-namespace:DeskMon.Ui">
+
+    <!-- Shared chrome for the panel windows. The colours here are translucent
+         white rather than fixed greys, so they suit any dark panel colour the
+         settings file asks for. -->
+
+    <!-- Flat window buttons: the stock Button is light and raised, which would
+         be the one bright thing in the panel. -->
+    <Style x:Key="PanelButton" TargetType="Button">
+        <Setter Property="Width" Value="26" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.TextDim}" />
+        <Setter Property="Focusable" Value="False" />
+        <!-- The hand on every button in the program, set here once rather than
+             button by button - that is how some ended up with it and some
+             without. On a flat button with no border, the cursor is the
+             clearest sign that a click does something. A disabled button
+             takes no mouse input, so it shows the ordinary arrow. -->
+        <Setter Property="Cursor" Value="Hand" />
+        <!-- Zero by default, since these are fixed-size square buttons with
+             centred content. It is honoured so a derived style can drop the
+             fixed size and let a text label size the button instead - see the
+             widget's own toolbar. -->
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Back" Background="Transparent" CornerRadius="{DynamicResource Theme.CornerSmall}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.26}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+                        </Trigger>
+                        <!-- Faded, or a button that can't be pressed yet (the
+                             session history's Delete, before a row is picked)
+                             would look exactly like one that can. -->
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Back" Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An icon and a short upper-case label: the widget's toolbar (HW, LOG,
+         NOTES...) and the notes window's action row (NEW, DELETE...), so the
+         two read as one program. Smaller than PanelButton's fixed square:
+         in the widget any height it takes is height the metrics could have
+         had. Sized by its own padding rather than fixed, so it follows the
+         FontSize from settings.json instead of clipping its labels. The icon
+         is a Path in the ToolIcon style below, which strokes in the button's
+         Foreground, so hover and a warning colour reach the icon too. -->
+    <Style x:Key="ToolButton" TargetType="Button" BasedOn="{StaticResource PanelButton}">
+        <Setter Property="Width" Value="Auto" />
+        <Setter Property="Height" Value="Auto" />
+        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="Margin" Value="0,0,2,0" />
+    </Style>
+
+    <!-- The same button for one that opens a window, as a toggle: lit while
+         its window is up, so a row of them doubles as "what is open" - the
+         widget's HW, LOG, NOTES and CFG, and the notes' PICTURES. It repeats
+         PanelButton's template rather than deriving from it because a Style
+         cannot change TargetType.
+
+         The lit colour is the blue already in the notes palette, not a
+         brighter grey: "this one is open" is worth telling apart from "the
+         mouse is over this one" at a glance, and brightness alone does not do
+         that. Checked is tested after hover so that moving the mouse over an
+         open window's button doesn't dim it.
+
+         Whoever owns the window sets IsChecked from whether it is really on
+         screen; the click only asks for it to open or close. -->
+    <Style x:Key="ToolToggle" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.TextDim}" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="Margin" Value="0,0,2,0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Back" Background="Transparent" CornerRadius="{DynamicResource Theme.CornerSmall}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center"
+                                          VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.26}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Accent.40}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The row of ToolButtons under a window's header - what can be done in
+         that window - laid out the same in every one of them: under the
+         header's rule, starting at the same place, the same space above and
+         below. The header itself holds only the title and ✕, so those two
+         stay put whichever window is open. Left as 7 so that, with the
+         buttons' 5px padding, the first label lines up with the title and
+         the text below at 12, the way the widget lines HW up with its
+         headings. A window that puts something on the row's right, like the
+         notes' search box, uses a Grid; the rest a horizontal StackPanel. -->
+    <Style x:Key="ActionRow" TargetType="FrameworkElement">
+        <Setter Property="DockPanel.Dock" Value="Top" />
+        <Setter Property="Margin" Value="7,8,12,6" />
+    </Style>
+
+    <!-- The one button in a popup that does the thing - Create, Add - filled
+         with the accent blue, so it reads as a button and as the way forward.
+         As a flat PanelButton it looked like a word sitting in the corner,
+         the same as every label around it. Text stays in the panel's own
+         near-white; the blue is a tint, not a block of colour. -->
+    <Style x:Key="AccentButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Padding" Value="14,3" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Back" Background="{DynamicResource Theme.Accent.50}" BorderBrush="{DynamicResource Theme.Accent.80}"
+                            BorderThickness="1" CornerRadius="{DynamicResource Theme.CornerSmall}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Accent.70}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Back" Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Every tooltip, in every window. No key, so it applies by itself; and
+         App.OnStartup merges this dictionary into the application's resources
+         too, since a tooltip opens in a popup of its own and the application
+         is the one place a style is sure to reach it from.
+
+         Dressed like the right-click menu (DarkContextMenu below): the stock
+         tooltip is a white box, the one bright thing over these dark panels.
+         Square and opaque like the menu, since a tooltip's popup can't be
+         relied on to draw rounded corners transparently.
+
+         MaxWidth with wrapping, so a long tooltip is a short paragraph rather
+         than one line across the screen. An explicit line break still starts
+         a new line: the tooltips put what the control is on the first line
+         and any detail on the next. -->
+    <Style TargetType="ToolTip">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="HasDropShadow" Value="False" />
+        <Setter Property="FontFamily" Value="{DynamicResource Theme.Font}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="MaxWidth" Value="340" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToolTip">
+                    <Border Background="{DynamicResource Theme.Popup}" BorderBrush="{DynamicResource Theme.PopupEdge}"
+                            BorderThickness="1" Padding="9,6,9,7">
+                        <ContentPresenter>
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextWrapping" Value="Wrap" />
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Icons are drawn, like the notes toolbar's: an icon font that
+         isn't installed draws boxes, and emoji would render in colour
+         and at the wrong weight for a panel like this. Shared by the widget's
+         toolbar and the session history's buttons.
+
+         Stroke follows the button's own Foreground, so one binding
+         keeps the icon in step with the grey/hover/lit states - a Path does
+         not inherit Foreground the way a TextBlock does. Coordinates sit on
+         half pixels because a 1px stroke centred on a whole pixel is drawn as
+         two grey ones. -->
+    <Style x:Key="ToolIcon" TargetType="Path">
+        <!-- FallbackValue is the unlit grey: if the ancestor lookup
+             ever came back empty the icons would draw with no stroke
+             at all, i.e. silently vanish. -->
+        <Setter Property="Stroke"
+                Value="{Binding Foreground,
+                                RelativeSource={RelativeSource AncestorType=ButtonBase},
+                                FallbackValue=#FF9AA4B2}" />
+        <Setter Property="StrokeThickness" Value="1" />
+        <Setter Property="Stretch" Value="None" />
+        <Setter Property="Width" Value="11" />
+        <Setter Property="Height" Value="11" />
+        <Setter Property="Margin" Value="0,0,4,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <!-- A small ↗ after a button's label: this one opens another window - one
+         of DeskMon's, or Explorer, Notepad, a Windows file picker - rather than
+         doing something in this one. Put after the label, the way the web marks
+         a link that opens elsewhere. Smaller than the icon before the label and
+         a touch fainter, so it reads as a note about the button, not as part of
+         its name. Strokes in the button's colour like ToolIcon, so hover lights
+         it with the rest. Not on the widget's own toolbar: everything there
+         opens a window, and those buttons show it by lighting up while it's open. -->
+    <Style x:Key="OpensWindowMark" TargetType="Path" BasedOn="{StaticResource ToolIcon}">
+        <Setter Property="Data" Value="M1.5,6.5 L6.5,1.5 M3.5,1.5 H6.5 V4.5" />
+        <Setter Property="Width" Value="8" />
+        <Setter Property="Height" Value="8" />
+        <Setter Property="Margin" Value="4,0,0,1" />
+        <Setter Property="Opacity" Value="0.8" />
+    </Style>
+
+    <!-- Same reason as the ComboBox below: the stock TextBox is white with a
+         dark caret, which in a dark window looks like a hole. -->
+    <Style x:Key="DarkTextBox" TargetType="TextBox">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource Theme.Accent}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Ov.1A}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Ov.33}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="5,3" />
+        <!-- Dynamic: TextMenu comes later in this file. -->
+        <Setter Property="ContextMenu" Value="{DynamicResource TextMenu}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource Theme.CornerSmall}">
+                        <!-- Must be named PART_ContentHost: that is how a
+                             TextBox finds where to put the text. -->
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                      Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The stock CheckBox draws a white box with a black tick. Rebuilt here as
+         a filled blue box, the same accent the widget's toolbar lights up in,
+         so "on" reads the same way in both places. IsMouseOver is tested first
+         so that hovering a ticked box doesn't take the blue off its border. -->
+    <Style x:Key="DarkCheckBox" TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <Border x:Name="Box" Width="13" Height="13" CornerRadius="3"
+                                Background="{DynamicResource Theme.Ov.1A}" BorderBrush="{DynamicResource Theme.Ov.59}"
+                                BorderThickness="1" VerticalAlignment="Center">
+                            <Path x:Name="Tick" Data="M0,3 L2.5,6 L7,0.5"
+                                  Stroke="{DynamicResource Theme.OnAccent}" StrokeThickness="1.6"
+                                  Stretch="None" Visibility="Collapsed"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ContentPresenter Margin="7,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Theme.Ov.99}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="{DynamicResource Theme.Accent}" />
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Theme.Accent}" />
+                            <Setter TargetName="Tick" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- DarkCheckBox's twin for a choice of one, first used by the notepad's
+         to-do popup. A separate style because a CheckBox style cannot be put on
+         a RadioButton. Round and dotted rather than ticked, so "pick one" and
+         "tick any" still look different side by side. -->
+    <Style x:Key="DarkRadio" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <Border x:Name="Box" Width="13" Height="13" CornerRadius="6.5"
+                                Background="{DynamicResource Theme.Ov.1A}" BorderBrush="{DynamicResource Theme.Ov.59}"
+                                BorderThickness="1" VerticalAlignment="Center">
+                            <Ellipse x:Name="Dot" Width="5" Height="5" Fill="{DynamicResource Theme.OnAccent}"
+                                     Visibility="Collapsed"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ContentPresenter Margin="7,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Theme.Ov.99}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="{DynamicResource Theme.Accent}" />
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Theme.Accent}" />
+                            <Setter TargetName="Dot" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ===================================================================
+         Slider. The stock one is a light bevelled rail with a pointed grey
+         thumb - another light hole in a dark window. Rebuilt as a thin rail,
+         blue up to the thumb so the value reads at a glance even without the
+         number, in the same accent as the ticked boxes.
+         =================================================================== -->
+
+    <!-- The two halves of the rail either side of the thumb. The visible rail
+         is a 4 px line, but the button around it is the full height of the
+         slider and transparent, so a click near the line still lands. -->
+    <Style x:Key="DarkSliderRail" TargetType="RepeatButton">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Grid Background="Transparent">
+                        <Border Height="4" CornerRadius="2"
+                                Background="{TemplateBinding Background}"
+                                VerticalAlignment="Center" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Brightens on hover and turns blue while dragged, the same feedback
+         steps as the scrollbar pill. -->
+    <Style x:Key="DarkSliderThumb" TargetType="Thumb">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Ellipse x:Name="Knob" Width="12" Height="12" Fill="{DynamicResource Theme.Knob}" />
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource Theme.Text}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource Theme.Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Not focusable, like the check boxes: the boxes beside the sliders are
+         where typing goes, and a slider taking focus on click would leave the
+         arrow keys nudging it after you have moved on. IsMoveToPointEnabled
+         makes a click on the rail jump there, rather than step a tenth of the
+         way - which is what people expect a click on a rail to do. -->
+    <Style x:Key="DarkSlider" TargetType="Slider">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsMoveToPointEnabled" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Grid Height="18" Background="Transparent">
+                        <!-- PART_Track: the name is how the Slider finds it. -->
+                        <Track x:Name="PART_Track">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Style="{StaticResource DarkSliderRail}"
+                                              Background="{DynamicResource Theme.Accent}"
+                                              Command="Slider.DecreaseLarge" />
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Style="{StaticResource DarkSliderThumb}" />
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Style="{StaticResource DarkSliderRail}"
+                                              Background="{DynamicResource Theme.Ov.33}"
+                                              Command="Slider.IncreaseLarge" />
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ===================================================================
+         Right-click menu. The stock WPF one is light, and the tray icon's menu
+         is a WinForms one drawn dark - so the same list of commands looked
+         like two different programs depending on where you right-clicked.
+         These are the tray menu's colours (TrayIcon.DarkColours), its font
+         (Segoe UI 9 pt, which is 12 px - the Windows menu font, not the
+         panel's Consolas) and its square, flat highlight. Change one, change
+         the other.
+         =================================================================== -->
+
+    <!-- A tick column on the left for the two items that can be ticked, kept
+         on every item so all the text starts on one line - the same as the
+         tray menu's check margin. -->
+    <Style x:Key="DarkMenuItem" TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <!-- Sizes measured off the tray menu as WinForms draws it:
+                         22 px rows, text starting 37 px in, the tick near the
+                         left of its column. -->
+                    <!-- The shortcut on the right, dim - "Ctrl+C" on the text
+                         boxes' Cut/Copy/Paste, which WPF fills in from the
+                         command. Empty, it takes no room, so the other menus
+                         look as they did. -->
+                    <Border x:Name="Back" Background="Transparent"
+                            BorderBrush="Transparent" BorderThickness="1"
+                            MinHeight="22" Padding="4,2,35,2">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Path x:Name="Tick" Data="M0,3 L2.5,6 L7,0.5"
+                                  Stroke="{TemplateBinding Foreground}" StrokeThickness="1.4"
+                                  Visibility="Hidden" Margin="2,0,0,0"
+                                  HorizontalAlignment="Left" VerticalAlignment="Center" />
+                            <ContentPresenter Grid.Column="1" ContentSource="Header"
+                                              RecognizesAccessKey="True"
+                                              VerticalAlignment="Center" />
+                            <TextBlock x:Name="Shortcut" Grid.Column="2"
+                                       Text="{TemplateBinding InputGestureText}"
+                                       Foreground="{DynamicResource Theme.TextDim}"
+                                       Margin="24,0,-20,0" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.MenuHot}" />
+                            <Setter TargetName="Back" Property="BorderBrush" Value="{DynamicResource Theme.MenuHot}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Tick" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource Theme.Disabled}" />
+                            <Setter TargetName="Shortcut" Property="Foreground" Value="{DynamicResource Theme.Disabled}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The item styles live in the menu style's own resources, so a menu only
+         has to name DarkContextMenu: its MenuItems and Separators find these
+         by looking up from themselves. -->
+    <Style x:Key="DarkContextMenu" TargetType="ContextMenu">
+        <Setter Property="FontFamily" Value="{DynamicResource Theme.Font}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{DynamicResource Theme.Popup}" BorderBrush="{DynamicResource Theme.PopupEdge}"
+                            BorderThickness="1" Padding="2">
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Resources>
+            <Style TargetType="MenuItem" BasedOn="{StaticResource DarkMenuItem}" />
+            <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Separator">
+                            <!-- Starts where the text does and runs to the edge,
+                                 like a WinForms separator next to a tick margin. -->
+                            <Border Height="1" Margin="30,2,0,3" Background="{DynamicResource Theme.PopupEdge}" />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Style.Resources>
+    </Style>
+
+    <!-- The right-click menu of every text box and of the notes editor, in
+         the dark style above. WPF's own Cut/Copy/Paste menu is light, and no
+         style reaches it: it is a private type of WPF's, which a style for
+         ContextMenu doesn't apply to. A text box with a ContextMenu of its own
+         shows that instead, so DarkTextBox gives each one this.
+
+         Each item takes its name and its shortcut ("Ctrl+C") from its
+         command, and greys itself out when the command can't run - Cut and
+         Copy with nothing selected - as WPF's own does. Not shared: a menu can
+         only belong to one text box at a time. -->
+    <ContextMenu x:Key="TextMenu" x:Shared="False" Style="{StaticResource DarkContextMenu}">
+        <MenuItem Command="ApplicationCommands.Cut" />
+        <MenuItem Command="ApplicationCommands.Copy" />
+        <MenuItem Command="ApplicationCommands.Paste" />
+        <Separator />
+        <MenuItem Command="ApplicationCommands.SelectAll" />
+    </ContextMenu>
+
+    <!-- WPF's stock ComboBox ignores Background on most of its parts and
+         renders light, which looks broken in a dark window. -->
+    <Style x:Key="DarkComboItem" TargetType="ComboBoxItem">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="Back" Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.2E}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ===================================================================
+         Scrollbars. The stock one is a grey 17px gutter with two arrow
+         buttons, which in these windows looks like a piece of another program
+         bolted to the edge.
+
+         Rebuilt as a thin gutter with a floating pill and no arrows: a
+         scrollbar is a position indicator you occasionally grab, and the
+         arrows are a hundredth of its use. Nothing below is keyed to one
+         window - the style has no x:Key, so every scrollbar in every window
+         that merges this dictionary gets it, including the ones inside the
+         notepad's editor and a dropdown's list.
+         =================================================================== -->
+
+    <!-- The strips either side of the thumb, which page up and down. Invisible,
+         but they still have to take the click - hence a transparent background
+         rather than no template at all. -->
+    <Style x:Key="PanelScrollPage" TargetType="RepeatButton">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Border Background="Transparent" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Inset on every side, so the pill floats in the gutter instead of
+         filling it edge to edge. Brightens on hover and again while dragged,
+         which is the only feedback a bar with no arrows can give. -->
+    <Style x:Key="PanelScrollThumb" TargetType="Thumb">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Border x:Name="Grip" Margin="2" CornerRadius="3"
+                            Background="{DynamicResource Theme.Ov.38}" />
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Theme.Ov.5C}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Theme.Ov.8F}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The Track has to be called PART_Track: that name is how a ScrollBar
+         finds it and wires the thumb to the value. IsDirectionReversed is what
+         makes dragging down scroll down - a vertical Track counts upwards. -->
+    <ControlTemplate x:Key="PanelScrollBarVertical" TargetType="ScrollBar">
+        <Grid Background="{TemplateBinding Background}">
+            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.DecreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource PanelScrollPage}"
+                                  Command="ScrollBar.PageUpCommand" />
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                    <!-- Or a long document leaves a pill too small to hit. -->
+                    <Thumb Style="{StaticResource PanelScrollThumb}" MinHeight="28" />
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource PanelScrollPage}"
+                                  Command="ScrollBar.PageDownCommand" />
+                </Track.IncreaseRepeatButton>
+            </Track>
+        </Grid>
+    </ControlTemplate>
+
+    <ControlTemplate x:Key="PanelScrollBarHorizontal" TargetType="ScrollBar">
+        <Grid Background="{TemplateBinding Background}">
+            <Track x:Name="PART_Track">
+                <Track.DecreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource PanelScrollPage}"
+                                  Command="ScrollBar.PageLeftCommand" />
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                    <Thumb Style="{StaticResource PanelScrollThumb}" MinWidth="28" />
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource PanelScrollPage}"
+                                  Command="ScrollBar.PageRightCommand" />
+                </Track.IncreaseRepeatButton>
+            </Track>
+        </Grid>
+    </ControlTemplate>
+
+    <Style TargetType="{x:Type ScrollBar}">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Width" Value="10" />
+        <Setter Property="MinWidth" Value="10" />
+        <Setter Property="Template" Value="{StaticResource PanelScrollBarVertical}" />
+        <Style.Triggers>
+            <!-- One ScrollBar class serves both directions, so the orientation
+                 swaps the template and which dimension is pinned. -->
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="Height" Value="10" />
+                <Setter Property="MinHeight" Value="10" />
+                <Setter Property="Template" Value="{StaticResource PanelScrollBarHorizontal}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- A font's name drawn in that font, for the font dropdowns, so you can
+         see what you are choosing. Affordable only because DarkCombo
+         virtualizes: just the rows on screen are built, rather than a few
+         hundred fonts loaded the first time the list opens. -->
+    <DataTemplate x:Key="FontPreviewItem">
+        <TextBlock Text="{Binding}" FontFamily="{Binding}" />
+    </DataTemplate>
+
+    <!-- A game with its icon before the name, for the notes' and sessions'
+         game pickers - see GameIcons. The icon is the item's GameIcon, whose
+         Image starts as a drawn tile and becomes Steam's own icon once found.
+         Clipped round, so Steam's square icons match the drawn tiles. -->
+    <ui:GameIconConverter x:Key="GameIcon" />
+    <DataTemplate x:Key="GamePickerItem">
+        <StackPanel Orientation="Horizontal">
+            <Image Width="18" Height="18" Margin="0,0,8,0" VerticalAlignment="Center"
+                   DataContext="{Binding Converter={StaticResource GameIcon}}"
+                   Source="{Binding Image}"
+                   RenderOptions.BitmapScalingMode="HighQuality">
+                <Image.Clip>
+                    <RectangleGeometry Rect="0,0,18,18" RadiusX="4" RadiusY="4" />
+                </Image.Clip>
+            </Image>
+            <TextBlock Text="{Binding}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+    </DataTemplate>
+
+    <Style x:Key="DarkCombo" TargetType="ComboBox">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+        <Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboItem}" />
+        <!-- Virtualizing, with item scrolling below: only the visible rows
+             exist. The font lists hold every installed font. -->
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <ToggleButton Focusable="False" ClickMode="Press"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay,
+                                                  RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="{DynamicResource Theme.Ov.1A}" BorderBrush="{DynamicResource Theme.Ov.33}"
+                                            BorderThickness="1" CornerRadius="{DynamicResource Theme.CornerSmall}">
+                                        <Path Data="M 0 0 L 4 4 L 8 0 Z" Fill="{DynamicResource Theme.TextDim}"
+                                              HorizontalAlignment="Right" Margin="0,0,8,0"
+                                              VerticalAlignment="Center" />
+                                    </Border>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+
+                        <!-- The item template as well, so a game picker shows the
+                             icon when closed and not only in its list. -->
+                        <ContentPresenter Margin="8,4,26,4"
+                                          Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                          IsHitTestVisible="False"
+                                          VerticalAlignment="Center" />
+
+                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                               AllowsTransparency="True" Focusable="False">
+                            <!-- Capped and scrolled: the notepad's font list holds
+                                 every installed font, which unbounded ran off the
+                                 bottom of the screen. -->
+                            <Border Background="{DynamicResource Theme.Popup}" BorderBrush="{DynamicResource Theme.Ov.40}" BorderThickness="1"
+                                    MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                    MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              CanContentScroll="True">
+                                    <ItemsPresenter />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+</ResourceDictionary>

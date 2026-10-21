@@ -1,0 +1,616 @@
+<ui:PanelWindow x:Class="DeskMon.NotesWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Notes"
+                Width="520" Height="620"
+                MinWidth="320" MinHeight="220"
+                ShowInTaskbar="False"
+                ShowActivated="False"
+                TextOptions.TextFormattingMode="Display"
+                FontFamily="Consolas">
+
+    <!-- Chrome, transparency and edge resizing come from PanelWindow; the
+         control styles come from the shared dictionary. -->
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+    </ui:PanelWindow.Resources>
+
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0"
+                           Margin="12,8,8,6"
+                           FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close&#x0a;Your notes are already saved." Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- What can be done with the notes, rather than to their text: the
+                 same icon-and-label buttons as the widget's own toolbar, so the
+                 two windows read as one program. First under the header, as the
+                 widget's toolbar is. Left as 7 so that, with the buttons' 5px
+                 padding, the labels line up with the notes picker below, the way the
+                 widget lines HW up with its headings.
+
+                 Search sits at the right of the same row, always showing: it
+                 searches as you type. Its column shares out the room left over
+                 with a spacer that only gets what the box can't use, so the box
+                 grows to its MaxWidth first and shrinks on a narrow window
+                 instead of pushing the buttons off. -->
+            <Grid Style="{StaticResource ActionRow}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="0.001*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" MinWidth="60" MaxWidth="190" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- A plus. -->
+                    <Button x:Name="NewNoteButton" Style="{StaticResource ToolButton}"
+                            ToolTip="New note&#x0a;A note of your own, listed with the games&apos; notes." Click="NewNote_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ToolIcon}" Data="M5.5,1.5 V9.5 M1.5,5.5 H9.5" />
+                            <TextBlock Text="NEW" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- A bin: lid, handle, can. Turns the warning colour, icon
+                         and label both, while it waits for the second click. -->
+                    <Button x:Name="DeleteNoteButton" Style="{StaticResource ToolButton}"
+                            Click="DeleteNote_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ToolIcon}"
+                                  Data="M0.5,2.5 H10.5 M3.5,2.5 V0.5 H7.5 V2.5 M1.5,2.5 L2.5,10.5 H8.5 L9.5,2.5 M4.5,4.5 V8.5 M6.5,4.5 V8.5" />
+                            <TextBlock x:Name="DeleteNoteLabel" Text="DELETE" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- A camera: body with the bump on top, and the lens. -->
+                    <Button x:Name="ScreenshotButton" Style="{StaticResource ToolButton}"
+                            ToolTip="Insert a screenshot of the game"
+                            ToolTipOpening="ScreenshotButton_ToolTipOpening"
+                            Click="Screenshot_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ToolIcon}"
+                                  Data="M0.5,3 H3 L4,1.5 H7 L8,3 H10.5 V9.5 H0.5 Z
+                                        M3.5,6 A2,2 0 1 1 7.5,6 A2,2 0 1 1 3.5,6" />
+                            <TextBlock Text="SCREENSHOT" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Next to the camera, since it is where the camera's
+                         pictures end up. A frame, a hill and a sun.
+
+                         A toggle, like the widget's window buttons: a click
+                         opens the pictures, the next puts them away, and it is
+                         lit blue while they are open. So no ↗ - being lit is
+                         how a toggle says it opens a window. -->
+                    <ToggleButton x:Name="PicturesButton" Style="{StaticResource ToolToggle}"
+                                  ToolTip="Pictures&#x0a;This game&apos;s screenshots - view them, or delete the ones you don&apos;t need. Click again to close."
+                                  Click="Pictures_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ToolIcon}"
+                                  Data="M0.5,1.5 H10.5 V9.5 H0.5 Z
+                                        M1.5,8.5 L4,5.5 L6,7.5 L7.5,6 L9.5,8.5
+                                        M7,3.5 A0.75,0.75 0 1 1 8.5,3.5 A0.75,0.75 0 1 1 7,3.5" />
+                            <TextBlock Text="PICTURES" />
+                        </StackPanel>
+                    </ToggleButton>
+
+                    <!-- The backups in notes\backups, which were kept all along
+                         with no way back to them but Explorer. A clock with an
+                         arrow turning back round it: going back in time. -->
+                    <Button x:Name="HistoryButton" Style="{StaticResource ToolButton}"
+                            ToolTip="History&#x0a;Earlier copies of this note - click one to put it back."
+                            Click="History_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ToolIcon}"
+                                  Data="M2,2.5 A4.5,4.5 0 1 1 1,6
+                                        M0.5,0.5 V3 H3
+                                        M5.5,3 V6 H7.5" />
+                            <TextBlock Text="HISTORY" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <!-- A magnifier: the lens and its handle, drawn like the
+                     buttons' icons. Clicking it goes into the box, as a label
+                     beside a box usually does. -->
+                <Path x:Name="SearchIcon" Grid.Column="2" Style="{StaticResource ToolIcon}"
+                      Margin="10,0,6,0" Cursor="IBeam" Fill="Transparent"
+                      Data="M1,4.5 A3.5,3.5 0 1 1 8,4.5 A3.5,3.5 0 1 1 1,4.5 M7,7 L10.5,10.5"
+                      MouseLeftButtonDown="SearchIcon_MouseLeftButtonDown" />
+
+                <!-- "Search…" written in the empty box until something is typed,
+                     instead of a label beside it. Laid over the box rather than
+                     put in its template, which every window shares, and let
+                     through to the box underneath for clicks.
+
+                     A second, see-through TextBox in the same style rather than
+                     a TextBlock with a margin worked out to match: the TextBox
+                     sets its text in from its padding by an amount of its own,
+                     and a TextBlock guessed at that sat a little off. This one
+                     lays its text out exactly as the box does, so the hint is
+                     where the typing will be. -->
+                <Grid Grid.Column="3" VerticalAlignment="Center">
+                    <TextBox x:Name="SearchBox" Style="{StaticResource DarkTextBox}"
+                             ToolTip="Search all notes as you type (Ctrl+F)&#x0a;Enter opens the first match, Esc clears the box."
+                             TextChanged="SearchBox_TextChanged"
+                             GotKeyboardFocus="SearchBox_GotKeyboardFocus"
+                             LostKeyboardFocus="SearchBox_LostKeyboardFocus"
+                             PreviewKeyDown="SearchBox_PreviewKeyDown" />
+                    <TextBox x:Name="SearchPlaceholder" Style="{StaticResource DarkTextBox}"
+                             Text="Search…" IsReadOnly="True" Focusable="False"
+                             IsHitTestVisible="False" IsTabStop="False"
+                             Background="Transparent" BorderBrush="Transparent" />
+                </Grid>
+            </Grid>
+
+            <!-- Which note is open, between the actions and the formatting:
+                 NEW and DELETE above act on the note picked here. The whole
+                 width, with no "Notes for" before it: the window's title and
+                 the game's name in the list already say whose notes these are,
+                 and the label only took room from long game names. -->
+            <ComboBox x:Name="GamePicker" DockPanel.Dock="Top" Margin="12,0,12,8"
+                      Style="{StaticResource DarkCombo}"
+                      ItemTemplate="{StaticResource GamePickerItem}"
+                      ToolTip="Which notes are open&#x0a;Every game played, your own notes, and General."
+                      SelectionChanged="GamePicker_SelectionChanged" />
+
+            <!-- Formatting. Every button runs a built-in editing command, so the
+                 usual keyboard shortcuts (Ctrl+B/I/U, Ctrl+L/E/R) work too.
+
+                 A WrapPanel rather than a StackPanel since the font pickers
+                 arrived: together they are wider than the window's minimum
+                 width, and a StackPanel would just cut the colour button off. -->
+            <!-- On a faint rounded strip of its own, so the formatting reads as
+                 one set of tools apart from the notes: it used to run straight
+                 into the first line of text with nothing between them. -->
+            <Border x:Name="ToolbarCard" DockPanel.Dock="Top" CornerRadius="6"
+                    Margin="12,0,12,8" Padding="4,3">
+            <WrapPanel x:Name="Toolbar" Orientation="Horizontal">
+                <!-- Not focusable, like the buttons: the editor keeps focus, so
+                     the selection being formatted stays highlighted while the
+                     list is open. -->
+                <ComboBox x:Name="FontPicker" Style="{StaticResource DarkCombo}"
+                          ItemTemplate="{StaticResource FontPreviewItem}"
+                          Width="124" FontSize="12" Margin="0,0,4,0"
+                          Focusable="False" VerticalAlignment="Center"
+                          ToolTip="Font" SelectionChanged="FontPicker_SelectionChanged" />
+                <!-- 62, not 52: room for two digits and the arrow with space
+                     to spare - 52 cut off the half of a size like 10.5. -->
+                <ComboBox x:Name="SizePicker" Style="{StaticResource DarkCombo}"
+                          Width="62" FontSize="12"
+                          Focusable="False" VerticalAlignment="Center"
+                          ToolTip="Font size (Ctrl+] / Ctrl+[)" SelectionChanged="SizePicker_SelectionChanged" />
+
+                <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
+
+                <Button x:Name="BoldButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Bold (Ctrl+B)" Click="Bold_Click">
+                    <TextBlock Text="B" FontWeight="Bold" />
+                </Button>
+                <Button x:Name="ItalicButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Italic (Ctrl+I)" Click="Italic_Click">
+                    <TextBlock Text="I" FontStyle="Italic" />
+                </Button>
+                <Button x:Name="UnderlineButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Underline (Ctrl+U)" Click="Underline_Click">
+                    <TextBlock Text="U" TextDecorations="Underline" />
+                </Button>
+                <Button x:Name="StrikeButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Strikethrough&#x0a;Crossed out but still readable - done, but worth keeping." Click="Strike_Click">
+                    <TextBlock Text="S" TextDecorations="Strikethrough" />
+                </Button>
+
+                <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
+
+                <!-- Headings: no shortcut keys, since the usual Ctrl+Alt+1/2
+                     are AltGr+1/2 on many keyboards - AltGr+2 types @ on a
+                     Swedish one. -->
+                <Button Style="{StaticResource PanelButton}" Width="30"
+                        ToolTip="Heading&#x0a;The whole line large and bold. Click again for ordinary text." Click="Heading1_Click">
+                    <TextBlock Text="H1" FontWeight="Bold" />
+                </Button>
+                <Button Style="{StaticResource PanelButton}" Width="30"
+                        ToolTip="Subheading&#x0a;The whole line a little larger and bold. Click again for ordinary text." Click="Heading2_Click">
+                    <TextBlock Text="H2" FontWeight="Bold" />
+                </Button>
+
+                <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
+
+                <!-- Drawn rather than using icon-font glyphs, which render as
+                     boxes if the font isn't present. -->
+                <Button Style="{StaticResource PanelButton}" ToolTip="Align left (Ctrl+L)"
+                        Click="AlignLeft_Click">
+                    <Canvas Width="14" Height="10">
+                        <Rectangle Canvas.Left="0" Canvas.Top="0" Width="14" Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                        <Rectangle Canvas.Left="0" Canvas.Top="4" Width="9"  Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                        <Rectangle Canvas.Left="0" Canvas.Top="8" Width="12" Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                    </Canvas>
+                </Button>
+                <Button Style="{StaticResource PanelButton}" ToolTip="Align centre (Ctrl+E)"
+                        Click="AlignCenter_Click">
+                    <Canvas Width="14" Height="10">
+                        <Rectangle Canvas.Left="0" Canvas.Top="0" Width="14" Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                        <Rectangle Canvas.Left="3" Canvas.Top="4" Width="8"  Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                        <Rectangle Canvas.Left="1" Canvas.Top="8" Width="12" Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                    </Canvas>
+                </Button>
+                <Button Style="{StaticResource PanelButton}" ToolTip="Align right (Ctrl+R)"
+                        Click="AlignRight_Click">
+                    <Canvas Width="14" Height="10">
+                        <Rectangle Canvas.Left="0" Canvas.Top="0" Width="14" Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                        <Rectangle Canvas.Left="5" Canvas.Top="4" Width="9"  Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                        <Rectangle Canvas.Left="2" Canvas.Top="8" Width="12" Height="2" Fill="{DynamicResource Theme.TextDim}" />
+                    </Canvas>
+                </Button>
+
+                <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
+
+                <Button Style="{StaticResource PanelButton}" Width="30"
+                        ToolTip="Numbered list (Ctrl+Shift+N)" Click="Numbering_Click">
+                    <TextBlock Text="1." />
+                </Button>
+                <Button Style="{StaticResource PanelButton}"
+                        ToolTip="Bulleted list (Ctrl+Shift+L)" Click="Bullets_Click">
+                    <TextBlock Text="&#x2022;" FontSize="16" />
+                </Button>
+                <!-- Drawn, like the alignment buttons: a ticked box. -->
+                <Button x:Name="TodoButton" Style="{StaticResource PanelButton}"
+                        ToolTip="To-do list" Click="Todo_Click">
+                    <Canvas Width="12" Height="12">
+                        <Rectangle Width="12" Height="12" RadiusX="2" RadiusY="2"
+                                   Stroke="{DynamicResource Theme.TextDim}" StrokeThickness="1.2" />
+                        <Path Data="M3,6 L5.2,8.5 L9.2,3.5" Stroke="{DynamicResource Theme.TextDim}" StrokeThickness="1.5" />
+                    </Canvas>
+                </Button>
+                <!-- Two chain links, overlapping: the usual "link" sign. -->
+                <Button x:Name="LinkButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Link (Ctrl+K)&#x0a;Ctrl+click a link in the notes to open it." Click="Link_Click">
+                    <Canvas Width="15" Height="10">
+                        <Rectangle Canvas.Left="0.6" Canvas.Top="2" Width="8" Height="6" RadiusX="3" RadiusY="3"
+                                   Stroke="{DynamicResource Theme.TextDim}" StrokeThickness="1.2" />
+                        <Rectangle Canvas.Left="6.4" Canvas.Top="2" Width="8" Height="6" RadiusX="3" RadiusY="3"
+                                   Stroke="{DynamicResource Theme.TextDim}" StrokeThickness="1.2" />
+                    </Canvas>
+                </Button>
+
+                <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
+
+                <!-- Colour. There used to be a strip of five swatches from
+                     settings.json beside this; the picker replaced them, and
+                     the way back to uncoloured text moved into it. -->
+                <Button x:Name="MoreColorsButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Text colour" Click="MoreColors_Click">
+                    <Border Width="12" Height="12" CornerRadius="3"
+                            BorderThickness="1" BorderBrush="{DynamicResource Theme.Ov.33}">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
+                                <GradientStop Offset="0.00" Color="#FFFF4040" />
+                                <GradientStop Offset="0.25" Color="#FFFFE040" />
+                                <GradientStop Offset="0.50" Color="#FF4ADE80" />
+                                <GradientStop Offset="0.75" Color="#FF60A5FA" />
+                                <GradientStop Offset="1.00" Color="#FFC084FC" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+                </Button>
+            </WrapPanel>
+            </Border>
+
+            <!-- Hung off the toolbar rather than opened as a window: a window
+                 would take focus, and the editor's selection is what is about
+                 to be coloured. StaysOpen=False closes it on the next click
+                 elsewhere, which is what every picker does. -->
+            <Popup x:Name="ColorPopup" PlacementTarget="{Binding ElementName=MoreColorsButton}"
+                   Placement="Bottom" VerticalOffset="4" HorizontalOffset="-120"
+                   StaysOpen="False" AllowsTransparency="True">
+                <Border x:Name="ColorPopupPanel" CornerRadius="8" BorderThickness="1">
+                    <ui:ColorPicker x:Name="Picker" />
+                </Border>
+            </Popup>
+
+            <!-- Same reasoning as the colour popup: a window would take the
+                 focus, and the list goes in at the editor's caret. -->
+            <Popup x:Name="TodoPopup" PlacementTarget="{Binding ElementName=TodoButton}"
+                   Placement="Bottom" VerticalOffset="4" HorizontalOffset="-90"
+                   StaysOpen="False" AllowsTransparency="True"
+                   Opened="TodoPopup_Opened">
+                <!-- The items are written here, one box each, and go into the
+                     notes together: the old version asked how many and put in
+                     that many empty lines, which then had to be filled one by
+                     one in the editor anyway.
+
+                     The kind is a row of three chips rather than radio buttons
+                     with labels and a hint under each - one line instead of
+                     five, and the items below show the kind as it is picked. -->
+                <Border x:Name="TodoPopupPanel" CornerRadius="8" BorderThickness="1" Padding="12,10">
+                    <StackPanel Width="270">
+                        <TextBlock x:Name="TodoHeading" Text="New to-do list"
+                                   FontWeight="SemiBold" Margin="0,0,0,8" />
+
+                        <!-- ToolToggle works on a RadioButton, which is a
+                             ToggleButton: lit while picked, like the widget's
+                             buttons. Checkboxes first and chosen - ticking
+                             things off is the point of a to-do list. -->
+                        <StackPanel Orientation="Horizontal" Margin="-5,0,0,8">
+                            <RadioButton x:Name="TodoChecks" Style="{StaticResource ToolToggle}"
+                                         GroupName="TodoStyle" IsChecked="True"
+                                         ToolTip="Click a box in the notes to tick it off"
+                                         Checked="TodoKind_Checked" Content="&#x2610; Checkboxes" />
+                            <RadioButton x:Name="TodoBullets" Style="{StaticResource ToolToggle}"
+                                         GroupName="TodoStyle"
+                                         Checked="TodoKind_Checked" Content="&#x2022; Bullets" />
+                            <RadioButton x:Name="TodoNumbered" Style="{StaticResource ToolToggle}"
+                                         GroupName="TodoStyle"
+                                         Checked="TodoKind_Checked" Content="1. Numbered" />
+                        </StackPanel>
+
+                        <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <StackPanel x:Name="TodoItems" />
+                        </ScrollViewer>
+
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="TodoChecksHint" Grid.Column="0" TextWrapping="Wrap"
+                                       VerticalAlignment="Center" Margin="0,0,8,0"
+                                       Text="Enter: next item · Enter on an empty one: done" />
+                            <Button Grid.Column="1" Style="{StaticResource AccentButton}"
+                                    Content="Create" ToolTip="Put the list in the notes at the cursor (Ctrl+Enter)"
+                                    Click="TodoCreate_Click" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <!-- Same reasoning again: the link wraps the editor's selection,
+                 which a window taking the focus would hide. -->
+            <Popup x:Name="LinkPopup" PlacementTarget="{Binding ElementName=LinkButton}"
+                   Placement="Bottom" VerticalOffset="4" HorizontalOffset="-120"
+                   StaysOpen="False" AllowsTransparency="True"
+                   Opened="LinkPopup_Opened">
+                <Border x:Name="LinkPopupPanel" CornerRadius="8" BorderThickness="1" Padding="12,10">
+                    <StackPanel Width="260">
+                        <TextBlock x:Name="LinkHeading" Text="Add link"
+                                   FontWeight="SemiBold" Margin="0,0,0,10" />
+
+                        <TextBlock x:Name="LinkTextLabel" Text="Text to show" Margin="0,0,0,3" />
+                        <TextBox x:Name="LinkText" Style="{StaticResource DarkTextBox}"
+                                 Margin="0,0,0,8" PreviewKeyDown="LinkBox_PreviewKeyDown" />
+
+                        <TextBlock x:Name="LinkAddressLabel" Text="Address" Margin="0,0,0,3" />
+                        <TextBox x:Name="LinkAddress" Style="{StaticResource DarkTextBox}"
+                                 PreviewKeyDown="LinkBox_PreviewKeyDown" />
+
+                        <TextBlock x:Name="LinkHint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                   Text="Ctrl+click a link in the notes to open it." />
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                            <Button x:Name="LinkRemove" Style="{StaticResource PanelButton}"
+                                    Width="Auto" Padding="10,0" Margin="0,0,6,0"
+                                    Content="Remove link" ToolTip="Remove the link but keep the text"
+                                    Click="LinkRemove_Click" />
+                            <Button x:Name="LinkApply" Style="{StaticResource AccentButton}"
+                                    Content="Add" ToolTip="Add the link (Enter)"
+                                    Click="LinkApply_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <!-- The note's earlier copies, newest first. A popup like NEW's,
+                 for the same reasons. Filled each time it opens, since every
+                 save session can add a copy. -->
+            <Popup x:Name="HistoryPopup" PlacementTarget="{Binding ElementName=HistoryButton}"
+                   Placement="Bottom" VerticalOffset="4"
+                   StaysOpen="False" AllowsTransparency="True"
+                   Opened="HistoryPopup_Opened">
+                <Border x:Name="HistoryPanel" CornerRadius="8" BorderThickness="1" Padding="10">
+                    <StackPanel Width="280">
+                        <TextBlock x:Name="HistoryHeading" Text="Earlier copies"
+                                   FontWeight="SemiBold" Margin="6,0,0,4" />
+                        <TextBlock x:Name="HistoryHint" Margin="6,0,0,6" TextWrapping="Wrap" />
+                        <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <StackPanel x:Name="HistoryList" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <!-- A popup rather than a dialog for the same reason as the
+                 others: a white Windows dialog on the dark panel, and one more
+                 window to lose behind the game. -->
+            <Popup x:Name="NewNotePopup" PlacementTarget="{Binding ElementName=NewNoteButton}"
+                   Placement="Bottom" VerticalOffset="4"
+                   StaysOpen="False" AllowsTransparency="True"
+                   Opened="NewNotePopup_Opened">
+                <Border x:Name="NewNotePanel" CornerRadius="8" BorderThickness="1" Padding="12,10">
+                    <StackPanel Width="240">
+                        <TextBlock x:Name="NewNoteHeading" Text="New note"
+                                   FontWeight="SemiBold" Margin="0,0,0,10" />
+
+                        <TextBlock x:Name="NewNoteNameLabel" Text="Name" Margin="0,0,0,3" />
+                        <TextBox x:Name="NewNoteName" Style="{StaticResource DarkTextBox}"
+                                 PreviewKeyDown="NewNoteName_PreviewKeyDown" />
+
+                        <TextBlock x:Name="NewNoteHint" Margin="0,6,0,0" TextWrapping="Wrap" />
+
+                        <Button Style="{StaticResource AccentButton}" HorizontalAlignment="Right"
+                                Margin="0,10,0,0" Content="Create" ToolTip="Create the note (Enter)"
+                                Click="NewNoteCreate_Click" />
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <!-- The matches for the search box, dropped down under it. Results
+                 open the game and select the match.
+
+                 StaysOpen is True and the code closes it, unlike the other
+                 popups: a StaysOpen=False popup takes the mouse, so the click
+                 that puts the caret back in the search box would close the
+                 list instead. Its right edge is lined up with the box's in
+                 code, since the box is at the window's right. -->
+            <Popup x:Name="SearchPopup" PlacementTarget="{Binding ElementName=SearchBox}"
+                   Placement="Bottom" VerticalOffset="4"
+                   StaysOpen="True" AllowsTransparency="True">
+                <Border x:Name="SearchPanel" CornerRadius="8" BorderThickness="1" Padding="10">
+                    <StackPanel Width="350">
+                        <TextBlock x:Name="SearchHint" Margin="0,0,0,4" TextWrapping="Wrap" />
+                        <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <StackPanel x:Name="SearchResults" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <!-- What happened - "Saved 19 Oct, 02:52:03" - then the file, as a
+                 button that shows it in Explorer. The path used to be the end
+                 of the same line of text: clickable, but nothing about it said
+                 so. As a button it has the hand, the hover and the ↗ that every
+                 other "opens somewhere else" button has. On the right, so the
+                 state reads first and the file sits out of the way at the far
+                 end; pushed out by the button's own padding, so its ↗ - not
+                 the edge of its hover - lines up with the line's right margin. -->
+            <Grid x:Name="StatusBar" DockPanel.Dock="Bottom" Margin="14,4,12,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="StatusText" Grid.Column="0"
+                           VerticalAlignment="Center" />
+
+                <Button x:Name="PathButton" Grid.Column="1"
+                        Style="{StaticResource ToolButton}"
+                        HorizontalAlignment="Right" Margin="6,0,-5,0"
+                        Click="PathButton_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <!-- The folder, as on the pictures window's FOLDER. -->
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M0.5,2.5 H4 L5,3.5 H9.5 V9.5 H0.5 Z M0.5,4.5 H9.5" />
+                        <TextBlock x:Name="PathText" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" />
+                        <Path Style="{StaticResource OpensWindowMark}" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <!-- The last line of the session history, read-only: it is the
+                 program's record, not part of the notes, so it sits outside the
+                 editor where it can't be typed over or saved into the RTF.
+                 Docked after StatusText, so it lands between that and the
+                 editor. Collapsed when there is nothing to show. -->
+            <!-- A card like the toolbar's rather than a line ruled above it:
+                 it is a separate thing from the notes, and the rule alone left
+                 it reading as their last paragraph. -->
+            <!-- Laid out as one table: "Last session" and the section names
+                 share the first column, so the date and the first reading of
+                 every line start at the same place. Clipped, so on a very narrow
+                 window the last readings are cut at the card's edge rather than
+                 drawn over it. -->
+            <Border x:Name="SessionStrip" DockPanel.Dock="Bottom"
+                    Margin="12,8,12,0" Padding="10,7,10,7" CornerRadius="6"
+                    ClipToBounds="True"
+                    Visibility="Collapsed">
+                <StackPanel Grid.IsSharedSizeScope="True">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" SharedSizeGroup="SessionName" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="Last session"
+                                   FontWeight="SemiBold" Margin="0,0,12,0" />
+                        <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" />
+                        <!-- A toggle like the widget's LOG, with the same clock:
+                             it opens the same window, the next click puts it
+                             away, and it is lit blue while it is open - LOG and
+                             this light together. It was blue text with nothing
+                             to show it could be clicked but the cursor. No ↗:
+                             being lit is how a toggle says it opens a window.
+                             Pulled right by its padding so the label, not the
+                             hover background, lines up with the card's edge. -->
+                        <ToggleButton x:Name="AllSessionsButton" Grid.Column="2" Margin="10,-2,-5,0"
+                                      VerticalAlignment="Top"
+                                      Style="{StaticResource ToolToggle}"
+                                      ToolTip="All sessions&#x0a;Every session of this game, with totals and a chart. Click again to close."
+                                      Click="AllSessions_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource ToolIcon}"
+                                      Data="M0.5,5 A4.5,4.5 0 1 1 9.5,5 A4.5,4.5 0 1 1 0.5,5
+                                            M5,2.5 V5 H7" />
+                                <TextBlock Text="ALL SESSIONS" />
+                            </StackPanel>
+                        </ToggleButton>
+                    </Grid>
+
+                    <!-- The worst readings, one line per widget section, so it
+                         reads like the panel it was measured on. Filled in code,
+                         as a table: every reading has a column of its own, so
+                         the first of each line - CPU, CPU, FPS - sits under
+                         the others, and so on along the line. Its first column
+                         is the heading's, through SessionName above. -->
+                    <Grid x:Name="SessionPeaks" Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+
+            <!-- The page: a faint rounded area the notes are written on, so
+                 the writing space has an edge and the text isn't pressed up
+                 against the window's. Its padding is the margin around the
+                 text. -->
+            <Border x:Name="Page" CornerRadius="6" Margin="12,0,12,0" Padding="8,6,4,6">
+            <RichTextBox x:Name="Editor"
+                         Margin="0"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Disabled"
+                         SpellCheck.IsEnabled="False"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Padding="0,2"
+                         AcceptsTab="True"
+                         IsInactiveSelectionHighlightEnabled="True"
+                         ContextMenu="{DynamicResource TextMenu}"
+                         TextChanged="Editor_TextChanged"
+                         SelectionChanged="Editor_SelectionChanged"
+                         PreviewMouseLeftButtonDown="Editor_PreviewMouseLeftButtonDown"
+                         PreviewMouseMove="Editor_PreviewMouseMove"
+                         PreviewKeyDown="Editor_PreviewKeyDown">
+                <RichTextBox.Resources>
+                    <!-- FlowDocument paragraphs are spaced like a word processor
+                         by default, which wastes half the window on notes. -->
+                    <Style TargetType="Paragraph">
+                        <Setter Property="Margin" Value="0" />
+                    </Style>
+                </RichTextBox.Resources>
+                <RichTextBox.InputBindings>
+                    <KeyBinding Key="N" Modifiers="Ctrl+Shift" Command="EditingCommands.ToggleNumbering" />
+                    <KeyBinding Key="L" Modifiers="Ctrl+Shift" Command="EditingCommands.ToggleBullets" />
+                </RichTextBox.InputBindings>
+            </RichTextBox>
+            </Border>
+        </DockPanel>
+    </Border>
+</ui:PanelWindow>

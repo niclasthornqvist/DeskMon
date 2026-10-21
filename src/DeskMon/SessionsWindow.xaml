@@ -1,0 +1,219 @@
+<ui:PanelWindow x:Class="DeskMon.SessionsWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Sessions"
+                Width="580" Height="560"
+                MinWidth="460" MinHeight="320"
+                ShowInTaskbar="False"
+                ShowActivated="False"
+                TextOptions.TextFormattingMode="Display">
+
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+    </ui:PanelWindow.Resources>
+
+    <!-- The session history, game by game: what the log files hold, as a
+         summary, a chart and a table. Read-only - the files are the record,
+         and this only reads them. -->
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <Grid>
+        <!-- The game's picture behind the top of the window, fading out
+             before the chart, as Steam's library page shows a game. Under
+             everything, so it never takes a click. Set in code (GameArt). -->
+        <Border x:Name="Backdrop" VerticalAlignment="Top" Height="270"
+                CornerRadius="9,9,0,0" IsHitTestVisible="False" Opacity="0">
+            <Border.OpacityMask>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#FF000000" Offset="0" />
+                    <GradientStop Color="#C0000000" Offset="0.45" />
+                    <GradientStop Color="#00000000" Offset="1" />
+                </LinearGradientBrush>
+            </Border.OpacityMask>
+        </Border>
+
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0"
+                           Text="SESSIONS"
+                           Margin="12,8,8,6"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- What can be done here, in the row every window has under its
+                 header (ActionRow, in PanelStyles.xaml). -->
+            <StackPanel Style="{StaticResource ActionRow}" Orientation="Horizontal">
+                <!-- A circle not quite closed, with its arrowhead: read again. -->
+                <Button Style="{StaticResource ToolButton}"
+                        ToolTip="Reload the logs&#x0a;Picks up changes made to them in Notepad."
+                        Click="Refresh_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M8.5,5 A3.5,3.5 0 1 1 7,2.2
+                                    M7.5,0.5 V2.5 H5.5" />
+                        <TextBlock Text="REFRESH" />
+                    </StackPanel>
+                </Button>
+
+                <!-- A table: a box split into three columns. -->
+                <Button x:Name="ColumnsButton" Style="{StaticResource ToolButton}"
+                        ToolTip="Choose which readings the table shows"
+                        Click="Columns_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M0.5,1.5 H9.5 V8.5 H0.5 Z
+                                    M3.5,1.5 V8.5 M6.5,1.5 V8.5" />
+                        <TextBlock Text="COLUMNS" />
+                    </StackPanel>
+                </Button>
+
+                <!-- The notes button's page, with lines of text on it: a log. -->
+                <Button x:Name="OpenLogButton" Style="{StaticResource ToolButton}"
+                        ToolTip="Open this game&apos;s log file in Notepad"
+                        Click="OpenLog_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M2.5,0.5 H6.5 L8.5,2.5 V9.5 H2.5 Z
+                                    M6.5,0.5 V2.5 H8.5
+                                    M4,5.5 H7 M4,7.5 H7" />
+                        <TextBlock Text="OPEN LOG" />
+                        <Path Style="{StaticResource OpensWindowMark}" />
+                    </StackPanel>
+                </Button>
+
+                <!-- A bin: lid with a handle, and a body with two ribs. -->
+                <Button x:Name="DeleteButton" Style="{StaticResource ToolButton}"
+                        IsEnabled="False"
+                        ToolTip="Delete the selected session&#x0a;Click a session in the table first."
+                        ToolTipService.ShowOnDisabled="True"
+                        Click="Delete_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M1.5,2.5 H9.5 M4.5,2.5 V0.5 H6.5 V2.5
+                                    M2.5,2.5 V9.5 H8.5 V2.5
+                                    M4.5,4.5 V7.5 M6.5,4.5 V7.5" />
+                        <TextBlock x:Name="DeleteText" Text="DELETE" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Under the actions, as the notes' picker is. -->
+            <Grid DockPanel.Dock="Top" Margin="12,0,12,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="PickerLabel" Grid.Column="0" Text="Game"
+                           VerticalAlignment="Center" Margin="0,0,8,0" />
+                <ComboBox x:Name="GamePicker" Grid.Column="1"
+                          Style="{StaticResource DarkCombo}"
+                          ItemTemplate="{StaticResource GamePickerItem}"
+                          SelectionChanged="GamePicker_SelectionChanged"
+                          VerticalAlignment="Center" />
+            </Grid>
+
+            <!-- Totals for the game: the question this window answers first is
+                 "how much have I played this?". -->
+            <!-- The figures, each on a small card of its own with its name
+                 above it: what it is in small capitals, how much in larger
+                 bright type. They used to be one sentence of bright and dim
+                 words, which had to be read through to find a number. Filled
+                 in code; wraps onto a second row in a narrow window. -->
+            <Grid DockPanel.Dock="Top">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <WrapPanel x:Name="Stats" Grid.ColumnSpan="2" Margin="12,10,4,0" />
+
+            <!-- Under the cards, quietly: when it was first and last played,
+                 or why there is nothing to show. -->
+            <TextBlock x:Name="SummaryText" Grid.Row="1"
+                       Margin="12,0,12,0" TextWrapping="Wrap" />
+
+            <!-- Which game, at the bottom right of its banner: the game's own
+                 logo where Steam has one, else its name in large type over a
+                 short accent bar. Beside the summary and the chart's picker
+                 rather than the cards, which keep the full width. Never takes
+                 a click. Set in code with the banner. As tall as the tallest
+                 logo whatever it holds, so the chart below stays where it is
+                 when one game has a logo and the next only its name. -->
+            <Grid x:Name="GameTitle" Grid.Row="1" Grid.RowSpan="2" Grid.Column="1"
+                  VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                  Height="76" Margin="8,6,16,4" IsHitTestVisible="False" Opacity="0">
+                <Grid.Effect>
+                    <DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.9" Color="Black" />
+                </Grid.Effect>
+                <Image x:Name="GameLogo" MaxWidth="190" MaxHeight="76" Stretch="Uniform"
+                       HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                       RenderOptions.BitmapScalingMode="HighQuality" />
+                <StackPanel x:Name="GameNamePanel" VerticalAlignment="Bottom">
+                    <Border x:Name="GameNameBar" Width="26" Height="3" CornerRadius="1.5"
+                            HorizontalAlignment="Right" Margin="0,0,0,5" />
+                    <TextBlock x:Name="GameName" MaxWidth="170" TextWrapping="Wrap"
+                               TextAlignment="Right" HorizontalAlignment="Right"
+                               FontFamily="Bahnschrift SemiBold, Segoe UI" FontSize="21"
+                               LineHeight="22" LineStackingStrategy="BlockLineHeight" />
+                </StackPanel>
+            </Grid>
+
+            <!-- One bar per session, oldest on the left. Drawn in code, and
+                 redrawn when the window is resized. The picker is the title, so
+                 what the bars measure is said where the choice is made. -->
+            <StackPanel x:Name="ChartTitle" Grid.Row="2" Orientation="Horizontal"
+                        Margin="12,10,12,4">
+                <ComboBox x:Name="ChartPicker" Style="{StaticResource DarkCombo}"
+                          MinWidth="150" VerticalAlignment="Center" />
+                <TextBlock x:Name="ChartTitleText" Text="per session"
+                           Margin="8,0,0,0" VerticalAlignment="Center" />
+                <!-- The key for the one bar drawn in another colour, so the
+                     colour is explained where it is seen, not in a tooltip. -->
+                <Border x:Name="HighestSwatch" Width="8" Height="8" CornerRadius="2"
+                        Margin="14,0,5,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="HighestText" Text="highest" VerticalAlignment="Center" />
+                <!-- And the lowest, in a third colour. Only when it differs
+                     from the highest: with one session, or every bar level,
+                     there is no lowest to point out. -->
+                <Border x:Name="LowestSwatch" Width="8" Height="8" CornerRadius="2"
+                        Margin="12,0,5,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="LowestText" Text="lowest" VerticalAlignment="Center" />
+            </StackPanel>
+            </Grid>
+            <Canvas x:Name="Chart" DockPanel.Dock="Top" Height="110"
+                    Margin="12,0,12,0" ClipToBounds="True"
+                    Background="Transparent"
+                    SizeChanged="Chart_SizeChanged" />
+
+            <!-- Column headings, outside the scroller so they stay put. -->
+            <Grid x:Name="TableHeader" DockPanel.Dock="Top" Margin="12,12,12,2" />
+            <Border x:Name="TableRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          Margin="12,2,4,10" Focusable="False">
+                <StackPanel x:Name="Rows" Margin="0,0,8,0" />
+            </ScrollViewer>
+        </DockPanel>
+        </Grid>
+    </Border>
+</ui:PanelWindow>

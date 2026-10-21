@@ -1,0 +1,149 @@
+<ui:PanelWindow x:Class="DeskMon.SettingsWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Settings"
+                Width="600" Height="620"
+                MinWidth="380" MinHeight="260"
+                ShowInTaskbar="False"
+                TextOptions.TextFormattingMode="Display"
+                FontFamily="Consolas">
+
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+    </ui:PanelWindow.Resources>
+
+    <!-- The rows themselves are built in code from SettingsCatalogue, not laid
+         out here: a form of forty hand-written controls would have to be edited
+         in step with AppSettings forever, and the one thing that guarantees is
+         that it eventually disagrees with it. -->
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0"
+                           Text="SETTINGS"
+                           Margin="12,8,8,6"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- What can be done here, in the row every window has under its
+                 header (ActionRow, in PanelStyles.xaml). RELOAD used to sit at
+                 the bottom right, beside the status line - the one window with
+                 its button down there. -->
+            <StackPanel Style="{StaticResource ActionRow}" Orientation="Horizontal">
+                <!-- The same arrow as the sessions window's REFRESH. -->
+                <Button x:Name="ReloadButton" Style="{StaticResource ToolButton}"
+                        ToolTip="Restart DeskMon&#x0a;Settings tagged &quot;Needs a reload&quot; take effect after a restart."
+                        Click="Reload_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M8.5,5 A3.5,3.5 0 1 1 7,2.2
+                                    M7.5,0.5 V2.5 H5.5" />
+                        <TextBlock Text="RELOAD" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Docked before the scroller below it, because DockPanel hands the
+                 leftover space to whatever is docked last - and that has to be
+                 the list, not the footer. -->
+            <Border x:Name="FooterRule" DockPanel.Dock="Bottom" Height="1" Margin="12,0,12,0" />
+
+            <TextBlock x:Name="StatusText" DockPanel.Dock="Bottom"
+                       Margin="12,7,12,9"
+                       TextWrapping="Wrap" />
+
+            <!-- One picker shared by every colour row: the swatch that opens it
+                 says which row it is for. A popup rather than a window, for
+                 the reason the notepad's is - it closes on the next click
+                 elsewhere, and takes no focus of its own. -->
+            <Popup x:Name="ColourPopup" Placement="Bottom" VerticalOffset="4"
+                   StaysOpen="False" AllowsTransparency="True">
+                <Border x:Name="ColourPanel" CornerRadius="8" BorderThickness="1">
+                    <StackPanel>
+                        <ui:ColorPicker x:Name="Picker" />
+
+                        <!-- The picker is RGB only; these colours are not -
+                             the widget's background is see-through by design. -->
+                        <Grid Margin="10,0,10,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="AlphaLabel" Grid.Column="0" Text="Opacity"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <Slider x:Name="AlphaSlider" Grid.Column="1"
+                                    Style="{StaticResource DarkSlider}"
+                                    Minimum="0" Maximum="100" TickFrequency="1"
+                                    IsSnapToTickEnabled="True" Focusable="False"
+                                    VerticalAlignment="Center"
+                                    ValueChanged="AlphaSlider_ValueChanged" />
+                            <TextBlock x:Name="AlphaText" Grid.Column="2" Width="40"
+                                       TextAlignment="Right" VerticalAlignment="Center" />
+                            <Button Grid.Column="3" Style="{StaticResource PanelButton}"
+                                    Width="Auto" Padding="10,0" Margin="8,0,0,0"
+                                    Content="Default" ToolTip="Back to the built-in colour"
+                                    Click="DefaultColour_Click" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <!-- Running programs, for "Never treat as a game". Typed names are
+                 accepted too, for something that isn't running right now. -->
+            <Popup x:Name="ProgramPopup" Placement="Bottom" VerticalOffset="4"
+                   StaysOpen="False" AllowsTransparency="True"
+                   Opened="ProgramPopup_Opened">
+                <Border x:Name="ProgramPanel" CornerRadius="8" BorderThickness="1" Padding="10">
+                    <StackPanel Width="260">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ProgramFilter" Grid.Column="0"
+                                     Style="{StaticResource DarkTextBox}"
+                                     ToolTip="Filter the list&#x0a;Or type a program&apos;s name and press Enter to add it."
+                                     TextChanged="ProgramFilter_TextChanged"
+                                     PreviewKeyDown="ProgramFilter_PreviewKeyDown" />
+                            <Button Grid.Column="1" Style="{StaticResource PanelButton}"
+                                    Width="Auto" Padding="10,0" Margin="6,0,0,0"
+                                    Content="Add" ToolTip="Add the name as typed (Enter)"
+                                    Click="ProgramAddTyped_Click" />
+                        </Grid>
+                        <!-- Wraps: "Nothing running matches. Press Enter to add
+                             it as typed." is wider than the popup, and its end
+                             is the part that says what to do. -->
+                        <TextBlock x:Name="ProgramHint" Text="Running programs" Margin="0,0,0,4"
+                                   TextWrapping="Wrap" />
+                        <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <StackPanel x:Name="ProgramList" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </Popup>
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12,2,4,0" Focusable="False">
+                <StackPanel x:Name="Rows" Margin="0,0,8,10" />
+            </ScrollViewer>
+        </DockPanel>
+    </Border>
+</ui:PanelWindow>
