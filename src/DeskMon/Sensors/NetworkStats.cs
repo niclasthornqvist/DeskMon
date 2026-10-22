@@ -24,20 +24,41 @@ internal sealed class NetworkStats
     private Dictionary<string, (long Received, long Sent)> _last = new();
     private DateTime _at;
 
+    /// <summary>
+    /// The adapters worth counting, looked up again every <see cref="AdaptersEvery"/>.
+    /// Listing them builds a fresh object for every adapter and asks Windows
+    /// for all their addresses - the one costly call left in a tick. Adapters
+    /// come and go far less often: a VPN connecting shows up within the
+    /// interval, and its first reading is skipped anyway (see _last).
+    /// </summary>
+    private NetworkInterface[] _adapters = Array.Empty<NetworkInterface>();
+    private DateTime _adaptersAt = DateTime.MinValue;
+    private static readonly TimeSpan AdaptersEvery = TimeSpan.FromSeconds(10);
+
     public (double? Down, double? Up) Read()
     {
         try
         {
-            var counts = new Dictionary<string, (long Received, long Sent)>();
-            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
+            var now = DateTime.UtcNow;
+            if (now - _adaptersAt >= AdaptersEvery)
             {
-                if (adapter.OperationalStatus != OperationalStatus.Up
-                    || adapter.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel
-                    || IsVirtualSwitch(adapter))
-                    continue;
+                // Up is part of the list rather than asked each tick: .NET
+                // takes it down once, when the list is made, so asking a kept
+                // adapter would only repeat that. One that goes down meanwhile
+                // stops counting bytes, which adds nothing to the figure.
+                _adapters = Array.FindAll(NetworkInterface.GetAllNetworkInterfaces(), adapter =>
+                    adapter.OperationalStatus == OperationalStatus.Up
+                    && adapter.NetworkInterfaceType is not (NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
+                    && !IsVirtualSwitch(adapter));
+                _adaptersAt = now;
+            }
 
+            var counts = new Dictionary<string, (long Received, long Sent)>();
+            foreach (var adapter in _adapters)
+            {
                 // One adapter that won't report - some VPN and virtual ones
-                // throw here - costs its own bytes, not the whole reading.
+                // throw here, and so does one removed since the list was
+                // made - costs its own bytes, not the whole reading.
                 try
                 {
                     var stats = adapter.GetIPStatistics();
@@ -48,7 +69,6 @@ internal sealed class NetworkStats
                 }
             }
 
-            var now = DateTime.UtcNow;
             double seconds = (now - _at).TotalSeconds;
             bool first = _last.Count == 0;
 

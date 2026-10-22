@@ -36,6 +36,10 @@ public sealed class SensorHub : IDisposable
     /// </summary>
     private readonly object _gate = new();
 
+    /// <summary>The disk counters' own <see cref="_gate"/> - see Read.</summary>
+    private readonly object _diskGate = new();
+    private bool _diskClosed;
+
     /// <summary>How long hardware-library values are reused. See <see cref="RefreshHardware"/>.</summary>
     private readonly TimeSpan _hardwareEvery;
 
@@ -197,10 +201,20 @@ public sealed class SensorHub : IDisposable
         snapshot.TopRamUsers = _memoryUsers.ByRam;
         snapshot.TopCommitUsers = _memoryUsers.ByCommit;
 
-        (snapshot.DiskRead, snapshot.DiskWrite) = _disk.Throughput();
-        _disk.RefreshSpace();
-        snapshot.DiskFullest = _disk.Fullest;
-        snapshot.Drives = _disk.Drives;
+        // Under a lock of its own, which Dispose takes too: closing the PDH
+        // query while a read on the worker was inside PdhCollectQueryData
+        // could pull it out from under the call. Not _gate - the hardware
+        // refresh holds that for up to 75 ms, and the disk has no need to wait.
+        lock (_diskGate)
+        {
+            if (!_diskClosed)
+            {
+                (snapshot.DiskRead, snapshot.DiskWrite) = _disk.Throughput();
+                _disk.RefreshSpace();
+                snapshot.DiskFullest = _disk.Fullest;
+                snapshot.Drives = _disk.Drives;
+            }
+        }
 
         (snapshot.NetDown, snapshot.NetUp) = _network.Read();
 
@@ -408,7 +422,12 @@ public sealed class SensorHub : IDisposable
 
     public void Dispose()
     {
-        _disk.Dispose();
+        // After any read in progress - see Read.
+        lock (_diskGate)
+        {
+            _diskClosed = true;
+            _disk.Dispose();
+        }
 
         // Waits for an in-flight read to finish first - at most a few
         // milliseconds, and it saves closing the library from underneath one.

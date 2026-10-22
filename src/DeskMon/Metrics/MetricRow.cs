@@ -381,7 +381,7 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// </summary>
     private void ApplyDetails(SensorSnapshot snapshot)
     {
-        if (_metric.Details is null || Details.Count == 0)
+        if (_metric.Details is null)
             return;
 
         try
@@ -391,12 +391,77 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
 
             for (int i = 0; i < shared; i++)
                 Details[i].Set(readings[i]);
+
+            NoteDetailCount(readings.Count);
         }
         catch
         {
             // Same reasoning as Apply: a bad lambda in MetricRegistry must not
             // take the widget down.
         }
+    }
+
+    /// <summary>
+    /// Set once the list has had a different length from its lines for
+    /// <see cref="DetailCountSettles"/> - a drive plugged in or taken out, or a
+    /// list that was empty on the first read and has entries now. The window
+    /// then calls <see cref="RebuildDetails"/>. Built once and never again, the
+    /// list used to keep a removed drive's last figure forever and never show
+    /// a new one.
+    /// </summary>
+    public bool DetailsChanged { get; private set; }
+
+    /// <summary>
+    /// How long a new length has to hold before the lines are rebuilt. A
+    /// rebuild re-measures the whole panel, and a list that flickers by one
+    /// for a tick - a sensor missing a single read - shouldn't do that each time.
+    /// </summary>
+    private static readonly TimeSpan DetailCountSettles = TimeSpan.FromSeconds(3);
+
+    private int _otherCount = -1;
+    private DateTime _otherCountSince;
+
+    private void NoteDetailCount(int count)
+    {
+        if (count == Details.Count)
+        {
+            _otherCount = -1;
+            return;
+        }
+
+        if (count != _otherCount)
+        {
+            _otherCount = count;
+            _otherCountSince = DateTime.UtcNow;
+            return;
+        }
+
+        if (DateTime.UtcNow - _otherCountSince >= DetailCountSettles)
+            DetailsChanged = true;
+    }
+
+    /// <summary>
+    /// Makes the lines again for the list as it is now. Returns them, for the
+    /// window to put in place of the old ones.
+    /// </summary>
+    public IReadOnlyList<DetailRow> RebuildDetails(SensorSnapshot snapshot)
+    {
+        DetailsChanged = false;
+        _otherCount = -1;
+        Details.Clear();
+
+        var rows = BuildDetails(snapshot);
+
+        // BuildDetails only announces a list that has lines; one that has
+        // just lost its last line has to take its arrow away as well.
+        if (Details.Count == 0)
+        {
+            Set(nameof(IndicatorVisibility));
+            Set(nameof(CanExpand));
+            Set(nameof(Tooltip));
+        }
+
+        return rows;
     }
 
     /// <summary>

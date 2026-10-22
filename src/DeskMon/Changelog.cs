@@ -28,6 +28,13 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.61.2", "2026-10-21",
+            "Drive and sensor lists follow a drive plugged in or taken out, instead of keeping the list from startup",
+            "Lighter ticks: network adapters are listed every 10 s rather than every second, and the game's window is remembered while you are tabbed out",
+            "Fixed: session times could be written in a form the history can't read on a PC whose region uses another time separator",
+            "Fixed: Open settings.json says why in a notification if Notepad won't start, instead of failing silently",
+            "Fixed: closing DeskMon while the disk counters were being read could fault on the way out"),
+
         new("1.61.1", "2026-10-21",
             "Safer: the update link only ever opens a page on github.com, and the update repository must look like owner/name",
             "Safer: pictures in the notes are only read from drives on this PC - a link to a network share is never opened, even just by showing the notes",

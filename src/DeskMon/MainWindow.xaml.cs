@@ -813,6 +813,9 @@ public partial class MainWindow : Window
             foreach (var row in _rows)
                 row.Apply(snapshot);
 
+            if (_detailsBuilt && _rows.Exists(row => row.DetailsChanged))
+                RebuildDetailRows(snapshot);
+
             if (_alerts is not null)
                 foreach (string alert in _alerts.Check(snapshot))
                     Alert(alert);
@@ -859,6 +862,41 @@ public partial class MainWindow : Window
         // possible layout can be measured. This also redraws, so a row left
         // unfolded in settings.json appears.
         LockPanelWidth();
+    }
+
+    /// <summary>
+    /// Swaps in new detail rows for every list whose length has changed for a
+    /// while - see <see cref="MetricRow.DetailsChanged"/>. Rare: a drive
+    /// plugged in or taken out.
+    ///
+    /// Only DetailRow entries are taken out: rows folded under a metric hang
+    /// on it the same way (DetailOf), and they are not part of its list.
+    /// </summary>
+    private void RebuildDetailRows(SensorSnapshot snapshot)
+    {
+        foreach (var row in _rows.Where(r => r.DetailsChanged).ToList())
+        {
+            _allItems.RemoveAll(entry => entry.Item is DetailRow && entry.DetailOf == row);
+
+            int at = _allItems.FindIndex(entry => entry.Item == row);
+            if (at < 0)
+            {
+                row.RebuildDetails(snapshot);   // not drawn - clears the flag all the same
+                continue;
+            }
+
+            var entryOfRow = _allItems[at];
+            var details = row.RebuildDetails(snapshot);
+            for (int d = details.Count - 1; d >= 0; d--)
+                _allItems.Insert(at + 1, entryOfRow with { Item = details[d], DetailOf = row });
+        }
+
+        // Measured again, as at startup: a longer drive name can widen the
+        // panel. Side by side, the width follows the columns anyway.
+        if (Horizontal)
+            RefreshVisibleItems();
+        else
+            RelockWidth();
     }
 
     /// <summary>
@@ -1039,8 +1077,7 @@ public partial class MainWindow : Window
 
         try
         {
-            _gameProcess.Refresh();
-            IntPtr window = _gameProcess.MainWindowHandle;
+            IntPtr window = GameWindow();
 
             if (window == IntPtr.Zero)
                 return true;
@@ -1570,7 +1607,10 @@ public partial class MainWindow : Window
     private string DescribeSession(DateTime started, DateTime ended, FrameStats frames, string? note)
     {
         var line = new StringBuilder();
-        line.Append($"{started:yyyy-MM-dd HH:mm}–{ended:HH:mm} · {Describe(ended - started)}");
+        // Invariant like the figures below: in a format string ':' means the
+        // culture's time separator, and a culture that uses '.' would write a
+        // line SessionRecord.Parse can't read back.
+        line.Append(FormattableString.Invariant($"{started:yyyy-MM-dd HH:mm}–{ended:HH:mm} · {Describe(ended - started)}"));
 
         // Frame times, averaged and then inverted - not an average of rates;
         // the same reasoning as FpsMonitor's percentiles.
@@ -2556,14 +2596,46 @@ public partial class MainWindow : Window
 
         try
         {
-            _gameProcess.Refresh();
-            return _gameProcess.MainWindowHandle;
+            return GameWindow();
         }
         catch
         {
             return IntPtr.Zero;
         }
     }
+
+    /// <summary>
+    /// The tracked game's main window, remembered between ticks.
+    ///
+    /// Process.Refresh and MainWindowHandle walk every top-level window on the
+    /// desktop to find it, and this is asked every tick while you are tabbed
+    /// out. A window that still exists and still belongs to the game is kept,
+    /// as OverlayAnchor keeps its own; only when it has gone - closed, hidden,
+    /// or the game swapped a splash window for the real one - is it looked up
+    /// again. Visible is part of the test because MainWindowHandle only ever
+    /// gives a visible window: a hidden splash kept here would stand in for
+    /// the game's real one. Throws as MainWindowHandle does; the callers catch.
+    /// </summary>
+    private IntPtr GameWindow()
+    {
+        if (_gameProcess is null)
+            return IntPtr.Zero;
+
+        if (_gameWindow != IntPtr.Zero && _gameWindowPid == _gameProcess.Id
+            && IsWindow(_gameWindow) && IsWindowVisible(_gameWindow)
+            && GetWindowThreadProcessId(_gameWindow, out uint owner) != 0 && owner == _gameWindowPid)
+        {
+            return _gameWindow;
+        }
+
+        _gameProcess.Refresh();
+        _gameWindow = _gameProcess.MainWindowHandle;
+        _gameWindowPid = _gameProcess.Id;
+        return _gameWindow;
+    }
+
+    private IntPtr _gameWindow;
+    private int _gameWindowPid;
 
     /// <summary>The widget and every DeskMon window on screen - what a capture must not include.</summary>
     private List<IntPtr> OwnWindowHandles()
@@ -2774,10 +2846,20 @@ public partial class MainWindow : Window
         if (!System.IO.File.Exists(AppSettings.FilePath))
             _settings.Save();   // write the file so there is something to open
 
-        Process.Start(new ProcessStartInfo("notepad.exe", AppSettings.FilePath)
+        // Guarded like every other Process.Start: a menu click that fails
+        // should say so, not end up as an unhandled error in error.log. The
+        // path quoted, so a folder with a space in it still opens.
+        try
         {
-            UseShellExecute = true
-        });
+            Process.Start(new ProcessStartInfo("notepad.exe", $"\"{AppSettings.FilePath}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            _tray?.Notify("DeskMon", "Couldn't open settings.json: " + ex.Message, warning: true);
+        }
     }
 
     private void MenuReload_Click(object sender, RoutedEventArgs e) => RestartForSettings();
@@ -3113,6 +3195,10 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
 
     /// <summary>
     /// The pseudo-handle for this process. Process.GetCurrentProcess().Handle
