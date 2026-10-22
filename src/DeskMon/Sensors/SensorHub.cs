@@ -25,6 +25,7 @@ public sealed class SensorHub : IDisposable
     private readonly MemoryUsers _memoryUsers = new();
     private readonly DiskStats _disk = new();
     private readonly NetworkStats _network = new();
+    private readonly ThrottleWatch _throttle = new();
     private readonly Computer _computer;
     private readonly List<IHardware> _polled = new();
 
@@ -235,6 +236,10 @@ public sealed class SensorHub : IDisposable
         snapshot.GpuPower = hardware.GpuPower;
         snapshot.CpuTemperatures = hardware.CpuTemperatures;
         snapshot.GpuTemperatures = hardware.GpuTemperatures;
+
+        // Here, on the worker, so it sees every tick in order - one watcher,
+        // one thread.
+        snapshot.CpuThrottledFrom = _throttle.Update(snapshot.CpuLoad, snapshot.CpuTemp, snapshot.CpuClock);
 
         return snapshot;
     }

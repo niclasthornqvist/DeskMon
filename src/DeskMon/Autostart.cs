@@ -148,10 +148,12 @@ internal static class Autostart
         try
         {
             using var process = Process.Start(info)!;
-            process.StandardOutput.ReadToEnd();   // drained, or a full pipe could hang it
-            string error = process.StandardError.ReadToEnd();
+            // Both drained at once: read one to the end first and a full pipe
+            // on the other would leave schtasks and DeskMon waiting on each other.
+            var error = process.StandardError.ReadToEndAsync();
+            process.StandardOutput.ReadToEnd();
             process.WaitForExit(10_000);
-            return (process.ExitCode, error);
+            return (process.ExitCode, error.Result);
         }
         catch (Exception ex)
         {

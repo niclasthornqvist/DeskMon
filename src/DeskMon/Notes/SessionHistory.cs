@@ -300,15 +300,32 @@ public sealed class SessionHistory
             if (!File.Exists(OpenSessionPath))
                 return null;
 
-            var open = JsonSerializer.Deserialize<OpenSession>(File.ReadAllText(OpenSessionPath));
+            string saved = File.ReadAllText(OpenSessionPath);
+            var open = JsonSerializer.Deserialize<OpenSession>(saved);
 
-            if (open is { Game.Length: > 0, Line.Length: > 0 } && Append(open.Game, open.Line) is { } error)
+            // Taken away before the line is written, not after: deleting it
+            // afterwards could fail with the line already in the log, and the
+            // next start would write the same session a second time. Should
+            // this delete fail, nothing is written, and the next start tries
+            // again from the top.
+            try
             {
-                App.Log("recovering a session", error);
+                File.Delete(OpenSessionPath);
+            }
+            catch (Exception ex)
+            {
+                App.Log("recovering a session", ex);
                 return null;
             }
 
-            File.Delete(OpenSessionPath);
+            if (open is { Game.Length: > 0, Line.Length: > 0 } && Append(open.Game, open.Line) is { } error)
+            {
+                // Put back, so it is tried again next start rather than lost.
+                App.Log("recovering a session", error);
+                try { AtomicFile.WriteAllText(OpenSessionPath, saved); } catch { }
+                return null;
+            }
+
             return open?.Game;
         }
         catch (Exception ex)

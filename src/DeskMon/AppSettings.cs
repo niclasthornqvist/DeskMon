@@ -553,9 +553,11 @@ public sealed class AppSettings
     public double HardwareLabelWidth { get; set; } = 110;
 
     /// <summary>
-    /// Ask NVIDIA for the newest driver each time the hardware window is
-    /// opened. The only thing DeskMon sends over the internet, so it can be
-    /// turned off; the offline age check on the driver and BIOS stays either way.
+    /// Ask NVIDIA or AMD for the newest driver, ASUS for the newest BIOS and
+    /// Windows Update for waiting updates, each
+    /// time the hardware window is opened. The name keeps "Driver" so existing
+    /// settings.json files keep their choice. It can be turned off; the
+    /// offline age check on the driver and BIOS stays either way.
     /// </summary>
     public bool CheckDriverOnline { get; set; } = true;
 
@@ -589,6 +591,15 @@ public sealed class AppSettings
     /// both a load and a temperature. Date is always shown and not listed.
     /// </summary>
     public List<string> SessionColumns { get; set; } = DefaultSessionColumns();
+
+    /// <summary>
+    /// Where the hardware window starts counting crashes and unexpected
+    /// shutdowns from, if later than 30 days ago - set by right-clicking that
+    /// line. For shutdowns that were known and harmless (the power button
+    /// held instead of shutting down), which Windows logs the same as a
+    /// freeze. Null counts the last 30 days.
+    /// </summary>
+    public DateTime? StabilityCountedFrom { get; set; }
 
     public static List<string> DefaultSessionColumns()
         => new() { "time", "length", "avg", "LOW|", "CPU|°C", "GPU|°C" };
@@ -757,6 +768,10 @@ public sealed class AppSettings
         nameof(SessionColumns), nameof(SessionsChart), nameof(SteamAppIds), nameof(GogGames),
         nameof(PicturesLeft), nameof(PicturesTop), nameof(PicturesWidth), nameof(PicturesHeight),
         nameof(PicturesSort),
+        // Right-click on the hardware window's stability line. Off this list
+        // it was only ever written once, as null, and every later click was
+        // lost on the next start.
+        nameof(StabilityCountedFrom),
         nameof(SettingsLeft), nameof(SettingsTop), nameof(SettingsWidth), nameof(SettingsHeight),
     };
 

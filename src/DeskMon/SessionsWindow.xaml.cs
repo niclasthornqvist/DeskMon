@@ -546,7 +546,7 @@ public partial class SessionsWindow : PanelWindow
                 // One game through the shared lookup, so the notes and the
                 // pictures window reuse it; the collage is this window's own.
                 art = collage
-                    ? await System.Threading.Tasks.Task.Run(() => new GameArt.Art(GameArt.Collage(games, online), null))
+                    ? await GameArt.OwnThread(() => new GameArt.Art(GameArt.Collage(games, online), null))
                     : await GameArt.ForAsync(games[0].Item1, games[0].Item2, games[0].Item3, online);
             }
             catch
@@ -554,6 +554,12 @@ public partial class SessionsWindow : PanelWindow
                 art = new GameArt.Art(null, null);
             }
 
+            // Bounded like GameArt's own cache, which this holds on to as
+            // well: kept for good, every banner looked at stayed in memory.
+            // Cleared outright rather than one at a time - it is only a
+            // shortcut, and the shared lookup still has the recent ones.
+            if (_art.Count >= 8)
+                _art.Clear();
             _art[key] = art;
             if (ticket != _artTicket)
                 return;
@@ -762,6 +768,10 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private void ShowSummary(string? game)
     {
+        // A playtime still being looked up belongs to the cards cleared here,
+        // even when it is the same game again - those are about to be redrawn.
+        _playtimeTicket++;
+
         SummaryText.Inlines.Clear();
         Stats.Children.Clear();
 
@@ -775,22 +785,9 @@ public partial class SessionsWindow : PanelWindow
         var first = _sessions[0].Start;
         var last = _sessions[^1].Start;
 
-        // The whole playtime first when there is one: it is the figure the
-        // widget's GAME heading counts up from. Left out when the logs are all
-        // there is, since it would be the logged time again.
-        // Named for where it is from, with that source's icon: Steam's piston
-        // or the save disk, against the clock on the logged time beside it.
-        var playtime = GamePlaytime.For(game, _settings, _history, logged: total);
-        if (playtime.Source != PlaytimeSource.Logged)
-            AddStat(playtime.Source switch
-                    {
-                        PlaytimeSource.Steam => "STEAM PLAYTIME",
-                        PlaytimeSource.Gog => "GOG PLAYTIME",
-                        _ => "PLAYTIME FROM SAVES",
-                    },
-                    GamePlaytime.Describe(playtime.Time),
-                    $"Your whole playtime, {GamePlaytime.Where(playtime.Source)}",
-                    playtime.Source);
+        // The whole playtime goes first, but is looked up on a worker and put
+        // in front of the other cards when it arrives - see AddPlaytimeAsync.
+        _ = AddPlaytimeAsync(game, total);
 
         AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged", PlaytimeSource.Logged);
         AddStat("SESSIONS", _sessions.Count.ToString(CultureInfo.InvariantCulture));
@@ -811,6 +808,59 @@ public partial class SessionsWindow : PanelWindow
                    $"last {last.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture)}");
     }
 
+    /// <summary>Counts lookups, so one for a game already left behind doesn't land on the next.</summary>
+    private int _playtimeTicket;
+
+    /// <summary>
+    /// The whole playtime as the first card, when something knows more than
+    /// DeskMon's logs - the figure the widget's GAME heading counts up from.
+    /// Left out when the logs are all there is, since it would be the logged
+    /// time again. Named for where it is from, with that source's icon.
+    ///
+    /// On a worker thread, as the All games totals already were. This runs
+    /// when a game exits with the window open - inside the widget's tick -
+    /// and that is when Steam has just rewritten localconfig.vdf, several MB
+    /// to parse again, and GOG Galaxy's database may have to be copied before
+    /// it can be read. On the UI thread it froze every DeskMon window for it.
+    /// </summary>
+    private async System.Threading.Tasks.Task AddPlaytimeAsync(string game, TimeSpan logged)
+    {
+        int ticket = ++_playtimeTicket;
+
+        Playtime playtime;
+        try
+        {
+            // Look, not For: with no process to go by there is nothing new to
+            // remember, so nothing here writes the settings.
+            playtime = (await System.Threading.Tasks.Task.Run(
+                () => GamePlaytime.Look(game, _settings, _history, logged: logged))).Playtime;
+        }
+        catch (Exception ex)
+        {
+            App.Log("looking up playtime", ex);
+            return;
+        }
+
+        // Another game picked, the summary redrawn, or All games shown meanwhile.
+        if (ticket != _playtimeTicket || _allGames
+            || !string.Equals(GamePicker.SelectedItem as string, game, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (playtime.Source == PlaytimeSource.Logged)
+            return;
+
+        AddStat(playtime.Source switch
+                {
+                    PlaytimeSource.Steam => "STEAM PLAYTIME",
+                    PlaytimeSource.Gog => "GOG PLAYTIME",
+                    _ => "PLAYTIME FROM SAVES",
+                },
+                GamePlaytime.Describe(playtime.Time),
+                $"Your whole playtime, {GamePlaytime.Where(playtime.Source)}",
+                playtime.Source,
+                at: 0);
+    }
+
     /// <summary>
     /// One figure on a card: its name in small capitals above, the figure in
     /// larger bright type below. The same faint card as the notes window's
@@ -818,8 +868,9 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     /// <param name="source">For a time figure: where it is from, shown as that source's icon before the name.</param>
     /// <param name="valueBrush">The figure's colour, when it should say good or bad - the score's; bright text otherwise.</param>
+    /// <param name="at">Where among the cards; the end when left out. The playtime arrives last but goes first.</param>
     private void AddStat(string name, string value, string? tooltip = null, PlaytimeSource? source = null,
-                         Brush? valueBrush = null)
+                         Brush? valueBrush = null, int? at = null)
     {
         FrameworkElement? icon = null;
         if (source is { } from)
@@ -829,7 +880,11 @@ public partial class SessionsWindow : PanelWindow
         }
 
         // Shared with the pictures window's cards - see StatCard.
-        Stats.Children.Add(StatCard.Make(_theme, name, value, tooltip, icon, valueBrush));
+        var card = StatCard.Make(_theme, name, value, tooltip, icon, valueBrush);
+        if (at is int index)
+            Stats.Children.Insert(Math.Clamp(index, 0, Stats.Children.Count), card);
+        else
+            Stats.Children.Add(card);
     }
 
     /// <summary>
@@ -1669,6 +1724,112 @@ public partial class SessionsWindow : PanelWindow
             Process.Start(new ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true });
         }
         catch { /* nothing useful to do */ }
+    }
+
+    /// <summary>
+    /// The game's sessions as a CSV, for a spreadsheet. The log itself is
+    /// already one line per session, but in DeskMon's own wording ("CPU 78 °C,
+    /// FPS ↓41"); this splits it into one column per figure, which is what a
+    /// spreadsheet needs to chart or sort it.
+    ///
+    /// Only what the log keeps - each session's averages and peaks. There is
+    /// no second-by-second record to export.
+    /// </summary>
+    private void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (GamePicker.SelectedItem is not string game || _sessions.Count == 0)
+            return;
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Export sessions",
+            Filter = "CSV file (*.csv)|*.csv",
+            DefaultExt = ".csv",
+            // A game's name can hold characters a file name can't.
+            FileName = string.Concat($"{game} sessions".Split(Path.GetInvalidFileNameChars())) + ".csv",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        };
+
+        if (dialog.ShowDialog(this) != true)
+            return;
+
+        try
+        {
+            // With a BOM: without one Excel reads the file as the local code
+            // page and "°C" turns into "Â°C".
+            File.WriteAllText(dialog.FileName, SessionsCsv(_sessions), new System.Text.UTF8Encoding(true));
+        }
+        catch (Exception ex)
+        {
+            AddSummary(SummaryText.Inlines.Count > 0
+                ? $"\nCouldn't export the sessions: {ex.Message}"
+                : $"Couldn't export the sessions: {ex.Message}");
+            SummaryText.Inlines.LastInline.Foreground = _theme.Warn;
+        }
+    }
+
+    /// <summary>
+    /// Commas and a full stop for the decimals, whatever the PC's region - the
+    /// form every spreadsheet's import understands. Swedish Excel opening it by
+    /// double-click splits on semicolons instead, but Data > From Text reads it.
+    /// </summary>
+    internal static string SessionsCsv(IReadOnlyList<SessionRecord> sessions)
+    {
+        // One column per reading any session has, in the order they first
+        // appear. Keyed with the unit, since CPU is both a load and a temperature.
+        var peaks = sessions
+            .SelectMany(s => s.Peaks)
+            .Select(p => (p.Label, p.Unit))
+            .Distinct()
+            .ToList();
+
+        var csv = new System.Text.StringBuilder();
+        var header = new List<string> { "ID", "Date", "Start", "End", "Length (min)", "Avg FPS", "1% low", "0.1% low", "Jitter (ms)" };
+        header.AddRange(peaks.Select(p => p.Unit.Length > 0 ? $"{p.Label} {p.Unit}" : p.Label));
+        header.Add("Note");
+        csv.AppendLine(string.Join(",", header.Select(Cell)));
+
+        var inv = CultureInfo.InvariantCulture;
+        foreach (var s in sessions)
+        {
+            var row = new List<string>
+            {
+                s.Id.ToString(inv),
+                s.Start.ToString("yyyy-MM-dd", inv),
+                s.Start.ToString("HH:mm", inv),
+                s.End.ToString("HH:mm", inv),
+                s.Length.TotalMinutes.ToString("0.0", inv),
+                s.AverageFps?.ToString("0.0", inv) ?? string.Empty,
+                s.OnePercentLow?.ToString("0.0", inv) ?? string.Empty,
+                s.PointOnePercentLow?.ToString("0.0", inv) ?? string.Empty,
+                s.JitterMs?.ToString("0.00", inv) ?? string.Empty,
+            };
+
+            // A session logged before a row existed leaves its cell empty.
+            foreach (var (label, unit) in peaks)
+                row.Add(s.Peaks.FirstOrDefault(p => p.Label == label && p.Unit == unit)?.Value ?? string.Empty);
+
+            row.Add(s.Note ?? string.Empty);
+            csv.AppendLine(string.Join(",", row.Select(Cell)));
+        }
+
+        return csv.ToString();
+    }
+
+    /// <summary>
+    /// Quoted only when it has to be: a note can hold a comma, and a quote in
+    /// it is doubled, as CSV wants. A cell starting with = + - or @ gets a
+    /// leading apostrophe, so a spreadsheet shows a game's note as text rather
+    /// than running it as a formula.
+    /// </summary>
+    private static string Cell(string value)
+    {
+        if (value.Length > 0 && "=+-@".Contains(value[0]) && !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            value = "'" + value;
+
+        return value.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0
+            ? "\"" + value.Replace("\"", "\"\"") + "\""
+            : value;
     }
 
     /// <summary>Hidden rather than closed, so it can be shown again later.</summary>

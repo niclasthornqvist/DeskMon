@@ -60,11 +60,13 @@ public static class GameIcons
 
         // Read here, on the UI thread, which is the only one that writes them.
         string? steamId = _settings is null ? null : GamePlaytime.RememberedSteamAppId(game, _settings);
-        string? gogKey = _settings?.GogGames
-            .FirstOrDefault(entry => string.Equals(entry.Key, game, StringComparison.OrdinalIgnoreCase)).Value;
+        string? gogKey = _settings is null ? null : GamePlaytime.RememberedGogKey(game, _settings);
         bool online = _settings?.OnlineGameArt ?? false;
 
-        Task.Run(() => Lookup(game, steamId, gogKey, online))
+        // Its own thread, not the pool: an online icon can wait seconds on
+        // Steam, and the notes picker asks for every game's at once - on pool
+        // threads that held up the widget's sensor reads. See GameArt.OwnThread.
+        GameArt.OwnThread(() => Lookup(game, steamId, gogKey, online))
             .ContinueWith(found =>
             {
                 if (found.Status == TaskStatus.RanToCompletion && found.Result is { } steam)

@@ -48,7 +48,7 @@ public partial class App : Application
 
         // The scheduled task and a manual double-click can easily both fire;
         // a second copy would just draw on top of the first.
-        _singleInstance = new Mutex(initiallyOwned: true, @"Local\DeskMon.SingleInstance", out bool isFirst);
+        _singleInstance = new Mutex(initiallyOwned: true, SingleInstanceName, out bool isFirst);
         if (!isFirst)
         {
             Shutdown();
@@ -177,20 +177,28 @@ public partial class App : Application
     /// </summary>
     internal static void Log(string context, object? error)
     {
-        try
+        // One writer at a time: errors arrive from worker threads too - an
+        // unobserved task, a background lookup - and two appends at once made
+        // one of them fail, quietly losing the line that said what went wrong.
+        lock (LogLock)
         {
-            string path = Path.Combine(AppContext.BaseDirectory, "error.log");
+            try
+            {
+                string path = Path.Combine(AppContext.BaseDirectory, "error.log");
 
-            var existing = new FileInfo(path);
-            if (existing.Exists && existing.Length > MaxLogBytes)
-                File.Move(path, path + ".old", overwrite: true);
+                var existing = new FileInfo(path);
+                if (existing.Exists && existing.Length > MaxLogBytes)
+                    File.Move(path, path + ".old", overwrite: true);
 
-            File.AppendAllText(
-                path,
-                $"{DateTime.Now:u}  [{context}]  {error}{Environment.NewLine}{Environment.NewLine}");
+                File.AppendAllText(
+                    path,
+                    $"{DateTime.Now:u}  [{context}]  {error}{Environment.NewLine}{Environment.NewLine}");
+            }
+            catch { /* nothing useful left to do */ }
         }
-        catch { /* nothing useful left to do */ }
     }
+
+    private static readonly object LogLock = new();
 
     /// <summary>
     /// Drops the single-instance lock early. Needed before restarting in place
@@ -204,6 +212,16 @@ public partial class App : Application
         _singleInstance?.Dispose();
         _singleInstance = null;
     }
+
+    /// <summary>
+    /// Takes the lock back after a restart that never happened - Windows
+    /// refused to start the replacement - so a later double-click still finds
+    /// this copy running instead of starting a second one beside it.
+    /// </summary>
+    public void TakeSingleInstanceLock()
+        => _singleInstance ??= new Mutex(initiallyOwned: true, SingleInstanceName, out _);
+
+    private const string SingleInstanceName = @"Local\DeskMon.SingleInstance";
 
     protected override void OnExit(ExitEventArgs e)
     {

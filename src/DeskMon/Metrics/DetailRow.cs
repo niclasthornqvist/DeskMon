@@ -82,10 +82,18 @@ public sealed class DetailRow : INotifyPropertyChanged, IPanelRow
         }
     }
 
+    /// <summary>
+    /// The program's process name when this row is one of the memory lists -
+    /// what right-click > End acts on. Null for a sensor or a drive, which
+    /// get no menu of their own.
+    /// </summary>
+    public string? Key { get; private set; }
+
     /// <summary>Name and value both - the name changes in a list of things that come and go.</summary>
     public void Set(Sensors.SensorReading reading)
     {
         Label = reading.Name;
+        Key = reading.Key;
 
         if (reading.Text is { } text)
             Value = text;

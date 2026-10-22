@@ -36,14 +36,14 @@ public static class MetricRegistry
                                 "When it runs out, Windows moves the overflow to the page file on disk - see SWAP.",
                        Details: s => s.TopRamUsers,
                        DetailsAbout: "the programs using the most memory",
-                       DetailNote: "One of the programs holding the most memory right now, every process of it together.",
+                       DetailNote: "One of the programs holding the most memory right now, every process of it together.\nRight-click to end it.",
                        AlertName: "Memory use"),
             new Metric("SWAP", "%", s => s.SwapLoad, Max: 100, Warn: 50, Crit: 80,
                        Tooltip: "How much of the page file is in use - memory Windows has moved out to disk.\n" +
                                 "High while RAM is full means the PC is short of memory, and games stutter reading it back.",
                        Details: s => s.TopCommitUsers,
                        DetailsAbout: "the programs that have asked for the most memory",
-                       DetailNote: "One of the programs that have been given the most memory in all - what fills the page file once RAM is full. Closing it frees its share.",
+                       DetailNote: "One of the programs that have been given the most memory in all - what fills the page file once RAM is full. Closing it frees its share.\nRight-click to end it.",
                        AlertName: "Page file use")
 
             // ---- Extras, ready to use: just delete the "//" --------------
@@ -73,7 +73,14 @@ public static class MetricRegistry
                        Details: s => s.CpuTemperatures,
                        Tooltip: "The processor's temperature - the sensor it uses itself to decide how fast to run.\n" +
                                 "Too hot, it slows itself down to cool off, and the frame rate drops with it.",
-                       AlertName: "CPU temperature"),
+                       AlertName: "CPU temperature",
+                       // The slowing down itself, which the temperature can't
+                       // show: 85 °C is fine on one chip and throttling on
+                       // another. See ThrottleWatch for how it is noticed.
+                       Flag: s => s.CpuThrottledFrom is double from && s.CpuClock is double now
+                           ? $"Slowing down to cool off: the clock dropped from {from:0} to {now:0} MHz under load.\n" +
+                             "The frame rate drops with it. Better cooling or a cleaner case is the fix."
+                           : null),
             // The card's sensors the same way: core, hot spot and memory
             // junction, which on a 4070 SUPER sit about 12 K apart.
             new Metric("GPU", "°C", s => s.GpuTemp, Min: 30, Max: 90, Warn: 78, Crit: 85,

@@ -96,6 +96,19 @@
                     </StackPanel>
                 </Button>
 
+                <!-- A tray with an arrow coming down into it: saved to a file.
+                     Saves rather than opens a window, so no ↗ mark. -->
+                <Button x:Name="ExportButton" Style="{StaticResource ToolButton}"
+                        ToolTip="Save this game&apos;s sessions as a CSV file&#x0a;For a spreadsheet - every session in the table, with its averages and peaks."
+                        Click="Export_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M5,0.5 V6.5 M2.5,4 L5,6.5 L7.5,4
+                                    M0.5,6.5 V9.5 H9.5 V6.5" />
+                        <TextBlock Text="EXPORT" />
+                    </StackPanel>
+                </Button>
+
                 <!-- A bin: lid with a handle, and a body with two ribs. -->
                 <Button x:Name="DeleteButton" Style="{StaticResource ToolButton}"
                         IsEnabled="False"

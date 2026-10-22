@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Management;
 using Microsoft.Win32;
 
@@ -38,6 +39,11 @@ public sealed class SystemInfo
     public DateTime? GpuDriverDate { get; private set; }
     public DateTime? BiosDate { get; private set; }
 
+    // Likewise for the BIOS check, which asks the board's maker by board name.
+    public string? BoardVendor { get; private set; }
+    public string? BoardProduct { get; private set; }
+    public string? BiosVersion { get; private set; }
+
     public string? OperatingSystem { get; private set; }
 
     /// <summary>When Windows last started, rather than an uptime: the window is
@@ -45,7 +51,28 @@ public sealed class SystemInfo
     /// point in time stays true.</summary>
     public string? UpSince { get; private set; }
 
-    public IReadOnlyList<string> Drives { get; private set; } = Array.Empty<string>();
+    public IReadOnlyList<Drive> Drives { get; private set; } = Array.Empty<Drive>();
+
+    /// <summary>
+    /// One physical drive: what it is, and how it is holding up - "Healthy · 3%
+    /// worn · 41 °C · 2,310 h on", or null if Windows says nothing about it.
+    /// <paramref name="Level"/> colours that line: red when it is failing or
+    /// has lost data - the time to make a backup.
+    /// </summary>
+    public sealed record Drive(string Text, string? Health, Condition Level);
+
+    /// <summary>
+    /// How a health check came out, for its colour: green, yellow, red - or
+    /// dim when there's nothing to judge by. The same four steps as the
+    /// update checks, so the colours mean one thing across the window.
+    /// </summary>
+    public enum Condition { Unknown, Good, Warning, Bad }
+
+    /// <summary>One line of a health check, e.g. "Dual channel".</summary>
+    public sealed record Check(string Text, Condition Level);
+
+    /// <summary>Lines under the memory modules: channels, speed, errors. See ReadMemoryChecks.</summary>
+    public IReadOnlyList<Check> MemoryChecks { get; private set; } = Array.Empty<Check>();
     public IReadOnlyList<NetworkAdapter> NetworkAdapters { get; private set; } = Array.Empty<NetworkAdapter>();
 
     /// <summary>One physical adapter. Disconnected ones are listed too, greyed
@@ -56,9 +83,10 @@ public sealed class SystemInfo
     /// Collects everything. Call from a background thread.
     /// <paramref name="cpuName"/> and <paramref name="gpuName"/> come from the
     /// sensor library, which already knows them and names the exact card the
-    /// temperatures are read from.
+    /// temperatures are read from. <paramref name="stabilityFrom"/> is
+    /// AppSettings.StabilityCountedFrom.
     /// </summary>
-    public static SystemInfo Collect(string? cpuName, string? gpuName)
+    public static SystemInfo Collect(string? cpuName, string? gpuName, DateTime? stabilityFrom = null)
     {
         var info = new SystemInfo
         {
@@ -69,10 +97,15 @@ public sealed class SystemInfo
         info.ReadBoardAndBios();
         info.ReadMemory();
         info.ReadCpuDetail();
+        info.ReadCpuChecks();
         info.ReadGpuDetail();
         info.ReadOperatingSystem();
         info.ReadDrives();
         info.ReadNetwork();
+        info.ReadGpuLink();
+        info.ReadDisplays();
+        info.ReadGamingChecks();
+        info.ReadStability(stabilityFrom);
         return info;
     }
 
@@ -117,6 +150,144 @@ public sealed class SystemInfo
         catch
         {
             // No detail line; the CPU name above it is still there.
+        }
+    }
+
+    /// <summary>Lines under the CPU: power plan, hardware errors, Intel's microcode fix. See ReadCpuChecks.</summary>
+    public IReadOnlyList<Check> CpuChecks { get; private set; } = Array.Empty<Check>();
+
+    /// <summary>
+    /// Each check on its own, so one that can't be read leaves the others.
+    /// After ReadCpuDetail - the microcode check needs the CPU's name.
+    /// </summary>
+    private void ReadCpuChecks()
+    {
+        var checks = new List<Check>();
+
+        if (PowerPlanCheck() is { } plan)
+            checks.Add(plan);
+
+        // WHEA 18 is a machine check the CPU couldn't recover from (the PC
+        // crashed), 19 one it corrected. Both point at the CPU or its
+        // overclock - PBO, Curve Optimizer, an undervolt - being unstable.
+        int errors = CountEvents(
+            "*[System[Provider[@Name='Microsoft-Windows-WHEA-Logger'] and (EventID=18 or EventID=19) " +
+            "and TimeCreated[timediff(@SystemTime) <= 2592000000]]]");
+        checks.Add(errors > 0
+            ? new Check($"{errors} CPU hardware error{(errors == 1 ? "" : "s")} in the last 30 days - an overclock or undervolt may be unstable", Condition.Bad)
+            : new Check("No CPU hardware errors logged in the last 30 days", Condition.Good));
+
+        if (RaptorLakeCheck() is { } microcode)
+            checks.Add(microcode);
+
+        CpuChecks = checks;
+    }
+
+    /// <summary>
+    /// Power saver caps the CPU's clock, and games lose frames to it - easy to
+    /// leave on after a laptop's battery trip. Any other plan is fine.
+    ///
+    /// Named in English, like the rest of the window: Windows only hands out
+    /// a plan's name in the PC's own language ("Balanserat"). Windows' own
+    /// plans are known by their fixed ids; a custom one can't be translated,
+    /// so it is named by the built-in plan it was made from - which every
+    /// plan records, and which is also what decides whether it is a saver.
+    /// </summary>
+    private static Check? PowerPlanCheck()
+    {
+        IntPtr active = IntPtr.Zero;
+        try
+        {
+            if (PowerGetActiveScheme(IntPtr.Zero, out active) != 0)
+                return null;
+            var scheme = System.Runtime.InteropServices.Marshal.PtrToStructure<Guid>(active);
+
+            // 0 power saver, 1 high performance, 2 balanced.
+            var noSubgroup = NoSubgroup;
+            var personality = Personality;
+            uint basedOn = PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref noSubgroup, ref personality, out uint value) == 0
+                ? value
+                : uint.MaxValue;
+            string? baseName = basedOn switch
+            {
+                0 => "Power saver",
+                1 => "High performance",
+                2 => "Balanced",
+                _ => null,
+            };
+
+            string name = KnownPlans.TryGetValue(scheme, out var known) ? known
+                        : baseName is not null ? $"custom, based on {baseName}"
+                        : "custom";
+
+            return basedOn == 0
+                ? new Check($"Power plan: {name} - it holds the CPU back; Balanced or better for games", Condition.Warning)
+                : new Check($"Power plan: {name}", Condition.Good);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (active != IntPtr.Zero)
+                LocalFree(active);
+        }
+    }
+
+    /// <summary>Windows' own plans, by the ids they have on every PC.</summary>
+    private static readonly Dictionary<Guid, string> KnownPlans = new()
+    {
+        [new Guid("381b4222-f694-41f0-9685-ff5bb260df2e")] = "Balanced",
+        [new Guid("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c")] = "High performance",
+        [new Guid("a1841308-3541-4fab-bc81-f71556f20b4a")] = "Power saver",
+        [new Guid("e9a42b02-d5df-448d-aa00-03f14749eb61")] = "Ultimate Performance",
+    };
+
+    // NO_SUBGROUP_GUID and GUID_POWERSCHEME_PERSONALITY from winnt.h: the
+    // hidden setting that says which built-in plan a plan was made from.
+    private static readonly Guid NoSubgroup = new("fea3413e-7e05-4911-9a71-700331f1c294");
+    private static readonly Guid Personality = new("245d8541-3943-4422-b025-13a784f679b7");
+
+    [System.Runtime.InteropServices.DllImport("powrprof.dll")]
+    private static extern uint PowerGetActiveScheme(IntPtr rootPowerKey, out IntPtr activePolicyGuid);
+
+    [System.Runtime.InteropServices.DllImport("powrprof.dll")]
+    private static extern uint PowerReadACValueIndex(IntPtr rootPowerKey, ref Guid schemeGuid, ref Guid subGroupGuid,
+                                                     ref Guid powerSettingGuid, out uint acValueIndex);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    /// <summary>
+    /// Intel's 13th and 14th gen desktop chips (and HX laptops) degrade under
+    /// a microcode bug that asks for too much voltage - crashes first, then
+    /// lasting damage. Intel's fix is microcode 0x12B (September 2024), which
+    /// arrives with a BIOS update. Null for every other CPU, which this
+    /// doesn't concern.
+    /// </summary>
+    private Check? RaptorLakeCheck()
+    {
+        if (Cpu is null
+            || !System.Text.RegularExpressions.Regex.IsMatch(Cpu, @"\bi[579]-1[34]\d{3}(K|KF|KS|F|HX)?\b",
+                                                              System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return null;
+
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+            if (key?.GetValue("Update Revision") is not byte[] bytes || bytes.Length < 8)
+                return null;
+
+            // Eight bytes; on Intel the revision is the upper half.
+            uint revision = BitConverter.ToUInt32(bytes, 4);
+            return revision >= 0x12B
+                ? new Check($"Has Intel's fix for the 13th/14th gen instability (microcode 0x{revision:X})", Condition.Good)
+                : new Check($"Missing Intel's fix for the 13th/14th gen instability (microcode 0x{revision:X}, needs 0x12B) - update the BIOS", Condition.Bad);
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -283,10 +454,11 @@ public sealed class SystemInfo
         {
             using var searcher = new ManagementObjectSearcher(
                 @"root\Microsoft\Windows\Storage",
-                "SELECT DeviceId, FriendlyName, MediaType, BusType, Size FROM MSFT_PhysicalDisk");
+                "SELECT DeviceId, FriendlyName, MediaType, BusType, Size, HealthStatus FROM MSFT_PhysicalDisk");
             using var results = searcher.Get();   // see ReadMemory
 
-            var drives = new List<(int Order, string Text)>();
+            var counters = ReadReliability();
+            var drives = new List<(int Order, Drive Drive)>();
             foreach (ManagementBaseObject disk in results)
             {
                 using (disk)
@@ -306,20 +478,132 @@ public sealed class SystemInfo
                     if (kind is not null) parts.Add(kind);
 
                     if (parts.Count > 0)
-                        drives.Add((int.TryParse(disk["DeviceId"] as string, out int id) ? id : int.MaxValue,
-                                    string.Join("  ·  ", parts)));
+                    {
+                        string deviceId = disk["DeviceId"] as string ?? string.Empty;
+                        // A missing status is "unknown" (5), not ToUint's 0 - which
+                        // would call a drive Windows said nothing about healthy.
+                        uint status = disk["HealthStatus"] is null ? 5 : ToUint(disk["HealthStatus"]);
+                        var (health, level) = DriveHealth(status,
+                                                            counters.GetValueOrDefault(deviceId));
+                        drives.Add((int.TryParse(deviceId, out int id) ? id : int.MaxValue,
+                                    new Drive(string.Join("  ·  ", parts), health, level)));
+                    }
                 }
             }
 
             // Disk 0 first, the way Disk Management lists them.
             drives.Sort((a, b) => a.Order.CompareTo(b.Order));
-            Drives = drives.ConvertAll(d => d.Text);
+            Drives = drives.ConvertAll(d => d.Drive);
         }
         catch
         {
             // No storage rows.
         }
     }
+
+    /// <summary>The figures a drive keeps on itself (SMART), as Windows hands them on.</summary>
+    private sealed record Reliability(uint? Wear, uint? Temperature, uint? PowerOnHours, ulong Errors);
+
+    /// <summary>
+    /// Every drive's reliability counters, by DeviceId - the same id
+    /// MSFT_PhysicalDisk uses. Read here, once, as the Hardware window opens,
+    /// and never on a tick: asking a drive for them can stall for a moment,
+    /// which is why the sensor side leaves storage alone.
+    ///
+    /// Needs administrator, which DeskMon has. Without it, or on a drive that
+    /// reports nothing, the line just has fewer figures.
+    /// </summary>
+    private static Dictionary<string, Reliability> ReadReliability()
+    {
+        var counters = new Dictionary<string, Reliability>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                @"root\Microsoft\Windows\Storage",
+                "SELECT DeviceId, Wear, Temperature, PowerOnHours, ReadErrorsUncorrected, WriteErrorsUncorrected " +
+                "FROM MSFT_StorageReliabilityCounter");
+            using var results = searcher.Get();   // see ReadMemory
+
+            foreach (ManagementBaseObject counter in results)
+            {
+                using (counter)
+                {
+                    if (counter["DeviceId"] is not string id)
+                        continue;
+
+                    // Null means "not reported", which is not the same as 0 -
+                    // a drive at 0% wear says so, one that doesn't know says nothing.
+                    counters[id] = new Reliability(
+                        counter["Wear"] is null ? null : ToUint(counter["Wear"]),
+                        counter["Temperature"] is null ? null : ToUint(counter["Temperature"]),
+                        counter["PowerOnHours"] is null ? null : ToUint(counter["PowerOnHours"]),
+                        ToUlong(counter["ReadErrorsUncorrected"]) + ToUlong(counter["WriteErrorsUncorrected"]));
+                }
+            }
+        }
+        catch
+        {
+            // No counters - the lines show the health status alone.
+        }
+        return counters;
+    }
+
+    /// <summary>
+    /// "Healthy · 3% worn · 41 °C · 2,310 h on". Wear is how much of the drive's
+    /// rated writes are used up, which on an SSD is the figure that says how
+    /// long it has left. Errors are only mentioned when there are some: an
+    /// uncorrected one is data the drive lost, and the reason to warn.
+    ///
+    /// The colour is the worst of its parts: yellow from 70% wear or 70 °C
+    /// (where NVMe drives start slowing themselves down), red from 90% wear,
+    /// any lost data, or Windows itself calling the drive unhealthy.
+    /// </summary>
+    private static (string? Text, Condition Level) DriveHealth(uint status, Reliability? counters)
+    {
+        var parts = new List<string>();
+
+        // HealthStatus: 0 healthy, 1 warning, 2 unhealthy, 5 unknown.
+        var level = status switch
+        {
+            0 => Condition.Good,
+            1 => Condition.Warning,
+            2 => Condition.Bad,
+            _ => Condition.Unknown,
+        };
+        switch (status)
+        {
+            case 0: parts.Add("Healthy"); break;
+            case 1: parts.Add("Warning - back it up"); break;
+            case 2: parts.Add("Unhealthy - back it up now"); break;
+        }
+
+        if (counters is not null)
+        {
+            if (counters.Wear is uint wear)
+            {
+                parts.Add($"{wear}% worn");
+                level = Worst(level, wear >= 90 ? Condition.Bad : wear >= 70 ? Condition.Warning : Condition.Good);
+            }
+            if (counters.Temperature is uint temp and > 0)
+            {
+                parts.Add($"{temp} °C");
+                if (temp >= 70)
+                    level = Worst(level, Condition.Warning);
+            }
+            if (counters.PowerOnHours is uint hours and > 0)
+                parts.Add(hours.ToString("#,0", CultureInfo.InvariantCulture) + " h on");
+            if (counters.Errors > 0)
+            {
+                parts.Add($"{counters.Errors} uncorrected error{(counters.Errors == 1 ? "" : "s")}");
+                level = Condition.Bad;
+            }
+        }
+
+        return (parts.Count > 0 ? string.Join("  ·  ", parts) : null, level);
+    }
+
+    /// <summary>The more serious of two - the enum runs Unknown, Good, Warning, Bad.</summary>
+    private static Condition Worst(Condition a, Condition b) => a > b ? a : b;
 
     /// <summary>MediaType 3 is HDD, 4 SSD; BusType 17 NVMe, 11 SATA.</summary>
     private static string? DriveKind(uint media, uint bus)
@@ -354,11 +638,12 @@ public sealed class SystemInfo
         {
             using var searcher = new ManagementObjectSearcher(
                 @"root\StandardCimv2",
-                "SELECT InterfaceDescription, MediaConnectState, Speed FROM MSFT_NetAdapter " +
+                "SELECT InterfaceDescription, MediaConnectState, Speed, NdisPhysicalMedium FROM MSFT_NetAdapter " +
                 "WHERE HardwareInterface = TRUE AND Virtual = FALSE");
             using var results = searcher.Get();   // see ReadMemory
 
             var adapters = new List<NetworkAdapter>();
+            var checks = new List<Check>();
             foreach (ManagementBaseObject adapter in results)
             {
                 using (adapter)
@@ -377,18 +662,42 @@ public sealed class SystemInfo
                                 : speed > 0 ? $"{name}  ·  {LinkSpeed(speed)}"
                                 : name;
                     adapters.Add(new NetworkAdapter(text, connected));
+
+                    if (connected && speed > 0)
+                        checks.Add(LinkCheck(ToUint(adapter["NdisPhysicalMedium"]), speed));
                 }
             }
 
             // Connected first: that is the one in use.
             adapters.Sort((a, b) => b.Connected.CompareTo(a.Connected));
             NetworkAdapters = adapters;
+            NetworkChecks = checks;
         }
         catch
         {
             // No network rows.
         }
     }
+
+    /// <summary>
+    /// A cable linked at 100 Mbit/s instead of 1 Gbit/s or more is nearly
+    /// always a damaged cable or a loose plug - gigabit needs all eight wires,
+    /// and drops to 100 when one pair fails. Wi-Fi isn't judged: its rate
+    /// moves with the room, but the line says a cable is steadier for games.
+    /// </summary>
+    private static Check LinkCheck(uint medium, ulong speed)
+    {
+        // NdisPhysicalMedium 9 is native 802.11 - Wi-Fi.
+        if (medium == 9)
+            return new Check($"Wi-Fi at {LinkSpeed(speed)} - a cable gives a steadier ping in games", Condition.Unknown);
+
+        return speed >= 1_000_000_000
+            ? new Check($"Cable linked at {LinkSpeed(speed)}", Condition.Good)
+            : new Check($"Cable linked at only {LinkSpeed(speed)} - usually a damaged cable or loose plug; it should be 1 Gbit/s or more", Condition.Warning);
+    }
+
+    /// <summary>Lines under the network adapters: the link of each one in use. Ping is measured by the window - see NetworkCheck.</summary>
+    public IReadOnlyList<Check> NetworkChecks { get; private set; } = Array.Empty<Check>();
 
     private static string LinkSpeed(ulong bitsPerSecond)
         => bitsPerSecond >= 1_000_000_000
@@ -410,9 +719,12 @@ public sealed class SystemInfo
             string? boardVendor = Clean(key.GetValue("BaseBoardManufacturer") as string);
             string? boardProduct = Clean(key.GetValue("BaseBoardProduct") as string);
             Motherboard = Join(boardVendor, boardProduct);
+            BoardVendor = boardVendor;
+            BoardProduct = boardProduct;
 
             string? biosVendor = Clean(key.GetValue("BIOSVendor") as string);
             string? biosVersion = Clean(key.GetValue("BIOSVersion") as string);
+            BiosVersion = biosVersion;
             string? biosDate = Clean(key.GetValue("BIOSReleaseDate") as string);
 
             // SMBIOS fixes this as mm/dd/yyyy, whatever the PC's language.
@@ -447,6 +759,13 @@ public sealed class SystemInfo
             var modules = new List<string>();
             ulong totalBytes = 0;
 
+            // For the checks under the modules: what each runs at, what its
+            // standard speed is, and which channel it sits in.
+            var configured = new List<uint>();
+            var rated = new List<uint>();
+            var channels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool channelsKnown = true;
+
             // The collection holds a WMI enumerator of its own, released only
             // by disposing it - disposing the searcher and each row is not enough.
             using var results = searcher.Get();
@@ -473,6 +792,20 @@ public sealed class SystemInfo
                     uint speed = ToUint(module["ConfiguredClockSpeed"]);
                     if (speed == 0) speed = ToUint(module["Speed"]);
 
+                    configured.Add(ToUint(module["ConfiguredClockSpeed"]));
+                    rated.Add(ToUint(module["Speed"]));
+
+                    // "P0 CHANNEL A" - the letter is the channel. A board that
+                    // labels its banks some other way leaves the channel check out
+                    // rather than guess.
+                    var channel = System.Text.RegularExpressions.Regex.Match(
+                        module["BankLabel"] as string ?? string.Empty, @"CHANNEL\s*([A-Z])",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (channel.Success)
+                        channels.Add(channel.Groups[1].Value);
+                    else
+                        channelsKnown = false;
+
                     var parts = new List<string>();
                     string? name = Join(vendor, part);
                     if (name is not null) parts.Add(name);
@@ -489,10 +822,128 @@ public sealed class SystemInfo
             if (totalBytes > 0)
                 MemoryTotal = $"{totalBytes / (1024d * 1024 * 1024):0.#} GB in {modules.Count} " +
                               (modules.Count == 1 ? "module" : "modules");
+
+            var checks = new List<Check>();
+            if (ChannelCheck(configured.Count, channelsKnown ? channels.Count : 0) is { } channelCheck)
+                checks.Add(channelCheck);
+            if (SpeedCheck(configured, rated) is { } speedCheck)
+                checks.Add(speedCheck);
+            checks.AddRange(MemoryErrorChecks());
+            MemoryChecks = checks;
         }
         catch
         {
             // WMI disabled or the class is unavailable - the rows just read "unknown".
+        }
+    }
+
+    /// <summary>
+    /// One module, or every module on one channel, halves the memory
+    /// bandwidth - the CPU reads from the channels side by side. Games notice:
+    /// it shows in the 1% lows more than the average. Null when the board
+    /// labels its banks in a way that doesn't name the channel.
+    /// </summary>
+    private static Check? ChannelCheck(int modules, int channels)
+    {
+        if (modules == 1)
+            return new Check("One module - single channel. A second, matching one would double the memory bandwidth", Condition.Warning);
+        if (channels == 0)
+            return null;
+        if (channels == 1)
+            return new Check("All modules on one channel - moving one to the other channel's slot doubles the bandwidth (see the board's manual)", Condition.Warning);
+        return new Check(channels == 2 ? "Dual channel" : $"{channels} channels", Condition.Good);
+    }
+
+    /// <summary>
+    /// Whether EXPO/XMP is on. Speed is the module's standard (JEDEC) speed and
+    /// ConfiguredClockSpeed what it runs at; above standard means the profile
+    /// is on. At standard it may be off - or the kit may simply not be rated
+    /// faster, which nothing here can tell. So that case is said, not judged.
+    /// </summary>
+    private static Check? SpeedCheck(List<uint> configured, List<uint> rated)
+    {
+        if (configured.Count == 0 || configured.Contains(0) || rated.Contains(0))
+            return null;
+
+        uint running = configured.Min();
+        uint standard = rated.Max();
+
+        return running > standard
+            ? new Check($"EXPO/XMP on - running at {running} MT/s, above the standard {standard}", Condition.Good)
+            : new Check($"Running at the standard {running} MT/s - if the kit is rated faster, turn on EXPO/XMP in the BIOS", Condition.Unknown);
+    }
+
+    /// <summary>
+    /// What Windows has logged about the memory: corrected memory errors in
+    /// the last 30 days (WHEA event 47 - on memory that can correct them, a
+    /// sign it is failing or an EXPO/XMP profile is unstable), and the last
+    /// Windows Memory Diagnostic result (1201 passed, 1202 found errors).
+    ///
+    /// No logged errors is said gently: ordinary desktop memory can't notice
+    /// its own errors, so on most PCs a crash is the only sign. That is why the
+    /// line also points at Memory Diagnostic when it has never been run.
+    /// </summary>
+    private static IEnumerable<Check> MemoryErrorChecks()
+    {
+        var checks = new List<Check>();
+
+        int corrected = CountEvents(
+            "*[System[Provider[@Name='Microsoft-Windows-WHEA-Logger'] and EventID=47 " +
+            "and TimeCreated[timediff(@SystemTime) <= 2592000000]]]");
+        checks.Add(corrected > 0
+            ? new Check($"{corrected} corrected memory error{(corrected == 1 ? "" : "s")} in the last 30 days - a module may be failing, or EXPO/XMP is unstable", Condition.Bad)
+            : new Check("No memory errors logged by Windows in the last 30 days", Condition.Good));
+
+        var (id, when) = LastEvent(
+            "*[System[Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'] and (EventID=1201 or EventID=1202)]]");
+        checks.Add(id switch
+        {
+            1201 => new Check($"Passed Windows Memory Diagnostic on {when:yyyy-MM-dd}", Condition.Good),
+            1202 => new Check($"Windows Memory Diagnostic found errors on {when:yyyy-MM-dd} - a module may be failing", Condition.Bad),
+            _ => new Check("Never tested - Windows Memory Diagnostic (mdsched in Start) checks it at the next restart", Condition.Unknown),
+        });
+
+        return checks;
+    }
+
+    /// <summary>How many System log events match - 0 if the log can't be read.</summary>
+    private static int CountEvents(string query)
+    {
+        try
+        {
+            using var reader = new System.Diagnostics.Eventing.Reader.EventLogReader(
+                new System.Diagnostics.Eventing.Reader.EventLogQuery("System",
+                    System.Diagnostics.Eventing.Reader.PathType.LogName, query));
+            int count = 0;
+            // Capped: a failing module can log thousands, and the number only
+            // needs to say "some".
+            for (var e = reader.ReadEvent(); e is not null && count < 1000; e = reader.ReadEvent())
+            {
+                e.Dispose();
+                count++;
+            }
+            return count;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>The newest matching System log event's id and time, or (null, null).</summary>
+    private static (int? Id, DateTime? When) LastEvent(string query)
+    {
+        try
+        {
+            using var reader = new System.Diagnostics.Eventing.Reader.EventLogReader(
+                new System.Diagnostics.Eventing.Reader.EventLogQuery("System",
+                    System.Diagnostics.Eventing.Reader.PathType.LogName, query) { ReverseDirection = true });
+            using var e = reader.ReadEvent();
+            return e is null ? (null, null) : (e.Id, e.TimeCreated);
+        }
+        catch
+        {
+            return (null, null);
         }
     }
 
@@ -557,6 +1008,353 @@ public sealed class SystemInfo
         return product.StartsWith(vendor, StringComparison.OrdinalIgnoreCase)
             ? product
             : $"{vendor} {product}";
+    }
+
+    // --- Gaming checkup: PCIe link, displays, Windows settings, stability ---
+
+    /// <summary>The graphics card's PCIe link, under the card. Null if it couldn't be read.</summary>
+    public Check? GpuLink { get; private set; }
+
+    /// <summary>
+    /// A card in the wrong slot, or on a riser that can't carry all sixteen
+    /// lanes, runs at x8 or x4 and loses frames without any other sign. Only
+    /// the width is judged: the card drops its link speed (the PCIe
+    /// generation) when idle to save power, so a low speed here means nothing.
+    /// Read from the device's own properties - the same figures GPU-Z shows.
+    /// </summary>
+    private void ReadGpuLink()
+    {
+        if (Gpu is null)
+            return;
+
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT Name, PNPDeviceID FROM Win32_VideoController");
+            using var results = searcher.Get();   // see ReadMemory
+
+            string? deviceId = null;
+            foreach (ManagementBaseObject card in results)
+            {
+                using (card)
+                {
+                    if (Clean(card["Name"] as string) is { } name && SameCard(name, Gpu))
+                        deviceId ??= card["PNPDeviceID"] as string;
+                }
+            }
+
+            if (deviceId is null || CM_Locate_DevNodeW(out uint node, deviceId, 0) != 0)
+                return;
+
+            uint? width = PciProperty(node, 10), maxWidth = PciProperty(node, 12), maxSpeed = PciProperty(node, 11);
+            if (width is not uint w || maxWidth is not uint max || w == 0)
+                return;
+
+            // Speed is coded 1-5 for PCIe 1.0 to 5.0.
+            string generation = maxSpeed is uint s and >= 1 and <= 6 ? $", PCIe {s}.0" : string.Empty;
+            GpuLink = w >= max
+                ? new Check($"Full PCIe link: x{w}{generation}", Condition.Good)
+                : new Check($"PCIe link only x{w} of its x{max} - is it in the top slot? A riser cable can do this too", Condition.Warning);
+        }
+        catch
+        {
+            // No link line.
+        }
+    }
+
+    /// <summary>One DEVPKEY_PciDevice_* value (pciprop.h) as a number, or null.</summary>
+    private static uint? PciProperty(uint node, uint pid)
+    {
+        var key = new DevPropKey { Fmtid = new Guid("3ab22e31-8264-4b4e-9af5-a8d2d8e33e62"), Pid = pid };
+        var buffer = new byte[4];
+        uint size = 4;
+        return CM_Get_DevNode_PropertyW(node, ref key, out uint type, buffer, ref size, 0) == 0 && type == 7   // DEVPROP_TYPE_UINT32
+            ? BitConverter.ToUInt32(buffer, 0)
+            : null;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct DevPropKey
+    {
+        public Guid Fmtid;
+        public uint Pid;
+    }
+
+    [System.Runtime.InteropServices.DllImport("cfgmgr32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int CM_Locate_DevNodeW(out uint devInst, string deviceId, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("cfgmgr32.dll")]
+    private static extern int CM_Get_DevNode_PropertyW(uint devInst, ref DevPropKey key, out uint type,
+                                                       byte[] buffer, ref uint size, uint flags);
+
+    /// <summary>One screen: its name and mode, and whether it runs at the best refresh rate it has.</summary>
+    public sealed record Display(string Text, Check Refresh);
+
+    public IReadOnlyList<Display> Displays { get; private set; } = Array.Empty<Display>();
+
+    /// <summary>
+    /// A 144 or 240 Hz screen left at 60 Hz is one of the most common slips -
+    /// after a new screen, a new cable, or a driver reinstall that reset it.
+    /// The best rate is looked for at the resolution in use, since a higher
+    /// rate at a lower resolution isn't what anyone wants.
+    /// </summary>
+    private void ReadDisplays()
+    {
+        try
+        {
+            var names = MonitorNames();
+            var displays = new List<Display>();
+
+            for (uint i = 0; ; i++)
+            {
+                var device = new DisplayDevice { Size = System.Runtime.InteropServices.Marshal.SizeOf<DisplayDevice>() };
+                if (!EnumDisplayDevicesW(null, i, ref device, 0))
+                    break;
+                if ((device.State & 1) == 0)   // DISPLAY_DEVICE_ATTACHED_TO_DESKTOP
+                    continue;
+
+                var current = NewDevMode();
+                if (!EnumDisplaySettingsW(device.Name, -1, ref current))   // ENUM_CURRENT_SETTINGS
+                    continue;
+
+                uint best = current.Frequency;
+                for (int mode = 0; ; mode++)
+                {
+                    var other = NewDevMode();
+                    if (!EnumDisplaySettingsW(device.Name, mode, ref other))
+                        break;
+                    if (other.Width == current.Width && other.Height == current.Height && other.Frequency > best)
+                        best = other.Frequency;
+                }
+
+                // The monitor's own name ("ROG XG27AQ") from its EDID, matched
+                // by device path; Windows' own string is "Generic PnP Monitor".
+                var monitor = new DisplayDevice { Size = System.Runtime.InteropServices.Marshal.SizeOf<DisplayDevice>() };
+                string name = EnumDisplayDevicesW(device.Name, 0, ref monitor, 1)   // EDD_GET_DEVICE_INTERFACE_NAME
+                              && names.FirstOrDefault(n => MonitorPath(monitor.Id).Length > 0
+                                                         && n.Key.StartsWith(MonitorPath(monitor.Id) + "_", StringComparison.OrdinalIgnoreCase)).Value is { } known
+                    ? known
+                    : $"Display {displays.Count + 1}";
+
+                string setting = $"{current.Width} × {current.Height}  ·  {current.Frequency} Hz";
+                var refresh = current.Frequency >= best
+                    ? new Check($"At its highest refresh rate, {current.Frequency} Hz", Condition.Good)
+                    : new Check($"Can run at {best} Hz, but is set to {current.Frequency} - Settings > Display > Advanced display", Condition.Warning);
+                displays.Add(new Display($"{name}  ·  {setting}", refresh));
+            }
+
+            Displays = displays;
+        }
+        catch
+        {
+            // No display rows.
+        }
+    }
+
+    /// <summary>
+    /// Each monitor's EDID name, by its instance path ("DISPLAY\GSM5B7F\5&amp;…_0").
+    /// From WmiMonitorID, whose name comes as an array of character codes.
+    /// </summary>
+    private static Dictionary<string, string> MonitorNames()
+    {
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT InstanceName, UserFriendlyName FROM WmiMonitorID");
+            using var results = searcher.Get();   // see ReadMemory
+            foreach (ManagementBaseObject monitor in results)
+            {
+                using (monitor)
+                {
+                    if (monitor["InstanceName"] is string instance && monitor["UserFriendlyName"] is ushort[] codes)
+                    {
+                        string name = new string(codes.TakeWhile(c => c != 0).Select(c => (char)c).ToArray()).Trim();
+                        if (name.Length > 0)
+                            names[instance] = name;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Named "Display 1" and so on instead.
+        }
+        return names;
+    }
+
+    /// <summary>"\\?\DISPLAY#GSM5B7F#5&amp;2c03a83e&amp;0&amp;UID4352#{…}" to "DISPLAY\GSM5B7F\5&amp;2c03a83e&amp;0&amp;UID4352".</summary>
+    private static string MonitorPath(string interfacePath)
+    {
+        string[] parts = interfacePath.Split('#');
+        return parts.Length >= 4 ? $"{parts[0].Replace(@"\\?\", string.Empty)}\\{parts[1]}\\{parts[2]}" : string.Empty;
+    }
+
+    private static DevMode NewDevMode() => new() { Size = (ushort)System.Runtime.InteropServices.Marshal.SizeOf<DevMode>() };
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
+                                                 CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct DisplayDevice
+    {
+        public int Size;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string Name;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Description;
+        public int State;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Id;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Key;
+    }
+
+    /// <summary>DEVMODEW, display half. Only the size, resolution and refresh rate are used.</summary>
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
+                                                 CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct DevMode
+    {
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+        public ushort SpecVersion, DriverVersion, Size, DriverExtra;
+        public uint Fields;
+        public int PositionX, PositionY;
+        public uint Orientation, FixedOutput;
+        public short Color, Duplex, YResolution, TTOption, Collate;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string FormName;
+        public ushort LogPixels;
+        public uint BitsPerPel, Width, Height, DisplayFlags, Frequency;
+        public uint IcmMethod, IcmIntent, MediaType, DitherType, Reserved1, Reserved2, PanningWidth, PanningHeight;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool EnumDisplayDevicesW(string? device, uint index, ref DisplayDevice displayDevice, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool EnumDisplaySettingsW(string device, int modeIndex, ref DevMode devMode);
+
+    /// <summary>Game Mode, GPU scheduling, Memory integrity, Secure Boot, TPM - the "GAMING" group.</summary>
+    public IReadOnlyList<Check> GamingChecks { get; private set; } = Array.Empty<Check>();
+
+    /// <summary>
+    /// Windows settings that change how games run, and the two that decide
+    /// whether some games start at all. Each from the registry, or for the
+    /// TPM from Windows' TPM service, which - unlike WMI's Win32_Tpm -
+    /// answers without administrator.
+    /// </summary>
+    private void ReadGamingChecks()
+    {
+        var checks = new List<Check>();
+
+        // Missing means never changed, and Game Mode is on by default.
+        checks.Add(RegistryInt(Registry.CurrentUser, @"Software\Microsoft\GameBar", "AutoGameModeEnabled") == 0
+            ? new Check("Game Mode off - Windows gives games less priority over background work", Condition.Warning)
+            : new Check("Game Mode on", Condition.Good));
+
+        // 2 on, 1 off; missing is Windows' default, which depends on the card
+        // and driver - so said as such rather than guessed.
+        checks.Add(RegistryInt(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode") switch
+        {
+            2 => new Check("Hardware-accelerated GPU scheduling on", Condition.Good),
+            1 => new Check("Hardware-accelerated GPU scheduling off - DLSS and FSR frame generation need it", Condition.Warning),
+            _ => new Check("Hardware-accelerated GPU scheduling left at Windows' default", Condition.Unknown),
+        });
+
+        // Dim either way: it is a security trade-off, not a fault. Microsoft's
+        // own advice for gaming PCs is that turning it off can help.
+        checks.Add(RegistryInt(Registry.LocalMachine,
+                               @"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity", "Enabled") == 1
+            ? new Check("Memory integrity on - safer, but can cost a few % in some games (Windows Security > Device security)", Condition.Unknown)
+            : new Check("Memory integrity off", Condition.Unknown));
+
+        // Missing means a legacy BIOS without Secure Boot at all.
+        checks.Add(RegistryInt(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\SecureBoot\State", "UEFISecureBootEnabled") == 1
+            ? new Check("Secure Boot on", Condition.Good)
+            : new Check("Secure Boot off - some games' anti-cheat won't start without it (Valorant, Battlefield 6, Call of Duty)", Condition.Warning));
+
+        checks.Add(TpmVersion() switch
+        {
+            2 => new Check("TPM 2.0 on", Condition.Good),
+            1 => new Check("TPM 1.2 - anti-cheat that needs a TPM wants 2.0", Condition.Warning),
+            _ => new Check("No TPM found - turn on fTPM (AMD) or PTT (Intel) in the BIOS; some anti-cheat needs it", Condition.Warning),
+        });
+
+        GamingChecks = checks;
+    }
+
+    private static int? RegistryInt(RegistryKey hive, string path, string name)
+    {
+        try
+        {
+            using var key = hive.OpenSubKey(path);
+            return key?.GetValue(name) is int value ? value : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>1 or 2 for TPM 1.2 or 2.0, 0 for none or unreadable.</summary>
+    private static uint TpmVersion()
+    {
+        try
+        {
+            var info = new TbsDeviceInfo();
+            return Tbsi_GetDeviceInfo((uint)System.Runtime.InteropServices.Marshal.SizeOf<TbsDeviceInfo>(), out info) == 0
+                ? info.TpmVersion
+                : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct TbsDeviceInfo
+    {
+        public uint StructVersion, TpmVersion, TpmInterfaceType, TpmImpRevision;
+    }
+
+    [System.Runtime.InteropServices.DllImport("tbs.dll")]
+    private static extern uint Tbsi_GetDeviceInfo(uint size, out TbsDeviceInfo info);
+
+    /// <summary>Crashes and unexpected shutdowns in the last 30 days, under Windows.</summary>
+    public Check? Stability { get; private set; }
+
+    /// <summary>
+    /// Kernel-Power 41 is Windows starting again without having shut down -
+    /// a crash, a freeze that needed the power button, or a power cut.
+    /// BugCheck 1001 is a blue screen. A blue screen also leaves a 41 behind,
+    /// so they are counted as one line: "6 unexpected shutdowns, 2 of them
+    /// blue screens".
+    ///
+    /// <paramref name="countedFrom"/> starts the count later than 30 days back
+    /// - "start counting from now" on the line, for shutdowns that were known
+    /// and harmless. Windows can't tell the power button held from a freeze
+    /// (neither leaves a mark in the event), so the user has to say so.
+    /// </summary>
+    private void ReadStability(DateTime? countedFrom)
+    {
+        var month = TimeSpan.FromDays(30);
+        var span = countedFrom is { } from && DateTime.Now - from < month ? DateTime.Now - from : month;
+        bool sinceReset = span < month;
+
+        // timediff is in milliseconds; never below one, which would match nothing at all.
+        string window = $"TimeCreated[timediff(@SystemTime) <= {Math.Max(1, (long)span.TotalMilliseconds)}]";
+        int shutdowns = CountEvents($"*[System[Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=41 and {window}]]");
+        int blueScreens = CountEvents($"*[System[Provider[@Name='Microsoft-Windows-WER-SystemErrorReporting'] and EventID=1001 and {window}]]");
+
+        string period = sinceReset ? $"since {countedFrom:yyyy-MM-dd HH:mm}" : "in the last 30 days";
+        int total = Math.Max(shutdowns, blueScreens);
+
+        Stability = blueScreens > 0
+            ? new Check($"{total} unexpected shutdown{(total == 1 ? "" : "s")} {period}, " +
+                        $"{blueScreens} of them blue screen{(blueScreens == 1 ? "" : "s")}", Condition.Bad)
+            : shutdowns > 0
+            ? new Check($"{shutdowns} unexpected shutdown{(shutdowns == 1 ? "" : "s")} {period} - a crash, a freeze, the power button held, or a power cut. Right-click to start counting from now", Condition.Warning)
+            : new Check($"No crashes or unexpected shutdowns {period}", Condition.Good);
     }
 
     private static ulong ToUlong(object? value)

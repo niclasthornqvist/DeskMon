@@ -69,7 +69,28 @@
             <ItemsControl x:Name="Rows" Margin="0,0,8,0" Focusable="False">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Grid Margin="0,3">
+                        <!-- A heading row and a fact row share one template: the
+                             heading's parts show on a heading, the rest on a fact. -->
+                        <StackPanel Margin="{Binding RowMargin}">
+                        <!-- A group's heading - "BOARD & BIOS" with a thin line
+                             running on from it, like the widget's sections - so
+                             the window reads as a few groups, not one long list. -->
+                        <Grid Visibility="{Binding HeadingVisibility}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Value}"
+                                       FontWeight="SemiBold"
+                                       FontSize="{Binding HeadingFontSize}"
+                                       Foreground="{Binding LabelBrush}"
+                                       VerticalAlignment="Center" />
+                            <Border Grid.Column="1" Height="1" Margin="8,0,0,0"
+                                    VerticalAlignment="Center"
+                                    Background="{Binding RuleBrush}" />
+                        </Grid>
+
+                        <Grid Visibility="{Binding FactVisibility}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
@@ -113,6 +134,7 @@
                                       VerticalAlignment="Center" />
                             </Grid>
                         </Grid>
+                        </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

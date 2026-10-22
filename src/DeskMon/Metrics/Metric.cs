@@ -62,6 +62,12 @@ namespace DeskMon.Metrics;
 /// can raise an alert, and only one that isn't inverted: a frame rate low for
 /// a minute is a game's business, not a health problem.
 /// </param>
+/// <param name="Flag">
+/// Optional. A warning that isn't a level of the reading itself - the CPU
+/// slowing down to cool off, which the temperature alone can't show. Returns
+/// what to say about it on hover, or null when there is nothing to flag; the
+/// row then shows a small amber mark beside its label.
+/// </param>
 public sealed record Metric(
     string Label,
     string Unit,
@@ -77,7 +83,8 @@ public sealed record Metric(
     string? FoldsUnder = null,
     string DetailsAbout = "every sensor behind this reading",
     string DetailNote = "One of the sensors behind the reading above, as the hardware reports it.",
-    string? AlertName = null)
+    string? AlertName = null,
+    Func<SensorSnapshot, string?>? Flag = null)
 {
     /// <summary>
     /// Whether a threshold has been passed. For an inverted metric such as FPS

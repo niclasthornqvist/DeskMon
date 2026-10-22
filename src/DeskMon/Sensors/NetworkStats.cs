@@ -22,6 +22,9 @@ internal sealed class NetworkStats
     /// enormous second of download.
     /// </summary>
     private Dictionary<string, (long Received, long Sent)> _last = new();
+
+    /// <summary>The other half of the pair with <see cref="_last"/> - see Read.</summary>
+    private Dictionary<string, (long Received, long Sent)> _spare = new();
     private DateTime _at;
 
     /// <summary>
@@ -53,7 +56,11 @@ internal sealed class NetworkStats
                 _adaptersAt = now;
             }
 
-            var counts = new Dictionary<string, (long Received, long Sent)>();
+            // The spare dictionary, emptied, rather than a new one each tick:
+            // the two take turns as this read and the last, so a reading costs
+            // no allocation in a process that sits over games.
+            var counts = _spare;
+            counts.Clear();
             foreach (var adapter in _adapters)
             {
                 // One adapter that won't report - some VPN and virtual ones
@@ -82,6 +89,7 @@ internal sealed class NetworkStats
                     sent += Math.Max(0, s - before.Sent);
                 }
 
+            _spare = _last;
             _last = counts;
             _at = now;
 

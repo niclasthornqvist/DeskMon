@@ -931,23 +931,38 @@ public sealed class PictureViewer : Window
         {
             var marked = Render(picture);
             string saved;
+            string? binError = null;
 
             if (inPlace)
             {
                 // Written beside it first, so a failure leaves the original
-                // untouched; then the original binned and this put in its place.
+                // untouched. Then swapped in by File.Replace, which puts the
+                // marked copy in its place and the original aside in one
+                // step - the picture is never missing. It used to bin the
+                // original first and move the copy in after, and a move that
+                // failed then (an antivirus holding the file) left the notes
+                // pointing at nothing.
                 var written = File.GetLastWriteTime(original);
                 string temp = original + ".marking";
+                string unmarked = original + ".unmarked";
                 Write(marked, temp, original);
 
-                if (RecycleBin.Send(original) is { } error)
+                try
                 {
-                    File.Delete(temp);
-                    Note("Couldn't save: " + error, warn: true);
-                    return;
+                    File.Replace(temp, original, unmarked);
+                }
+                catch
+                {
+                    // The original is as it was; only the stray copy goes.
+                    try { File.Delete(temp); } catch { }
+                    throw;
                 }
 
-                File.Move(temp, original);
+                // The unmarked picture to the Recycle Bin, as before. Should
+                // the bin refuse it, it stays beside the picture - not lost,
+                // and not listed, since it no longer ends in .png or .jpg.
+                binError = RecycleBin.Send(unmarked);
+
                 // Its date moved on a second, not to now: a picture dropped in
                 // by hand is ordered by it, and a later one tells the pictures
                 // window's thumbnail to be made again.
@@ -973,9 +988,10 @@ public sealed class PictureViewer : Window
                 _replaced(saved);
             _changed();
             ShowPicture(_paths.IndexOf(saved));
-            Note(inPlace
-                ? "Saved - the unmarked picture is in the Recycle Bin"
-                : "Saved as " + System.IO.Path.GetFileName(saved));
+            Note(!inPlace ? "Saved as " + System.IO.Path.GetFileName(saved)
+                 : binError is null ? "Saved - the unmarked picture is in the Recycle Bin"
+                 : $"Saved - the unmarked picture couldn't go to the Recycle Bin ({binError}), so it is kept beside it as {System.IO.Path.GetFileName(saved)}.unmarked",
+                 warn: binError is not null);
         }
         catch (Exception ex)
         {

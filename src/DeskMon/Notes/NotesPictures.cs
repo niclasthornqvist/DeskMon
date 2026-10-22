@@ -361,6 +361,8 @@ internal sealed class NotesPictures
         {
             if (e.ViewportWidthChange != 0)
                 FitSoon();
+            else if (e.VerticalChange != 0 || e.ViewportHeightChange != 0)
+                SharpenSoon();   // pictures scrolled into view, or out of it
         }));
 
         // Edits can take a picture out - Backspace, cut - or bring one back:
@@ -719,8 +721,10 @@ internal sealed class NotesPictures
                 image.Height = height;
             }
 
-            LoadSharp(image, picture, width);
         }
+
+        // Only for the pictures on or near the screen - see SharpenVisible.
+        SharpenVisible();
 
         // After the sizes above, so the corners are clipped to the new ones.
         UpdateFrames();
@@ -846,6 +850,77 @@ internal sealed class NotesPictures
         return picture;
     }
 
+    private bool _sharpenQueued;
+
+    /// <summary>Once scrolling pauses for a frame, rather than for every pixel of it.</summary>
+    private void SharpenSoon()
+    {
+        if (_sharpenQueued)
+            return;
+
+        _sharpenQueued = true;
+        _editor.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _sharpenQueued = false;
+            SharpenVisible();
+        }));
+    }
+
+    /// <summary>
+    /// Sharp copies for the pictures on screen or a screen away from it, and
+    /// back to the stored preview for the ones scrolled well out of sight.
+    ///
+    /// Every picture in the notes used to get its sharp copy, seen or not -
+    /// each one first decoded from the full 4K file, a third of a gigabyte of
+    /// memory churned for notes with a few dozen screenshots, and all of them
+    /// kept. The preview stays in place meanwhile, so a picture scrolled to
+    /// shows at once, softly, and sharpens a moment later. A wide gap between
+    /// "load" and "drop" keeps a picture at the edge from flipping back and forth.
+    /// </summary>
+    private void SharpenVisible()
+    {
+        double screen = _editor.ViewportHeight;
+        if (screen <= 0)
+            return;   // not laid out yet - its first layout changes the viewport, and ScrollChanged comes back here
+
+        foreach (var (image, link) in Images(_editor.Document))
+        {
+            if (!_pictures.TryGetValue(image, out var picture) || double.IsNaN(image.Width))
+                continue;
+
+            double distance = DistanceFromView(image, screen);
+            if (distance <= screen)
+            {
+                LoadSharp(image, picture, image.Width);
+            }
+            else if (distance > screen * 3 && (picture.ShownWidth > 0 || picture.Loading > 0))
+            {
+                // Out of sight: the preview the notes store is enough until it comes back.
+                picture.Loading = 0;   // one still decoding is not wanted any more
+                picture.ShownWidth = 0;
+                image.Source = picture.Stored;
+            }
+        }
+    }
+
+    /// <summary>
+    /// How far the picture is from the visible part of the notes, in pixels -
+    /// 0 when any of it is on screen. Infinitely far when it isn't laid out.
+    /// </summary>
+    private double DistanceFromView(Image image, double screen)
+    {
+        try
+        {
+            double top = image.TranslatePoint(new Point(0, 0), _editor).Y;
+            double bottom = top + image.ActualHeight;
+            return bottom < 0 ? -bottom : top > screen ? top - screen : 0;
+        }
+        catch (InvalidOperationException)
+        {
+            return double.PositiveInfinity;   // not in the editor's visual tree
+        }
+    }
+
     /// <summary>
     /// Replaces the stretched preview with the full-size file decoded at the
     /// width it is shown at - in the background, since a 1440p PNG takes a
@@ -887,10 +962,16 @@ internal sealed class NotesPictures
         }
         var (sharp, fileWidth) = decoded;
 
-        if (picture.Loading == wanted)
+        // Still the copy wanted? Not if the picture was scrolled out of sight
+        // meanwhile (SharpenVisible let it go) or a wider one was asked for.
+        bool stillWanted = picture.Loading == wanted;
+        if (stillWanted)
             picture.Loading = 0;
         if (fileWidth > 0)
             picture.FileWidth = fileWidth;
+
+        if (!stillWanted)
+            return;
 
         // A narrower copy finishing after a wider one must not replace it.
         if (sharp is null || sharp.PixelWidth <= picture.ShownWidth)

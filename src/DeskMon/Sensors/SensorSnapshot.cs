@@ -23,6 +23,12 @@ public sealed class SensorSnapshot
     public double? CpuTemp { get; set; }     // degrees C
     public double? CpuPower { get; set; }    // W
     public double? CpuClock { get; set; }    // MHz, highest active core
+
+    /// <summary>
+    /// While the CPU is slowing itself down to cool off, the clock it managed
+    /// before; null otherwise. See ThrottleWatch.
+    /// </summary>
+    public double? CpuThrottledFrom { get; set; }
     public double? GpuTemp { get; set; }     // degrees C
     public double? GpuLoad { get; set; }     // %
     public double? GpuMemoryLoad { get; set; } // %

@@ -26,8 +26,13 @@ namespace DeskMon.Notes;
 /// </summary>
 public static class GameArt
 {
-    /// <summary>Wide enough for a maximised window on a large screen; decoding the full 3840 px hero would only cost memory.</summary>
-    private const int DecodeWidth = 1600;
+    /// <summary>
+    /// Wide enough for the windows the banner sits in, even made wide; decoding
+    /// the full 3840 px hero would only cost memory. 1200 rather than 1600:
+    /// the banner is shown faded behind text, where the difference can't be
+    /// seen, and each one kept is about 40% smaller.
+    /// </summary>
+    private const int DecodeWidth = 1200;
 
     /// <summary>Tiles in the All games collage - three across, two down.</summary>
     public const int CollageGames = 6;
@@ -57,24 +62,68 @@ public static class GameArt
         return new Art(picture, Load(logo, 600));
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Threading.Tasks.Task<Art>> Found
-        = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The games whose art is kept, most recently asked for first out last.
+    /// Kept for good, every game's banner looked at in a session stayed in
+    /// memory until REFRESH - several MB each, in a program meant to sit
+    /// lightly over games. Eight covers going back and forth between a few.
+    /// </summary>
+    private const int ArtKept = 8;
+
+    private static readonly object FoundLock = new();
+    private static readonly Dictionary<string, (System.Threading.Tasks.Task<Art> Art, long Used)> Found =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static long _used;
 
     /// <summary>
     /// <see cref="For"/> on a worker thread, once per game for every window
     /// that shows it - the notes, its pictures and the sessions all open on
     /// the same game, and would otherwise each read Steam's folders and decode
     /// the same banner. Never faults: nothing found is an Art of nulls.
+    ///
+    /// On a thread of its own (LongRunning), not the shared pool: a lookup can
+    /// wait seconds on the Steam store, and on a pool thread several at once
+    /// held up the widget's sensor reads, which queue on the same pool.
     /// </summary>
     public static System.Threading.Tasks.Task<Art> ForAsync(string game, string? steamAppId, string screenshotFolder, bool online)
-        => Found.GetOrAdd(game, _ => System.Threading.Tasks.Task.Run(() =>
+    {
+        lock (FoundLock)
         {
-            try { return For(game, steamAppId, screenshotFolder, online); }
-            catch { return new Art(null, null); }
-        }));
+            if (Found.TryGetValue(game, out var known))
+            {
+                Found[game] = (known.Art, ++_used);
+                return known.Art;
+            }
+
+            var art = OwnThread(() =>
+            {
+                try { return For(game, steamAppId, screenshotFolder, online); }
+                catch { return new Art(null, null); }
+            });
+
+            Found[game] = (art, ++_used);
+            if (Found.Count > ArtKept)
+                Found.Remove(Found.MinBy(entry => entry.Value.Used).Key);
+
+            return art;
+        }
+    }
+
+    /// <summary>
+    /// Runs blocking work - downloads, Steam's app info - on a thread of its
+    /// own rather than the shared pool. See <see cref="ForAsync"/>.
+    /// </summary>
+    internal static System.Threading.Tasks.Task<T> OwnThread<T>(Func<T> work)
+        => System.Threading.Tasks.Task.Factory.StartNew(work, System.Threading.CancellationToken.None,
+                                                         System.Threading.Tasks.TaskCreationOptions.LongRunning,
+                                                         System.Threading.Tasks.TaskScheduler.Default);
 
     /// <summary>Looks every game up again next time - for REFRESH, after a screenshot or a change in Steam.</summary>
-    public static void Forget() => Found.Clear();
+    public static void Forget()
+    {
+        lock (FoundLock)
+            Found.Clear();
+    }
 
     /// <summary>
     /// The games' pictures side by side, for All games - most played first,

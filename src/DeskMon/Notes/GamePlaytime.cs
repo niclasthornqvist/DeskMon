@@ -87,23 +87,35 @@ public static class GamePlaytime
     {
         bool changed = false;
 
-        if (steamAppId is not null
-            && (!settings.SteamAppIds.TryGetValue(game, out string? knownSteam) || knownSteam != steamAppId))
+        lock (IdsLock)
         {
-            settings.SteamAppIds[game] = steamAppId;
-            changed = true;
-        }
+            if (steamAppId is not null
+                && (!settings.SteamAppIds.TryGetValue(game, out string? knownSteam) || knownSteam != steamAppId))
+            {
+                settings.SteamAppIds[game] = steamAppId;
+                changed = true;
+            }
 
-        if (gogKey is not null
-            && (!settings.GogGames.TryGetValue(game, out string? knownGog) || knownGog != gogKey))
-        {
-            settings.GogGames[game] = gogKey;
-            changed = true;
+            if (gogKey is not null
+                && (!settings.GogGames.TryGetValue(game, out string? knownGog) || knownGog != gogKey))
+            {
+                settings.GogGames[game] = gogKey;
+                changed = true;
+            }
         }
 
         if (changed)
             settings.Save();
     }
+
+    /// <summary>
+    /// Held while the remembered ids are read or written. Lookups run on worker
+    /// threads - the session's playtime, the history's totals - while a game
+    /// starting writes new ids on the UI thread, and a Dictionary read during a
+    /// write can throw or hand back a wrong entry. This is the one place both
+    /// happen, so the lock lives here and no caller has to know.
+    /// </summary>
+    private static readonly object IdsLock = new();
 
     /// <param name="fromProcess">The id when it was found from the running process - for <see cref="Remember"/>.</param>
     private static string? SteamAppId(string game, AppSettings settings, int? pid, out string? fromProcess)
@@ -117,8 +129,19 @@ public static class GamePlaytime
 
     /// <summary>The app id saved the last time the game ran from Steam, or null.</summary>
     internal static string? RememberedSteamAppId(string game, AppSettings settings)
-        => settings.SteamAppIds
-            .FirstOrDefault(entry => string.Equals(entry.Key, game, StringComparison.OrdinalIgnoreCase)).Value;
+    {
+        lock (IdsLock)
+            return settings.SteamAppIds
+                .FirstOrDefault(entry => string.Equals(entry.Key, game, StringComparison.OrdinalIgnoreCase)).Value;
+    }
+
+    /// <summary>The GOG Galaxy key saved the last time the game ran from Galaxy, or null.</summary>
+    internal static string? RememberedGogKey(string game, AppSettings settings)
+    {
+        lock (IdsLock)
+            return settings.GogGames
+                .FirstOrDefault(entry => string.Equals(entry.Key, game, StringComparison.OrdinalIgnoreCase)).Value;
+    }
 
     /// <summary>
     /// The GOG Galaxy game this is, found the way <see cref="SteamAppId"/>
@@ -137,10 +160,7 @@ public static class GamePlaytime
             return found;
         }
 
-        var remembered = settings.GogGames
-            .FirstOrDefault(entry => string.Equals(entry.Key, game, StringComparison.OrdinalIgnoreCase)).Value;
-
-        return remembered ?? GogPlaytime.KeyForName(game);
+        return RememberedGogKey(game, settings) ?? GogPlaytime.KeyForName(game);
     }
 
     /// <summary>

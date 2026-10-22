@@ -200,7 +200,9 @@
                            MouseLeave="VersionText_HoverChanged" />
             </Grid>
 
-            <ItemsControl x:Name="RowsHost" Focusable="False">
+            <!-- IsSharedSizeScope: the metric rows' MetricSide columns are one
+                 width across the panel - see the MetricRow template. -->
+            <ItemsControl x:Name="RowsHost" Focusable="False" Grid.IsSharedSizeScope="True">
                 <!-- Stacked or side by side, by the WidgetLayout setting - see
                      Ui/SectionsPanel. Found through its Loaded event, since a
                      panel made from a template can't be named here. -->
@@ -355,16 +357,22 @@
                     <DataTemplate DataType="{x:Type m:MetricRow}">
                         <Grid x:Name="Strip" Margin="9,2,0,2" Background="Transparent"
                               ToolTip="{Binding Tooltip}">
+                            <!-- Label on the left, peak and arrow on the right,
+                                 value and bar in the middle. The two sides share
+                                 one width (SharedSizeGroup, scoped on RowsHost):
+                                 the label side is wider than the peak side, and
+                                 with each at its own width the middle sat left
+                                 of the row's centre. Equal, it is the centre -
+                                 and the row spreads across a widget made wider
+                                 by a long sensor name or a heading. -->
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />  <!-- label -->
-                                <ColumnDefinition Width="Auto" />  <!-- value -->
-                                <ColumnDefinition Width="Auto" />  <!-- bar -->
-                                <ColumnDefinition Width="Auto" />  <!-- peak -->
-                                <ColumnDefinition Width="Auto" />  <!-- arrow -->
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="MetricSide" />  <!-- label -->
+                                <ColumnDefinition Width="*" />                                   <!-- value and bar -->
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="MetricSide" />  <!-- peak and arrow -->
                             </Grid.ColumnDefinitions>
 
                             <!-- First, so it is drawn behind the row. -->
-                            <Border x:Name="Hover" Grid.ColumnSpan="5" Margin="-5,-2,-4,-2"
+                            <Border x:Name="Hover" Grid.ColumnSpan="3" Margin="-5,-2,-4,-2"
                                     Style="{StaticResource RowHover}" />
 
                             <TextBlock x:Name="LabelText" Grid.Column="0"
@@ -373,15 +381,29 @@
                                        Padding="{Binding LabelPadding}"
                                        Foreground="{Binding LabelBrush}" />
 
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding Value}"
+                            <!-- A warning the number can't show, such as the CPU
+                                 slowing itself down - see Metric.Flag. Inside the
+                                 label's column, at its far end, so the values and
+                                 bars still line up with every other row. -->
+                            <TextBlock Grid.Column="0"
+                                       Text="▼"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,4,0"
+                                       FontSize="{Binding PeakFontSize}"
+                                       Foreground="{Binding FlagBrush}"
+                                       Visibility="{Binding FlagVisibility}"
+                                       ToolTip="{Binding FlagTooltip}" />
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        HorizontalAlignment="Center">
+                            <TextBlock Text="{Binding Value}"
                                        Width="{Binding ValueWidth}"
                                        TextAlignment="Right"
                                        FontWeight="SemiBold"
                                        Foreground="{Binding ValueBrush}" />
 
-                            <Border Grid.Column="2"
-                                    Width="{Binding TrackWidth}"
+                            <Border Width="{Binding TrackWidth}"
                                     Visibility="{Binding BarVisibility}"
                                     Height="{Binding TrackHeight}"
                                     Margin="10,0,0,0"
@@ -397,12 +419,16 @@
                                         CornerRadius="{Binding BarCorner}"
                                         Background="{Binding BarBrush}" />
                             </Border>
+                            </StackPanel>
 
                             <!-- The worst reading this row has seen. Dim and
                                  unitless: it is history next to a live number, and
                                  the value beside it already names the unit. -->
-                            <TextBlock Grid.Column="3"
-                                       Text="{Binding Peak}"
+                            <!-- Right-aligned in its side, so the peaks end at the
+                                 row's right edge whatever the label side's width. -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                        HorizontalAlignment="Right">
+                            <TextBlock Text="{Binding Peak}"
                                        Visibility="{Binding PeakVisibility}"
                                        Width="{Binding PeakWidth}"
                                        Margin="6,0,0,0"
@@ -415,14 +441,14 @@
                             <!-- Only present on a row that has something folded
                                  behind it - a sensor list, or rows like FPS's
                                  lows; everything else keeps its full drag area. -->
-                            <TextBlock Grid.Column="4"
-                                       Text="{Binding Indicator}"
+                            <TextBlock Text="{Binding Indicator}"
                                        Visibility="{Binding IndicatorVisibility}"
                                        Margin="6,0,0,0"
                                        VerticalAlignment="Center"
                                        Foreground="{Binding LabelBrush}"
                                        FontSize="{Binding IndicatorFontSize}"
                                        ToolTip="{Binding IndicatorTooltip}" />
+                            </StackPanel>
                         </Grid>
                         <DataTemplate.Triggers>
                             <!-- The label brightens to the heading colour too, so
@@ -449,8 +475,11 @@
                          the metric rows, and the name column takes what it needs
                          since sensor names are longer than a label like "CPU". -->
                     <DataTemplate DataType="{x:Type m:DetailRow}">
+                        <!-- Right-click opens the row's own menu - End, for a
+                             program in the memory lists - instead of the widget's. -->
                         <Grid x:Name="Strip" Margin="22,1,0,1" Background="Transparent"
-                              ToolTip="{Binding Tooltip}">
+                              ToolTip="{Binding Tooltip}"
+                              MouseRightButtonUp="DetailRow_MouseRightButtonUp">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />

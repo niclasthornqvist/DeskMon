@@ -60,8 +60,33 @@ public static class PerformanceScore
     /// <summary>The frame rate that earns full marks; floored so a hand-edited 0 can't divide by nothing.</summary>
     public static double Target => Math.Max(10, _settings?.TargetFps ?? 60);
 
-    /// <summary>The session's score and how it was reached, or null when no frame rate was measured.</summary>
+    /// <summary>
+    /// The session's score and how it was reached, or null when no frame rate
+    /// was measured. Worked out once per session and target: the history's
+    /// table asked three or four times a row - for the cell, its colour and
+    /// the sort - on every redraw and every click on a heading. Weakly held,
+    /// so a record re-read from the log takes its score with it when it goes.
+    /// </summary>
     public static Result? For(SessionRecord session)
+    {
+        double target = Target;
+        lock (Scores)
+        {
+            if (Scores.TryGetValue(session, out var known) && known.Target == target)
+                return known.Result;
+        }
+
+        var result = Score(session);
+        lock (Scores)
+            Scores.AddOrUpdate(session, new Scored(target, result));
+        return result;
+    }
+
+    private sealed record Scored(double Target, Result? Result);
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SessionRecord, Scored> Scores = new();
+
+    private static Result? Score(SessionRecord session)
     {
         if (session.AverageFps is not double average || average <= 0)
             return null;

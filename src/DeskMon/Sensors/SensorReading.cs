@@ -16,4 +16,9 @@ namespace DeskMon.Sensors;
 /// figures are in a unit of their own - <paramref name="Text"/>.
 /// </summary>
 /// <param name="Text">Shown instead of <paramref name="Value"/> in its row's unit, e.g. "1.4 GB".</param>
-public readonly record struct SensorReading(string Name, double? Value, string? Text = null);
+/// <param name="Key">
+/// The program's real process name, for a row of the memory lists - the name
+/// shown can be cut short and carries a "×30", so it can't be used to find
+/// the processes again. Null for a sensor or a drive.
+/// </param>
+public readonly record struct SensorReading(string Name, double? Value, string? Text = null, string? Key = null);

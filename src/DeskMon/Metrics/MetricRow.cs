@@ -26,6 +26,7 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     private bool _isExpanded;
     private string _peak = string.Empty;
     private double? _worst;
+    private string? _flag;
 
     public MetricRow(Metric metric, string sectionKey, UiTheme theme, AppSettings settings)
     {
@@ -233,9 +234,12 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// <summary>
     /// The arrow only appears once there is something behind it, so a row whose
     /// machine reports nothing extra doesn't advertise a list that is empty.
+    /// Hidden rather than collapsed, so it still takes its room: the peaks
+    /// then end at the same place on every row, arrow or not. A hidden
+    /// element isn't hit-tested, so the row keeps its drag area.
     /// </summary>
     public Visibility IndicatorVisibility
-        => CanExpand ? Visibility.Visible : Visibility.Collapsed;
+        => CanExpand ? Visibility.Visible : Visibility.Hidden;
 
     /// <summary>Says what the arrow unfolds - a sensor list, or which rows.</summary>
     public string IndicatorTooltip
@@ -328,12 +332,46 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
         }
     }
 
+    /// <summary>
+    /// What the amber mark beside the label says on hover - see
+    /// <see cref="Metric.Flag"/>. Null while there is nothing to flag.
+    /// </summary>
+    public string? FlagTooltip
+    {
+        get => _flag;
+        private set
+        {
+            if (_flag == value)
+                return;
+
+            _flag = value;
+            Set(nameof(FlagTooltip));
+            Set(nameof(FlagVisibility));
+        }
+    }
+
+    public Visibility FlagVisibility => _flag is null ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>The warning colour, since the mark is a warning however cool the number reads.</summary>
+    public Brush FlagBrush => _theme.Warn;
+
     /// <summary>Pulls this row's number out of a snapshot and restyles it.</summary>
     public void Apply(SensorSnapshot snapshot)
     {
         // Before the early return below: the list has to keep up even on a tick
         // where the headline value is unavailable.
         ApplyDetails(snapshot);
+
+        // Also before it: a flag is about something other than the value, and
+        // must not stick on screen because the value went missing.
+        try
+        {
+            FlagTooltip = _metric.Flag?.Invoke(snapshot);
+        }
+        catch
+        {
+            FlagTooltip = null;   // as with Read below: a bad lambda mustn't take the widget down
+        }
 
         double? reading = null;
         try

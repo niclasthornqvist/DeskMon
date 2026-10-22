@@ -214,7 +214,7 @@ public static class SettingsCatalogue
         // No NeedsReload: the hardware window re-reads every time it opens,
         // so a change already shows on the next open without a restart.
         new("Hardware window", null,
-            new Setting("CheckDriverOnline", "Check NVIDIA for a newer driver", "Asks nvidia.com each time the hardware window opens. Off still warns when the driver or BIOS is over a year old.")),
+            new Setting("CheckDriverOnline", "Check online for a newer driver, BIOS and Windows", "Asks nvidia.com or amd.com about the graphics card, asus.com about an ASUS board, and Windows Update about Windows, and runs a short ping test (to PingHost, or 1.1.1.1), each time the hardware window opens. Off still warns when the driver or BIOS is over 3 months old (yellow) or a year old (red).")),
 
         // The rule in the note is PanelWindow.DimDuringGames: an unfocused
         // window during a game takes the lower of its own value and GameOpacity.

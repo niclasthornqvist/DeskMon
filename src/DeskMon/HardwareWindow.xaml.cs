@@ -41,6 +41,10 @@ public partial class HardwareWindow : PanelWindow
     /// last and put its older rows back over the newer ones.
     /// </summary>
     private int _loadGeneration;
+    private string? _cpuName, _gpuName;
+
+    /// <summary>The stability line as last built, for its right-click menu.</summary>
+    private InfoRow? _stabilityRow;
 
     public HardwareWindow(AppSettings settings, UiTheme theme)
     {
@@ -59,6 +63,11 @@ public partial class HardwareWindow : PanelWindow
         Topmost = _settings.NotesAlwaysOnTop;
         DimDuringGames(_settings, () => _settings.HardwareOpacity);
         Rows.ItemsSource = _rows;
+
+        // A row with something to do on it - the stability line's "start
+        // counting from now" - gets its own menu. Handled here, once, rather
+        // than in the row template, since only one row ever has one.
+        Rows.MouseRightButtonUp += Rows_MouseRightButtonUp;
 
         _placementSave.Tick += (_, _) => SavePlacementNow();
 
@@ -111,7 +120,11 @@ public partial class HardwareWindow : PanelWindow
             Show("Reading…", string.Empty);
         _loaded = true;
 
-        var info = await Task.Run(() => SystemInfo.Collect(cpuName, gpuName));
+        // Kept for "start counting from now", which fills the window again.
+        _cpuName = cpuName;
+        _gpuName = gpuName;
+
+        var info = await Task.Run(() => SystemInfo.Collect(cpuName, gpuName, _settings.StabilityCountedFrom));
         var missing = await Task.Run(() => Prerequisites.Check(_settings));
         if (generation != _loadGeneration)
             return;
@@ -119,26 +132,53 @@ public partial class HardwareWindow : PanelWindow
         _rows.Clear();
         // A separate brand list per kind of row: the motherboard string can
         // name a chipset vendor ("AMD B650") that is not who made the board.
+        AddGroup("PROCESSOR & GRAPHICS");
         Add("CPU", info.Cpu, BrandLogos.ForChip(info.Cpu));
         AddDetail(info.CpuDetail);
+
+        // Power plan, hardware errors, Intel's microcode fix - SystemInfo.CpuChecks.
+        foreach (var check in info.CpuChecks)
+            AddCheck(check.Text, check.Level);
         Add("Graphics", info.Gpu, BrandLogos.ForChip(info.Gpu));
         AddDetail(info.GpuDetail);
 
         // NVIDIA's answer is filled in afterwards, into a row that says it is
         // checking: a slow network must not hold up the rest of the window.
         // Without a driver version there is nothing to compare, so no asking.
+        // A current Radeon is asked of AMD the same way.
         InfoRow? driverCheck = null;
-        if (_settings.CheckDriverOnline && info.Gpu is not null && info.GpuDriverVersion is not null
-            && UpdateCheck.IsNvidia(info.Gpu))
+        string? driverMaker = info.Gpu is null || info.GpuDriverVersion is null ? null
+            : UpdateCheck.IsNvidia(info.Gpu) ? "NVIDIA"
+            : UpdateCheck.IsCurrentRadeon(info.Gpu) ? "AMD"
+            : null;
+        if (_settings.CheckDriverOnline && driverMaker is not null)
         {
-            driverCheck = VerdictRow(new UpdateCheck.Verdict("Checking NVIDIA for a newer driver…", Outdated: false));
+            driverCheck = VerdictRow(new UpdateCheck.Verdict($"Checking {driverMaker} for a newer driver…", UpdateCheck.Freshness.Unknown));
             _rows.Add(driverCheck);
         }
         else
         {
-            AddVerdict(UpdateCheck.Age("Driver", info.GpuDriverDate));
+            // Only with the online check on: off, nothing was going to be
+            // asked, and "blocked" would be beside the point.
+            AddVerdict(_settings.CheckDriverOnline && info.Gpu is not null && UpdateCheck.BlockedMaker(info.Gpu) is { } maker
+                ? UpdateCheck.Blocked("Driver", maker, info.GpuDriverDate)
+                : UpdateCheck.Age("Driver", info.GpuDriverDate));
         }
 
+        // Under the card and its driver: whether it gets all its PCIe lanes.
+        if (info.GpuLink is { } link)
+            AddCheck(link.Text, link.Level);
+
+        // The screens it drives, each with whether it runs at its best refresh rate.
+        bool firstDisplay = true;
+        foreach (var display in info.Displays)
+        {
+            Add(firstDisplay ? "Display" : string.Empty, display.Text);
+            AddCheck(display.Refresh.Text, display.Refresh.Level);
+            firstDisplay = false;
+        }
+
+        AddGroup("MEMORY & STORAGE");
         Add("Memory", info.MemoryTotal);
 
         // One row per stick, labelled only once so the column stays clean.
@@ -150,29 +190,102 @@ public partial class HardwareWindow : PanelWindow
             firstModule = false;
         }
 
+        // Under the last module, about the memory as a whole: channels,
+        // EXPO/XMP and errors - see SystemInfo.MemoryChecks.
+        foreach (var check in info.MemoryChecks)
+            AddCheck(check.Text, check.Level);
+
         bool firstDrive = true;
-        foreach (string drive in info.Drives)
+        foreach (var drive in info.Drives)
         {
-            Add(firstDrive ? "Storage" : string.Empty, drive, BrandLogos.ForStorage(drive));
+            Add(firstDrive ? "Storage" : string.Empty, drive.Text, BrandLogos.ForStorage(drive.Text));
             firstDrive = false;
+
+            // Under its drive, like the GPU's driver line - green when healthy,
+            // red when it's failing: the one line in this window that can
+            // mean "back up now".
+            if (drive.Health is { } health)
+                AddCheck(health, drive.Level);
         }
 
+        AddGroup("BOARD & BIOS");
         Add("Motherboard", info.Motherboard, BrandLogos.ForBoard(info.Motherboard));
         Add("BIOS", info.Bios);
-        AddVerdict(UpdateCheck.Age("BIOS", info.BiosDate));
+
+        // ASUS's answer the same way as NVIDIA's: a "checking" row now, the
+        // verdict when it comes. Other board makers can't be asked - see UpdateCheck.
+        InfoRow? biosCheck = null;
+        if (_settings.CheckDriverOnline && info.BoardVendor is not null && info.BoardProduct is not null
+            && info.BiosVersion is not null && UpdateCheck.IsAsus(info.BoardVendor))
+        {
+            biosCheck = VerdictRow(new UpdateCheck.Verdict("Checking ASUS for a newer BIOS…", UpdateCheck.Freshness.Unknown));
+            _rows.Add(biosCheck);
+        }
+        else
+        {
+            // As for the driver above.
+            AddVerdict(_settings.CheckDriverOnline && info.BoardVendor is not null && UpdateCheck.BlockedMaker(info.BoardVendor) is { } maker
+                ? UpdateCheck.Blocked("BIOS", maker, info.BiosDate)
+                : UpdateCheck.Age("BIOS", info.BiosDate));
+        }
         Add("System", info.SystemModel);
+        AddGroup("WINDOWS");
         Add("OS", info.OperatingSystem, info.OperatingSystem is null ? null : BrandLogos.Windows);
+
+        // Under the OS row, filled in like the driver and BIOS checks. Behind
+        // the same setting: Windows Update asks Microsoft's servers.
+        InfoRow? windowsCheck = null;
+        if (_settings.CheckDriverOnline)
+        {
+            windowsCheck = VerdictRow(new UpdateCheck.Verdict("Asking Windows Update for waiting updates…", UpdateCheck.Freshness.Unknown));
+            _rows.Add(windowsCheck);
+        }
         Add("Up since", info.UpSince);
+
+        // Crashes since about a month back, under how long it has been up.
+        _stabilityRow = null;
+        if (info.Stability is { } stability)
+        {
+            _stabilityRow = CheckRow(stability.Text, stability.Level);
+            _rows.Add(_stabilityRow);
+        }
+
+        // Windows settings that change how games run, and the two that
+        // decide whether some start at all - their own group, so they read
+        // as a checklist rather than as facts about Windows.
+        if (info.GamingChecks.Count > 0)
+        {
+            AddGroup("GAMING");
+            foreach (var check in info.GamingChecks)
+                AddCheck(check.Text, check.Level);
+        }
 
         // A disconnected adapter goes in the "unknown" grey: still listed,
         // but plainly not the one in use.
         bool firstAdapter = true;
         foreach (var adapter in info.NetworkAdapters)
         {
+            // Inside the loop, so a PC with no adapter found gets no empty heading.
+            if (firstAdapter)
+                AddGroup("NETWORK");
             _rows.Add(new InfoRow(firstAdapter ? "Network" : string.Empty, adapter.Description,
                                   _theme, _settings, known: adapter.Connected,
                                   logo: BrandLogos.ForNetwork(adapter.Description)));
             firstAdapter = false;
+        }
+
+        // The link of each adapter in use, then a ping test filled in when
+        // it's done, like the update checks. Behind the same setting: it
+        // sends pings out to the internet.
+        foreach (var check in info.NetworkChecks)
+            AddCheck(check.Text, check.Level);
+
+        string pingHost = string.IsNullOrWhiteSpace(_settings.PingHost) ? NetworkCheck.DefaultHost : _settings.PingHost.Trim();
+        InfoRow? pingCheck = null;
+        if (_settings.CheckDriverOnline && !firstAdapter)
+        {
+            pingCheck = CheckRow($"Measuring ping to {pingHost}…", SystemInfo.Condition.Unknown);
+            _rows.Add(pingCheck);
         }
 
         // Here because this is the window people open to ask "what does this
@@ -183,6 +296,8 @@ public partial class HardwareWindow : PanelWindow
         bool firstMissing = true;
         foreach (var item in missing)
         {
+            if (firstMissing)
+                AddGroup("NEEDS INSTALLING", warning: true);
             _rows.Add(new InfoRow(firstMissing ? "Missing" : string.Empty,
                                   $"{item.Name} - {item.Effect}. Install: {item.Install}",
                                   _theme, _settings, known: true, warning: true));
@@ -192,37 +307,133 @@ public partial class HardwareWindow : PanelWindow
         Rows.Items.Refresh();
         ResizeToContent();
 
-        if (driverCheck is not null)
+        // Both started before either is awaited, so the two run side by side
+        // and the wait is the slower one's, not the two added together.
+        var driverTask = driverCheck is null ? null
+            : driverMaker == "AMD" ? UpdateCheck.AmdDriverAsync(info.GpuDriverVersion, info.GpuDriverDate)
+            : UpdateCheck.NvidiaDriverAsync(info.Gpu!, info.GpuDriverVersion, info.GpuDriverDate);
+        var biosTask = biosCheck is null ? null
+            : UpdateCheck.AsusBiosAsync(info.BoardProduct!, info.BiosVersion, info.BiosDate);
+        var windowsTask = windowsCheck is null ? null : UpdateCheck.WindowsAsync();
+        var pingTask = pingCheck is null ? null : NetworkCheck.PingAsync(pingHost);
+
+        if (driverTask is not null)
+            ReplaceRow(driverCheck!, await driverTask, generation);
+        if (biosTask is not null)
+            ReplaceRow(biosCheck!, await biosTask, generation);
+        // Last: it is the slowest of the three by far.
+        if (windowsTask is not null)
+            ReplaceRow(windowsCheck!, await windowsTask, generation);
+        if (pingTask is not null)
         {
-            var verdict = await UpdateCheck.NvidiaDriverAsync(info.Gpu!, info.GpuDriverVersion, info.GpuDriverDate);
-            // A newer load has rebuilt _rows, so IndexOf would already miss -
-            // checked anyway so the intent doesn't hang on that coincidence.
-            if (generation != _loadGeneration)
-                return;
-            int at = _rows.IndexOf(driverCheck);
-            if (at >= 0)
-            {
-                _rows[at] = VerdictRow(verdict);
-                Rows.Items.Refresh();
-                ResizeToContent();
-            }
+            var ping = await pingTask;
+            Replace(pingCheck!, CheckRow(ping.Text, ping.Level), generation);
+        }
+    }
+
+    /// <summary>Puts an online check's verdict where its "checking…" row was.</summary>
+    private void ReplaceRow(InfoRow checking, UpdateCheck.Verdict verdict, int generation)
+        => Replace(checking, VerdictRow(verdict), generation);
+
+    /// <summary>Puts any finished row where its "checking…" row was - the ping test's too.</summary>
+    private void Replace(InfoRow checking, InfoRow done, int generation)
+    {
+        // A newer load has rebuilt _rows, so IndexOf would already miss -
+        // checked anyway so the intent doesn't hang on that coincidence.
+        if (generation != _loadGeneration)
+            return;
+        int at = _rows.IndexOf(checking);
+        if (at >= 0)
+        {
+            _rows[at] = done;
+            Rows.Items.Refresh();
+            ResizeToContent();
         }
     }
 
     /// <summary>
-    /// An update verdict, as a line under the row it is about. Outdated ones
-    /// in the warning colour, the rest ("newest", "couldn't check") dimmed
-    /// like the other second lines.
+    /// An update verdict, as a line under the row it is about, in the
+    /// widget's own colours for good, warning and critical - so green, yellow
+    /// and red mean the same here as on the bars. "Checking…" and "couldn't
+    /// check" stay dimmed like the other second lines: no news isn't good news.
     /// </summary>
     private InfoRow VerdictRow(UpdateCheck.Verdict verdict)
-        => new(string.Empty, verdict.Text, _theme, _settings, known: true,
-               warning: verdict.Outdated, secondary: !verdict.Outdated);
+        => new(string.Empty, verdict.Text, _theme, _settings, known: true, secondary: true)
+        {
+            ValueBrush = verdict.Level switch
+            {
+                UpdateCheck.Freshness.Current => _theme.Normal,
+                UpdateCheck.Freshness.Aging => _theme.Warn,
+                UpdateCheck.Freshness.Old => _theme.Crit,
+                _ => _theme.Label,
+            },
+        };
+
+    /// <summary>
+    /// A health check's line, in the same green, yellow and red as the update
+    /// verdicts - one colour language for the whole window.
+    /// </summary>
+    private void AddCheck(string text, SystemInfo.Condition level)
+        => _rows.Add(CheckRow(text, level));
+
+    private InfoRow CheckRow(string text, SystemInfo.Condition level)
+        => new(string.Empty, text, _theme, _settings, known: true, secondary: true)
+        {
+            ValueBrush = level switch
+            {
+                SystemInfo.Condition.Good => _theme.Normal,
+                SystemInfo.Condition.Warning => _theme.Warn,
+                SystemInfo.Condition.Bad => _theme.Crit,
+                _ => _theme.Label,
+            },
+        };
+
+    /// <summary>
+    /// Right-click on the stability line: count crashes and shutdowns from now
+    /// on - or from 30 days back again, once a start has been set. For
+    /// shutdowns that were the power button rather than a fault, which
+    /// Windows logs no differently.
+    /// </summary>
+    private void Rows_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_stabilityRow is null
+            || (e.OriginalSource as FrameworkElement)?.DataContext != _stabilityRow)
+            return;
+
+        e.Handled = true;
+
+        var menu = new System.Windows.Controls.ContextMenu { Style = (Style)FindResource("DarkContextMenu") };
+
+        var fromNow = new System.Windows.Controls.MenuItem { Header = "Start counting from now" };
+        fromNow.Click += (_, _) => SetStabilityStart(DateTime.Now);
+        menu.Items.Add(fromNow);
+
+        if (_settings.StabilityCountedFrom is not null)
+        {
+            var month = new System.Windows.Controls.MenuItem { Header = "Count the last 30 days again" };
+            month.Click += (_, _) => SetStabilityStart(null);
+            menu.Items.Add(month);
+        }
+
+        menu.IsOpen = true;
+    }
+
+    private void SetStabilityStart(DateTime? from)
+    {
+        _settings.StabilityCountedFrom = from;
+        _settings.Save();
+        _ = LoadAsync(_cpuName, _gpuName);
+    }
 
     private void AddVerdict(UpdateCheck.Verdict? verdict)
     {
         if (verdict is not null)
             _rows.Add(VerdictRow(verdict));
     }
+
+    /// <summary>Starts a group of rows under a heading - see InfoRow.Heading.</summary>
+    private void AddGroup(string heading, bool warning = false)
+        => _rows.Add(InfoRow.Heading(heading, _theme, _settings, first: _rows.Count == 0, warning));
 
     private void Add(string label, string? value, BrandLogos.Logo? logo = null)
         => _rows.Add(new InfoRow(label, value ?? "unknown", _theme, _settings,
@@ -274,7 +485,18 @@ public partial class HardwareWindow : PanelWindow
     {
         var text = new StringBuilder();
         foreach (var row in _rows)
+        {
+            // A heading as a blank line and the heading alone, so the pasted
+            // text keeps the same groups as the window.
+            if (row.IsHeading)
+            {
+                if (text.Length > 0)
+                    text.AppendLine();
+                text.AppendLine(row.Value);
+                continue;
+            }
             text.AppendLine($"{row.Label,-14}{row.Value}");
+        }
 
         try
         {
@@ -370,12 +592,43 @@ public partial class HardwareWindow : PanelWindow
             LogoShape = logo?.Shape;
             LogoFill = logo is null ? null : logo.Fill ?? theme.NotesText;
             LogoVisibility = logo is null ? Visibility.Collapsed : Visibility.Visible;
+            RuleBrush = theme.Separator;
+
+            // A second line hangs right under its row - no gap above it - so the
+            // driver, a drive's health or an update verdict reads as part of
+            // the thing it is about rather than as a fact of its own.
+            RowMargin = secondary ? new Thickness(0, 0, 0, 3) : new Thickness(0, 3, 0, 3);
         }
+
+        /// <summary>
+        /// A group's heading. Space above it, except for the first, which the
+        /// window's own header rule already separates from the title. In the
+        /// section colour like the widget's headings - or the warning colour,
+        /// for the group that lists what is missing.
+        /// </summary>
+        public static InfoRow Heading(string text, UiTheme theme, AppSettings settings, bool first, bool warning = false)
+            => new(string.Empty, text, theme, settings, known: true, warning: warning)
+            {
+                IsHeading = true,
+                LabelBrush = warning ? theme.Warn : theme.Section,
+                RowMargin = new Thickness(0, first ? 2 : 14, 0, 4),
+            };
+
+        public bool IsHeading { get; private init; }
+        public Visibility HeadingVisibility => IsHeading ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility FactVisibility => IsHeading ? Visibility.Collapsed : Visibility.Visible;
+        public Thickness RowMargin { get; private init; }
+        public Brush RuleBrush { get; }
+
+        /// <summary>A step under the rows' size, like the widget's section headings.</summary>
+        public double HeadingFontSize => Math.Max(8, UiTheme.PanelFontSize - 1.5);
 
         public string Label { get; }
         public string Value { get; }
-        public Brush LabelBrush { get; }
-        public Brush ValueBrush { get; }
+        public Brush LabelBrush { get; private init; }
+
+        /// <summary>Settable at creation, for an update verdict's green, yellow or red - see VerdictRow.</summary>
+        public Brush ValueBrush { get; init; }
         public double LabelWidth { get; }
         public Geometry? LogoShape { get; }
         public Brush? LogoFill { get; }

@@ -104,8 +104,27 @@ internal static class ForegroundState
         return CoversItsMonitor(window);
     }
 
-    /// <summary>The desktop, the taskbars, and the shell's overlay windows.</summary>
+    /// <summary>
+    /// The desktop, the taskbars, and the shell's overlay windows. The answer
+    /// for the last window asked about is kept: this runs every tick, mostly
+    /// for the same game window, and each look-up built a StringBuilder and a
+    /// string for a class name that doesn't change. Only touched from the UI
+    /// thread, like the rest of this class's callers.
+    /// </summary>
     private static bool IsShellWindow(IntPtr window)
+    {
+        if (window == _classOf && window != IntPtr.Zero)
+            return _wasShell;
+
+        _classOf = window;
+        _wasShell = HasShellClass(window);
+        return _wasShell;
+    }
+
+    private static IntPtr _classOf;
+    private static bool _wasShell;
+
+    private static bool HasShellClass(IntPtr window)
     {
         var className = new StringBuilder(64);
         GetClassName(window, className, className.Capacity);

@@ -200,6 +200,20 @@ public sealed class FpsMonitor : IDisposable
 
     private Process? _process;
     private string? _exePath;
+
+    /// <summary>The swap-chain key of the last frame read - see OnOutputLine. Only touched by its output thread.</summary>
+    private string? _lastChain;
+
+    /// <summary>
+    /// How often the lows are worked out again. They sort the whole 3600-frame
+    /// history, under the lock PresentMon's reader waits on for every frame -
+    /// fine at the default two-second game tick, four times a second at the
+    /// fastest. Over a 25-second window a second's delay changes nothing.
+    /// </summary>
+    private static readonly TimeSpan LowsEvery = TimeSpan.FromSeconds(1);
+
+    /// <summary>The lows as last worked out, for which chain and when. Under <see cref="_lock"/>.</summary>
+    private (DateTime At, SwapChain Chain, double? One, double? PointOne, int Frames)? _lows;
     private int _swapChainColumn = -1;
     private int _frameTimeColumn = -1;
     private int _latencyColumn = -1;
@@ -241,8 +255,19 @@ public sealed class FpsMonitor : IDisposable
                 double mean = busiest.MeanOfRecent(RecentFrames);
                 double? fps = mean > 0 ? 1000.0 / mean : null;
 
-                int frames = busiest.CopyTo(_sorted);
-                Array.Sort(_sorted, 0, frames);
+                // Sorted again only once a second, or for a different chain -
+                // see LowsEvery. The average above stays live every tick.
+                var now = DateTime.UtcNow;
+                if (_lows is not { } lows || !ReferenceEquals(lows.Chain, busiest) || now - lows.At >= LowsEvery)
+                {
+                    int counted = busiest.CopyTo(_sorted);
+                    Array.Sort(_sorted, 0, counted);
+                    lows = (now, busiest,
+                            LowAverage(counted, 0.01, OnePercentFloor),
+                            LowAverage(counted, 0.001, PointOnePercentFloor),
+                            counted);
+                    _lows = lows;
+                }
 
                 // A handful of samples first: the column is blank for frames
                 // that never reached the screen, and in a windowed game it can
@@ -251,12 +276,7 @@ public sealed class FpsMonitor : IDisposable
                     ? busiest.MeanLatency(RecentFrames)
                     : null;
 
-                return new FpsReading(
-                    fps,
-                    LowAverage(frames, 0.01, OnePercentFloor),
-                    LowAverage(frames, 0.001, PointOnePercentFloor),
-                    latency,
-                    frames);
+                return new FpsReading(fps, lows.One, lows.PointOne, latency, lows.Frames);
             }
         }
     }
@@ -382,39 +402,117 @@ public sealed class FpsMonitor : IDisposable
     }
 
     /// <summary>
+    /// Every start and stop of PresentMon, one after another on a worker
+    /// thread. Only touched from the UI thread.
+    ///
+    /// Start used to do all of it inline, inside the widget's tick: wait up to
+    /// six seconds for the last run to shut down (an Alt+Tab straight back
+    /// into an exclusive-fullscreen game), search PATH and winget's folders,
+    /// and check PresentMon's signature twice - each check hashing the whole
+    /// file. Every DeskMon window froze meanwhile, right as the game came back.
+    /// Queued, the order still holds - a stop's clean-up ends the trace session
+    /// by name, and the next run reuses that name, so it must finish first -
+    /// but nobody waits for it.
+    /// </summary>
+    private System.Threading.Tasks.Task _lifecycle = System.Threading.Tasks.Task.CompletedTask;
+
+    /// <summary>
+    /// Bumped by every Start and Stop, under <see cref="_lock"/>. A queued
+    /// start that finds it moved on was overtaken while it waited or worked,
+    /// and must not leave its PresentMon running.
+    /// </summary>
+    private int _generation;
+
+    /// <summary>A start is queued or under way for <see cref="TargetPid"/>.</summary>
+    private volatile bool _starting;
+
+    /// <summary>
     /// Starts measuring <paramref name="pid"/>. Does nothing if already
-    /// measuring that process.
+    /// measuring that process, or about to. Returns at once: PresentMon is
+    /// found, checked and started on a worker thread - see <see cref="_lifecycle"/>.
     /// </summary>
     public void Start(int pid, string? presentMonPathOverride)
     {
-        if (TargetPid == pid && IsRunning)
+        if (TargetPid == pid && (_starting || IsRunning))
             return;
 
         Stop();
 
-        // A previous run may still be shutting down in the background. Its
-        // clean-up ends the trace session by name, and the new run reuses that
-        // name - so starting before it finishes would let it end the new
-        // session instead of the old one. Only blocks on a quick Alt+Tab back.
-        WaitForPendingStop();
-
-        string? exe = ResolvePresentMon(presentMonPathOverride);
-        if (exe is null)
+        int generation;
+        lock (_lock)
         {
-            Error = "PresentMon not found, or not signed by Intel. Install it with: winget install Intel.PresentMon.Console";
-            return;
+            generation = ++_generation;
+            _chains.Clear();
+            _swapChainColumn = -1;
+            _frameTimeColumn = -1;
+            _latencyColumn = -1;
+            _lastFrameAt = DateTime.UtcNow;
         }
 
-        // Held open - read and run allowed, writing and replacing not - from
-        // the check of its signature until it has started, so the file that
-        // runs as administrator is the one that was checked. See HoldIfGenuine.
-        using var held = HoldIfGenuine(exe);
-        if (held is null)
-        {
-            Error = "PresentMon is no longer signed by Intel - not started.";
-            return;
-        }
+        TargetPid = pid;
+        Error = null;
+        _starting = true;
 
+        _lifecycle = _lifecycle.ContinueWith(_ => Launch(pid, presentMonPathOverride, generation),
+                                             System.Threading.CancellationToken.None,
+                                             System.Threading.Tasks.TaskContinuationOptions.None,
+                                             System.Threading.Tasks.TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// What Start used to do inline: find PresentMon, check it, start it. On
+    /// the lifecycle queue, so the run before it has finished shutting down.
+    /// </summary>
+    private void Launch(int pid, string? presentMonPathOverride, int generation)
+    {
+        try
+        {
+            if (!IsCurrent(generation))
+                return;   // overtaken while it waited its turn
+
+            string? exe = ResolvePresentMon(presentMonPathOverride);
+            if (exe is null)
+            {
+                Fail(generation, "PresentMon not found, or not signed by Intel. Install it with: winget install Intel.PresentMon.Console");
+                return;
+            }
+
+            // Held open - read and run allowed, writing and replacing not - from
+            // the check of its signature until it has started, so the file that
+            // runs as administrator is the one that was checked. See HoldIfGenuine.
+            using var held = HoldIfGenuine(exe);
+            if (held is null)
+            {
+                Fail(generation, "PresentMon is no longer signed by Intel - not started.");
+                return;
+            }
+
+            StartProcess(exe, pid, generation);
+        }
+        catch (Exception ex)
+        {
+            Fail(generation, ex.Message);
+        }
+    }
+
+    private bool IsCurrent(int generation)
+    {
+        lock (_lock)
+            return generation == _generation;
+    }
+
+    /// <summary>Says why, unless a newer Start or a Stop has made it nobody's business.</summary>
+    private void Fail(int generation, string error)
+    {
+        if (!IsCurrent(generation))
+            return;
+
+        Error = error;
+        _starting = false;
+    }
+
+    private void StartProcess(string exe, int pid, int generation)
+    {
         var info = new ProcessStartInfo(exe)
         {
             UseShellExecute = false,
@@ -443,93 +541,94 @@ public sealed class FpsMonitor : IDisposable
             info.ArgumentList.Add(arg);
         }
 
-        try
+        var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+        process.OutputDataReceived += OnOutputLine;
+        process.ErrorDataReceived += (_, _) => { };   // drain, or the pipe can fill and block
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        lock (_lock)
         {
-            lock (_lock)
+            if (generation == _generation)
             {
-                _chains.Clear();
-                _swapChainColumn = -1;
-                _frameTimeColumn = -1;
-                _latencyColumn = -1;
-                _lastFrameAt = DateTime.UtcNow;
+                _process = process;
+                _exePath = exe;
+                _starting = false;
+                return;
             }
-
-            var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-            process.OutputDataReceived += OnOutputLine;
-            process.ErrorDataReceived += (_, _) => { };   // drain, or the pipe can fill and block
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            _process = process;
-            _exePath = exe;
-            TargetPid = pid;
-            Error = null;
         }
-        catch (Exception ex)
-        {
-            Error = ex.Message;
-            _process = null;
-            TargetPid = null;
-        }
+
+        // Overtaken while it started - the game was left, or another took
+        // over. Shut down here, before anything later on the queue can start
+        // a run under the same session name.
+        StopRun(process, exe);
     }
-
-    /// <summary>
-    /// The background shutdown of the last PresentMon run, if one is still
-    /// going. Only touched from the UI thread.
-    /// </summary>
-    private System.Threading.Tasks.Task? _stopping;
 
     public void Stop()
     {
-        var process = _process;
-        string? exe = _exePath;
-        _process = null;
-        TargetPid = null;
-
-        // Unhooked before the chains are cleared, so lines PresentMon prints
-        // while it shuts down can't refill them - those frames would otherwise
-        // be counted into the session after it was meant to have stopped.
-        if (process is not null)
-            process.OutputDataReceived -= OnOutputLine;
-
-        // Forgotten now rather than when the process is gone: the caller has
-        // already taken SessionTotals, and Current must stop reporting this
-        // run straight away.
+        Process? process;
+        string? exe;
         lock (_lock)
+        {
+            // A start still queued or under way sees this and gives up.
+            _generation++;
+
+            process = _process;
+            exe = _exePath;
+            _process = null;
+            _exePath = null;
+
+            // Forgotten now rather than when the process is gone: the caller
+            // has already taken SessionTotals, and Current must stop reporting
+            // this run straight away.
             _chains.Clear();
+        }
+
+        TargetPid = null;
+        _starting = false;
 
         if (process is null)
             return;
 
-        // Off the UI thread. A clean shutdown starts a helper process and waits
-        // for two processes to exit - up to five seconds - and this runs every
-        // time you tab out of an exclusive-fullscreen game. Done inline, it
-        // froze the widget and every DeskMon window for that long.
-        _stopping = System.Threading.Tasks.Task.Run(() =>
+        // Off the UI thread, on the same queue as the starts. A clean shutdown
+        // starts a helper process and waits for two processes to exit - up to
+        // five seconds - and this runs every time you tab out of an
+        // exclusive-fullscreen game.
+        _lifecycle = _lifecycle.ContinueWith(_ => StopRun(process, exe),
+                                             System.Threading.CancellationToken.None,
+                                             System.Threading.Tasks.TaskContinuationOptions.None,
+                                             System.Threading.Tasks.TaskScheduler.Default);
+    }
+
+    /// <summary>Ends one PresentMon run and lets go of it. On the lifecycle queue.</summary>
+    private void StopRun(Process process, string? exe)
+    {
+        // Unhooked first, so lines PresentMon prints while it shuts down can't
+        // refill the chains - those frames would otherwise be counted into the
+        // session after it was meant to have stopped.
+        process.OutputDataReceived -= OnOutputLine;
+
+        try
         {
-            try
-            {
-                // Usually already gone: --terminate_on_proc_exit makes
-                // PresentMon close itself the moment the game does, which is
-                // the clean path.
-                if (!process.HasExited)
-                    ShutDownCleanly(process, exe);
-            }
-            catch { /* already gone */ }
-            finally
-            {
-                process.Dispose();
-            }
-        });
+            // Usually already gone: --terminate_on_proc_exit makes PresentMon
+            // close itself the moment the game does, which is the clean path.
+            if (!process.HasExited)
+                ShutDownCleanly(process, exe);
+        }
+        catch { /* already gone */ }
+        finally
+        {
+            process.Dispose();
+        }
     }
 
     private void WaitForPendingStop()
     {
-        // Bounded: ShutDownCleanly gives up after five seconds by itself, so
-        // this only guards against something stranger than a slow PresentMon.
-        try { _stopping?.Wait(TimeSpan.FromSeconds(6)); } catch { /* the task swallows its own errors */ }
-        _stopping = null;
+        // Bounded: a start and a stop can both be queued, and ShutDownCleanly
+        // gives up after five seconds by itself - so this only guards against
+        // something stranger than a slow PresentMon.
+        try { _lifecycle.Wait(TimeSpan.FromSeconds(10)); } catch { /* each step swallows its own errors */ }
     }
 
     /// <summary>
@@ -607,9 +706,13 @@ public sealed class FpsMonitor : IDisposable
             frameTime <= 0)
             return;
 
+        // The last chain's key reused when the field is the same one, which it
+        // nearly always is: made fresh, it was a new string for every frame.
         string swapChain = "0";
         if (_swapChainColumn >= 0 && TryGetField(line, _swapChainColumn, out var swapChainText))
-            swapChain = swapChainText.ToString();
+            swapChain = _lastChain is { } last && swapChainText.SequenceEqual(last)
+                ? last
+                : _lastChain = swapChainText.ToString();
 
         lock (_lock)
         {

@@ -756,7 +756,7 @@ public partial class MainWindow : Window
             // value after a game would be the average over the whole session.
             var resumed = _hub;
             _needsPrime = false;   // this is that re-baseline
-            await Task.Run(resumed.Prime);
+            await PrimeAsync(resumed);
             return;
         }
 
@@ -767,7 +767,7 @@ public partial class MainWindow : Window
         {
             _needsPrime = false;
             var resuming = _hub;
-            await Task.Run(resuming.Prime);
+            await PrimeAsync(resuming);
             return;
         }
 
@@ -825,6 +825,25 @@ public partial class MainWindow : Window
                 _trimmed = true;
                 TrimMemory();   // hand back everything JIT and startup needed
             }
+        }
+        finally
+        {
+            _reading = false;
+        }
+    }
+
+    /// <summary>
+    /// Takes a fresh CPU-time baseline, marked as a read in flight. Without
+    /// the mark, the next tick could start a read while this was still on the
+    /// worker - the two share NativeStats' counters, which have no lock, and
+    /// that overlap is the wrong CPU figure the checks in OnTick exist to stop.
+    /// </summary>
+    private async Task PrimeAsync(SensorHub hub)
+    {
+        _reading = true;
+        try
+        {
+            await Task.Run(hub.Prime);
         }
         finally
         {
@@ -997,7 +1016,7 @@ public partial class MainWindow : Window
         // game's own window goes away. Deliberately reached for an excluded app
         // too, or a game that exited behind a fullscreen video would stay in the
         // GAME section until something else happened.
-        if (_inGame && (HasGameExited() || !TrackedWindowStillFullscreen()))
+        if (_inGame && (HasGameExited() || !TrackedWindowStillFullscreen(foreground.IsFullscreen)))
             StopTrackingGame();
     }
 
@@ -1070,7 +1089,12 @@ public partial class MainWindow : Window
     /// When the window can't be inspected the answer is "yes": dropping a real
     /// game by mistake is worse than keeping it a little too long.
     /// </summary>
-    private bool TrackedWindowStillFullscreen()
+    /// <param name="foregroundFullscreen">
+    /// What this tick's ForegroundState.Inspect found - passed in rather than
+    /// inspected again, which looked the whole screen over twice a tick while
+    /// tabbed out of a game.
+    /// </param>
+    private bool TrackedWindowStillFullscreen(bool foregroundFullscreen)
     {
         if (_gameProcess is null)
             return true;
@@ -1092,7 +1116,7 @@ public partial class MainWindow : Window
             // Exclusive-fullscreen games still report a window covering the
             // monitor, so this holds for them too.
             return ForegroundState.IsFullscreenLike(window)
-                   || ForegroundState.IsFullscreenAppActive(_handle);
+                   || foregroundFullscreen;
         }
         catch
         {
@@ -2270,6 +2294,65 @@ public partial class MainWindow : Window
         MenuLocked.IsChecked = _settings.Locked;
     }
 
+    /// <summary>
+    /// A program in the RAM or SWAP list: a menu of its own with End, so the
+    /// widget that named the culprit can deal with it without Task Manager.
+    /// A sensor or drive row has no Key and gets the widget's menu as before.
+    ///
+    /// Two clicks, like the session history's DELETE: the first turns the
+    /// item into "Click again…" in the warning colour, so ending thirty
+    /// browser processes is a decision, not a slip of the right hand. The
+    /// dark menu's items have no submenus, which is why not "End > Yes".
+    /// </summary>
+    private void DetailRow_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: DetailRow { Key: { } name } } strip)
+            return;
+
+        // Handled, so the panel's own menu doesn't open on top of this one.
+        e.Handled = true;
+
+        string? why = MemoryUsers.WhyNotEnd(name, out int count);
+        string what = count > 1 ? $"End {name} ({count} processes)" : $"End {name}";
+
+        var menu = new System.Windows.Controls.ContextMenu
+        {
+            Style = (Style)FindResource("DarkContextMenu"),
+            PlacementTarget = strip,
+        };
+
+        var end = new System.Windows.Controls.MenuItem
+        {
+            Header = why is null ? what : $"{what} - {why}",
+            IsEnabled = why is null,
+            StaysOpenOnClick = true,
+        };
+
+        bool armed = false;
+        end.Click += (_, _) =>
+        {
+            if (!armed)
+            {
+                armed = true;
+                end.Header = count > 1
+                    ? $"Click again to end all {count} {name} processes"
+                    : $"Click again to end {name}";
+                end.Foreground = _theme.Warn;
+                return;
+            }
+
+            menu.IsOpen = false;
+
+            // Unsaved work in it is lost, which the second click has already
+            // accepted; only a failure is worth a notification.
+            if (MemoryUsers.End(name) is { } error)
+                _tray?.Notify("DeskMon", $"Couldn't end {name}: {error}", warning: true);
+        };
+
+        menu.Items.Add(end);
+        menu.IsOpen = true;
+    }
+
     /// <summary>Through the tray, so its own item turns into "Show widget".</summary>
     private void MenuHideWidget_Click(object sender, RoutedEventArgs e) => _tray?.HideWidget();
 
@@ -2880,10 +2963,26 @@ public partial class MainWindow : Window
 
         // Let go of the single-instance lock first, or the replacement sees
         // this process still holding it and exits immediately.
-        (Application.Current as App)?.ReleaseSingleInstanceLock();
+        var app = Application.Current as App;
+        app?.ReleaseSingleInstanceLock();
+
+        // Started before anything is closed: if Windows won't start it, this
+        // copy carries on as it was - lock taken back, windows still its own -
+        // rather than running on half shut down, with a second copy free to
+        // start beside it.
+        try
+        {
+            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _restarting = false;
+            app?.TakeSingleInstanceLock();
+            _tray?.Notify("DeskMon", "Couldn't restart to reload the settings: " + ex.Message, warning: true);
+            return;
+        }
 
         PrepareForShutdown();
-        Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
         Application.Current.Shutdown();
     }
 
