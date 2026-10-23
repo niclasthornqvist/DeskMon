@@ -255,7 +255,8 @@ public partial class MainWindow : Window
         // DeskMon's own mark behind the readings, over the whole widget. How
         // strongly is a setting (WidgetBackdrop): the numbers are what the
         // widget is for, and it sits over games. Fades in each time it shows.
-        _backdrop = new Banner(Panel, height: null, strength: _settings.WidgetBackdrop);
+        // Drifting at a fixed size, so it doesn't rescale with the widget.
+        _backdrop = new Banner(Panel, height: null, strength: _settings.WidgetBackdrop, drift: true);
         _backdrop.Show(GameArt.Motif.DeskMon);
 
         Panel.Background = _theme.Background;
@@ -419,6 +420,7 @@ public partial class MainWindow : Window
     private void RefreshVisibleItems()
     {
         _visibleItems.Clear();
+        _spareItems.Clear();
 
         // Remembered so ApplySettings can tell whether the list needs redoing.
         _visibilityApplied = VisibilitySettings();
@@ -451,13 +453,31 @@ public partial class MainWindow : Window
             // A detail row hides with its metric's arrow as well as with the
             // section, so folding a section also hides anything unfolded in it.
             if (entry.DetailOf is { IsExpanded: false })
+            {
+                // Side by side, kept as a spare instead: its column keeps the
+                // room for it, so unfolding the list doesn't widen the strip
+                // and push every column after it along. Stacked, the width is
+                // pinned to the unfolded layout already - see LockPanelWidth.
+                if (Horizontal)
+                {
+                    _spareItems.Add(entry.Item);
+                    _visibleItems.Add(entry.Item);
+                }
                 continue;
+            }
 
             _visibleItems.Add(entry.Item);
         }
 
         ResizeToContent();
     }
+
+    /// <summary>
+    /// Folded rows in the list only to hold their column's width - see
+    /// <see cref="SectionsPanel.IsSpare"/>. Compared by reference: two rows
+    /// can be equal in every value they show.
+    /// </summary>
+    private readonly HashSet<object> _spareItems = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// Makes the window re-fit its content. SizeToContent doesn't always
@@ -542,6 +562,8 @@ public partial class MainWindow : Window
     private void SectionsPanel_Loaded(object sender, RoutedEventArgs e)
     {
         _sectionsPanel = sender as SectionsPanel;
+        if (_sectionsPanel is not null)
+            _sectionsPanel.IsSpare = item => item is not null && _spareItems.Contains(item);
         ApplyLayoutMode();
     }
 
@@ -1165,6 +1187,7 @@ public partial class MainWindow : Window
         }
 
         _inGame = true;
+        _backdrop.Drifting = false;   // each step redraws the whole widget - not worth it over a game
         ApplyOpacity();   // fade back, so the panel stops competing with the game
         ApplyLayout();    // the game's folded sections, if it has its own
 
@@ -1279,6 +1302,7 @@ public partial class MainWindow : Window
         _gameName = null;
         _gamePid = 0;
         _inGame = false;
+        _backdrop.Drifting = true;
         _gameListed = false;
         _namedPid = 0;   // the game may have exited, freeing its pid - see UpdateGameState
         UpdateGameTitle();

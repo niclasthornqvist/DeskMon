@@ -542,9 +542,15 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="Last session"
-                                   FontWeight="SemiBold" Margin="0,0,12,0" />
-                        <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" />
+                        <!-- Heading and summary both fold the readings below:
+                             folded by default so the notes, not the numbers,
+                             get the room. The arrow is set in code. -->
+                        <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="▸ Last session"
+                                   FontWeight="SemiBold" Margin="0,0,12,0" Cursor="Hand"
+                                   ToolTip="Click to show or hide the readings"
+                                   MouseLeftButtonUp="SessionFold_Click" />
+                        <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" Cursor="Hand"
+                                   MouseLeftButtonUp="SessionFold_Click" />
                         <!-- A toggle like the widget's LOG, with the same clock:
                              it opens the same window, the next click puts it
                              away, and it is lit blue while it is open - LOG and
@@ -573,7 +579,7 @@
                          the first of each line - CPU, CPU, FPS - sits under
                          the others, and so on along the line. Its first column
                          is the heading's, through SessionName above. -->
-                    <Grid x:Name="SessionPeaks" Margin="0,4,0,0" />
+                    <Grid x:Name="SessionPeaks" Margin="0,4,0,0" Visibility="Collapsed" />
                 </StackPanel>
             </Border>
 

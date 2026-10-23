@@ -285,6 +285,18 @@
                                      reserved for descenders the heading never uses.
                                      Centring both boxes alone leaves the icon looking
                                      low. -->
+                                <!-- The accent and the icon share the first column,
+                                     so the title starts after both. The accent is a
+                                     short gradient bar before the icon - see
+                                     SectionRow.AccentBrush - lifted 2px like the icon
+                                     so the two sit level. -->
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border Width="3" Height="{Binding AccentHeight}"
+                                        CornerRadius="1.5"
+                                        Margin="0,0,6,2"
+                                        VerticalAlignment="Center"
+                                        Background="{Binding AccentBrush}"
+                                        Visibility="{Binding AccentVisibility}" />
                                 <Viewbox Grid.Column="0"
                                          Width="{Binding IconSize}" Height="{Binding IconSize}"
                                          Visibility="{Binding IconVisibility}"
@@ -299,6 +311,7 @@
                                               StrokeLineJoin="Round" />
                                     </Canvas>
                                 </Viewbox>
+                                </StackPanel>
 
                                 <!-- The game section's title carries the game's name,
                                      so it needs the same trimming guard as the header.
@@ -397,28 +410,67 @@
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal"
                                         HorizontalAlignment="Center">
-                            <TextBlock Text="{Binding Value}"
-                                       Width="{Binding ValueWidth}"
+                            <!-- Tabular digits, every one the same width, so a
+                                 right-aligned value doesn't shuffle sideways as
+                                 a 1 becomes an 8. -->
+                            <!-- MinWidth, not Width: a value wider than the
+                                 setting - "4850 MHz" under CPU - used to spill out
+                                 of its box over the bar and past the column's
+                                 edge. Now it widens the row instead. -->
+                            <TextBlock x:Name="ValueText"
+                                       Text="{Binding Value}"
+                                       MinWidth="{Binding ValueWidth}"
                                        TextAlignment="Right"
                                        FontWeight="SemiBold"
+                                       Typography.NumeralAlignment="Tabular"
                                        Foreground="{Binding ValueBrush}" />
 
-                            <Border Width="{Binding TrackWidth}"
-                                    Visibility="{Binding BarVisibility}"
-                                    Height="{Binding TrackHeight}"
-                                    Margin="10,0,0,0"
-                                    VerticalAlignment="Center"
-                                    CornerRadius="{Binding BarCorner}"
-                                    ClipToBounds="True"
-                                    Background="{Binding TrackBrush}">
-                                <!-- BarWidth is how much of the track is filled,
-                                     from the reading; BarTrackWidth in settings
-                                     is the track it is filled against. -->
+                            <!-- The track and the peak marker share this grid; the
+                                 marker sits outside the track's mask, so on a
+                                 segmented bar it is never lost in a gap, and its
+                                 negative margins let it stand a little proud of
+                                 the bar. -->
+                            <Grid Width="{Binding TrackWidth}"
+                                  Visibility="{Binding BarVisibility}"
+                                  Height="{Binding TrackHeight}"
+                                  Margin="10,0,0,0"
+                                  VerticalAlignment="Center">
+                                <!-- OpacityMask is null on a rounded bar and the
+                                     block pattern on a segmented one, cutting the
+                                     track and its fill alike. -->
+                                <Border CornerRadius="{Binding BarCorner}"
+                                        ClipToBounds="True"
+                                        OpacityMask="{Binding BarMask}"
+                                        Background="{Binding TrackBrush}">
+                                    <!-- BarWidth is how much of the track is filled,
+                                         from the reading; BarTrackWidth in settings
+                                         is the track it is filled against. -->
+                                    <Border HorizontalAlignment="Left"
+                                            Width="{Binding BarWidth}"
+                                            CornerRadius="{Binding BarCorner}"
+                                            Background="{Binding BarBrush}" />
+                                </Border>
+
                                 <Border HorizontalAlignment="Left"
-                                        Width="{Binding BarWidth}"
-                                        CornerRadius="{Binding BarCorner}"
-                                        Background="{Binding BarBrush}" />
-                            </Border>
+                                        Width="2"
+                                        CornerRadius="1"
+                                        Margin="{Binding PeakMarkerMargin}"
+                                        Background="{Binding PeakMarkerBrush}"
+                                        Visibility="{Binding PeakMarkerVisibility}" />
+                            </Grid>
+
+                            <!-- An empty twin of the value on the bar's right.
+                                 Without it the value and bar were centred as one,
+                                 which put the bar itself right of centre by half
+                                 the value's width; with the same width on both
+                                 sides the bar is the centre. Only beside a bar, so
+                                 a row without one still centres its value. Bound
+                                 to the value's actual width rather than the
+                                 setting, so a wider value is still balanced and
+                                 the bar stays in the middle on every row. -->
+                            <Border Width="{Binding ActualWidth, ElementName=ValueText}"
+                                    Visibility="{Binding BarVisibility}"
+                                    Margin="10,0,0,0" />
                             </StackPanel>
 
                             <!-- The worst reading this row has seen. Dim and
@@ -428,12 +480,17 @@
                                  row's right edge whatever the label side's width. -->
                             <StackPanel Grid.Column="2" Orientation="Horizontal"
                                         HorizontalAlignment="Right">
+                            <!-- MinWidth for the same reason as the value: a
+                                 long peak ("↑4850") ran past the column's edge
+                                 into the next section. The shared side column
+                                 then widens every row's peaks alike. -->
                             <TextBlock Text="{Binding Peak}"
                                        Visibility="{Binding PeakVisibility}"
-                                       Width="{Binding PeakWidth}"
+                                       MinWidth="{Binding PeakWidth}"
                                        Margin="6,0,0,0"
                                        TextAlignment="Right"
                                        VerticalAlignment="Center"
+                                       Typography.NumeralAlignment="Tabular"
                                        Foreground="{Binding PeakBrush}"
                                        FontSize="{Binding PeakFontSize}"
                                        ToolTip="Worst reading since the game started or the peaks were reset" />
@@ -495,10 +552,17 @@
                                        Foreground="{Binding LabelBrush}"
                                        FontSize="{Binding FontSize}" />
 
+                            <!-- MinWidth, not Width: the list's values carry a
+                                 decimal and a unit ("4850.0 MHz"), often wider
+                                 than the row's value column. A fixed width let
+                                 them spill past the column into the next section
+                                 side by side; this way the column widens to fit.
+                                 Still right-aligned, so their ends line up. -->
                             <TextBlock Grid.Column="1"
                                        Text="{Binding Value}"
-                                       Width="{Binding ValueWidth}"
+                                       MinWidth="{Binding ValueWidth}"
                                        Margin="8,0,0,0"
+                                       Typography.NumeralAlignment="Tabular"
                                        TextAlignment="Right"
                                        Foreground="{Binding ValueBrush}"
                                        FontSize="{Binding FontSize}" />

@@ -86,6 +86,29 @@ public sealed class UiTheme
         Normal = Make(settings.NormalColor, "#FF4ADE80");
         Warn = Make(settings.WarnColor, "#FFFBBF24");
         Crit = Make(settings.CritColor, "#FFF87171");
+
+        // The same gradient ending in amber or red, for a reading past its
+        // warning or critical level. With one gradient for every reading, the
+        // bar stayed calm next to a red number - the start colour is kept so
+        // the bar still looks like itself, only its tip gives the alarm.
+        Point from = new(0, 0), to = new(Math.Max(1, settings.BarTrackWidth), 0);
+        BarGradientWarn = settings.BarGradient
+            ? MakeGradient(BarGradientStart, Parse(settings.WarnColor, "#FFFBBF24"), from, to)
+            : null;
+        BarGradientCrit = settings.BarGradient
+            ? MakeGradient(BarGradientStart, Parse(settings.CritColor, "#FFF87171"), from, to)
+            : null;
+
+        // Top to bottom over the heading's accent, relative so it fits
+        // whatever height the font gives it. The gradient's colours even with
+        // BarGradient off: they are the theme's accent pair either way.
+        var accent = new LinearGradientBrush(BarGradientStart, BarGradientEnd, 90);
+        accent.Freeze();
+        SectionAccent = accent;
+
+        BarMask = string.Equals(settings.BarStyle, "segmented", StringComparison.OrdinalIgnoreCase)
+            ? MakeSegments(Math.Max(1, settings.BarTrackWidth), Math.Max(1, settings.BarTrackHeight))
+            : null;
         Unavailable = Make(settings.UnavailableColor, "#FF6B7280");
 
         // The chrome and Changed only when the look really changed: Apply runs
@@ -315,6 +338,54 @@ public sealed class UiTheme
     /// <summary>The gradient's two ends by value, for the sessions chart, which lays it out per bar.</summary>
     public Color BarGradientStart { get; private set; }
     public Color BarGradientEnd { get; private set; }
+
+    /// <summary>The short bar before each section heading.</summary>
+    public Brush SectionAccent { get; private set; } = Brushes.Transparent;
+
+    /// <summary>The gradient ending in the warning or critical colour; null when BarGradient is off.</summary>
+    public Brush? BarGradientWarn { get; private set; }
+    public Brush? BarGradientCrit { get; private set; }
+
+    /// <summary>
+    /// Cuts the bar into blocks when BarStyle is segmented, null for a smooth
+    /// one. A mask over the track and its fill together, so both are blocks
+    /// and the gaps line up.
+    /// </summary>
+    public Brush? BarMask { get; private set; }
+
+    /// <summary>How many blocks a segmented bar has, whatever its length.</summary>
+    public const int BarSegments = 12;
+
+    /// <summary>
+    /// A tiled mask of <see cref="BarSegments"/> blocks with a 2px gap. Built
+    /// once per settings change and shared by every row - one frozen brush
+    /// costs nothing per tick, unlike twelve elements on each row.
+    /// </summary>
+    private static Brush MakeSegments(double width, double height)
+    {
+        double pitch = width / BarSegments;
+        double gap = pitch > 5 ? 2 : 1;
+        double corner = Math.Min(2, height / 4);
+
+        // The transparent rectangle spans the whole tile, so the drawing's
+        // bounds are the pitch and the gap is kept rather than stretched away.
+        var tile = new DrawingGroup();
+        tile.Children.Add(new GeometryDrawing(Brushes.Transparent, null, new RectangleGeometry(new Rect(0, 0, pitch, height))));
+        tile.Children.Add(new GeometryDrawing(Brushes.Black, null,
+            new RectangleGeometry(new Rect(0, 0, Math.Max(1, pitch - gap), height), corner, corner)));
+
+        var brush = new DrawingBrush(tile)
+        {
+            TileMode = TileMode.Tile,
+            Viewport = new Rect(0, 0, pitch, height),
+            ViewportUnits = BrushMappingMode.Absolute,
+            Stretch = Stretch.None,
+            AlignmentX = AlignmentX.Left,
+            AlignmentY = AlignmentY.Top,
+        };
+        brush.Freeze();
+        return brush;
+    }
 
     /// <summary>The groove behind the bar.</summary>
     public Brush BarTrack { get; private set; } = Brushes.Transparent;

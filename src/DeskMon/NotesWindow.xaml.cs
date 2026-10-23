@@ -2386,6 +2386,20 @@ public partial class NotesWindow : PanelWindow
         SessionPeaks.ToolTip = "The worst each reading reached\n↑ highest   ↓ lowest";
     }
 
+    /// <summary>
+    /// Folds or unfolds the last session's readings. Folded by default, so the
+    /// notes are what the window is about and the card is a single line; it
+    /// stays as left while the window is open, but isn't saved - each start
+    /// begins on the notes again.
+    /// </summary>
+    private void SessionFold_Click(object sender, MouseButtonEventArgs e)
+    {
+        bool open = SessionPeaks.Visibility != Visibility.Visible;
+        SessionPeaks.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        SessionHeading.Text = (open ? "▾ " : "▸ ") + "Last session";
+        e.Handled = true;
+    }
+
     /// <summary>The ALL SESSIONS button: the widget owns that window, so it is asked to open or close it.</summary>
     public event Action<string>? SessionsRequested;
 

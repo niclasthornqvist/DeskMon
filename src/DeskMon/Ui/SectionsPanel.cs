@@ -47,6 +47,31 @@ internal sealed class SectionsPanel : Panel
         set => SetValue(SeparatorBrushProperty, value);
     }
 
+    /// <summary>
+    /// Rows that are in the list only to keep their column wide enough for
+    /// them - a folded sensor list. In columns they count towards the width
+    /// and nothing else: no height, not drawn. So unfolding a list fills room
+    /// that was already there, instead of widening the strip and shifting
+    /// every column to its right. Ignored when stacked, where the window's
+    /// width is pinned another way.
+    /// </summary>
+    public Func<object?, bool>? IsSpare { get; set; }
+
+    private bool Spare(UIElement child)
+        => Columns && IsSpare is { } spare && spare((child as FrameworkElement)?.DataContext);
+
+    /// <summary>
+    /// Hidden rather than collapsed: a hidden element is still measured, which
+    /// is all a spare row is here for. Set only on a change, since each set
+    /// asks for another layout pass.
+    /// </summary>
+    private static void Show(UIElement child, bool shown)
+    {
+        var wanted = shown ? Visibility.Visible : Visibility.Hidden;
+        if (child.Visibility != wanted)
+            child.Visibility = wanted;
+    }
+
     /// <summary>The space between two columns, with the line down its middle.</summary>
     public const double ColumnGap = 22;
 
@@ -76,6 +101,7 @@ internal sealed class SectionsPanel : Panel
             double width = 0, height = 0;
             foreach (UIElement child in InternalChildren)
             {
+                Show(child, true);   // a row left hidden by the side-by-side layout
                 child.Measure(new Size(available.Width, double.PositiveInfinity));
                 width = Math.Max(width, child.DesiredSize.Width);
                 height += child.DesiredSize.Height;
@@ -92,9 +118,12 @@ internal sealed class SectionsPanel : Panel
             double width = 0, height = 0;
             foreach (var child in column)
             {
+                bool spare = Spare(child);
+                Show(child, !spare);
                 child.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
                 width = Math.Max(width, child.DesiredSize.Width);
-                height += child.DesiredSize.Height;
+                if (!spare)
+                    height += child.DesiredSize.Height;
             }
             total += width;
             tallest = Math.Max(tallest, height);
@@ -105,6 +134,25 @@ internal sealed class SectionsPanel : Panel
     }
 
     protected override Size ArrangeOverride(Size final)
+    {
+        // Kept to compare against: the lines are drawn in OnRender, which WPF
+        // only re-runs when the panel's own size changes. A column widening
+        // inside an unchanged panel moved the columns but left the line where
+        // the old column ended - over the next column's values.
+        var before = _gapCentres.ToArray();
+        try
+        {
+            return Place(final);
+        }
+        finally
+        {
+            if (!before.AsSpan().SequenceEqual(_gapCentres.ToArray()))
+                InvalidateVisual();
+        }
+    }
+
+    /// <summary>Arranges the rows and records where the lines between columns go.</summary>
+    private Size Place(Size final)
     {
         _gapCentres.Clear();
 
@@ -129,11 +177,14 @@ internal sealed class SectionsPanel : Panel
 
             // Every row the column's width, so the hover strips and click
             // areas reach across it as they reach across the stacked panel.
+            // A spare row is placed where it would be but takes no height, so
+            // the row after it lands on top - harmless, since it is hidden.
             double y = 0;
             foreach (var child in columns[i])
             {
                 child.Arrange(new Rect(x, y, width, child.DesiredSize.Height));
-                y += child.DesiredSize.Height;
+                if (!Spare(child))
+                    y += child.DesiredSize.Height;
             }
 
             x += width;

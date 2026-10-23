@@ -28,6 +28,21 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.63.0", "2026-10-22",
+            "Faster startup: DeskMon.exe ships precompiled, so it no longer compiles its own code each time it starts",
+            "Build: leftover DeskMon_*_wpftmp.csproj files are deleted after a build once 2 or more have piled up",
+            "Notes: the last session is folded to one line, so the notes get the room - click it to show the readings",
+            "Widget: the bars sit in the middle of the row, not right of it - the value beside them is balanced by the same space on the other side",
+            "Widget: segmented bars - Bar style in settings cuts each bar into blocks, like an LED meter",
+            "Widget: a thin tick on each bar marks how high the peak reached",
+            "Widget: gradient bars turn amber and red at the tip with the reading, instead of staying calm beside a red number",
+            "Widget: each section heading starts with a short bar in the gradient's colours",
+            "Widget: values and peaks keep their digits the same width, so they no longer shift sideways as they change",
+            "Fixed: long values and peaks (like CLK's 4850 MHz) ran past the column's edge into the next section - the row now widens to fit them",
+            "Widget: the DeskMon picture behind the readings is zoomed out, keeps its size when the widget changes width, and drifts slowly - paused while a game runs, so it costs nothing over the game",
+            "Widget side by side: unfolding a sensor list no longer widens the strip and shifts the columns - each column keeps room for its lists",
+            "Fixed: with the sections side by side, the line between two columns stayed where a column used to end after it widened, cutting through its values"),
+
         new("1.62.0", "2026-10-22",
             "Notes: only the pictures on or near the screen are loaded sharp - notes with many screenshots use far less memory, and a picture scrolled to sharpens a moment later",
             "Lighter: only the last 8 games' banners are kept in memory, decoded smaller, and online art and icon look-ups no longer hold up the widget's readings",

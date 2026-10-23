@@ -131,18 +131,59 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// <summary>
     /// Half the thickness, so the ends stay semicircular whatever height the
     /// bar is given. A fixed radius would square the ends off as it grew.
+    /// Square on a segmented bar: there the mask rounds each block, and a pill's
+    /// round ends would cut most of the first and last block away.
     /// </summary>
-    public CornerRadius BarCorner => new(TrackHeight / 2);
+    public CornerRadius BarCorner => _theme.BarMask is null ? new(TrackHeight / 2) : default;
 
     /// <summary>The groove's colour.</summary>
     public Brush TrackBrush => _theme.BarTrack;
 
+    /// <summary>Cuts the bar into blocks when BarStyle is segmented - see <see cref="UiTheme.BarMask"/>.</summary>
+    public Brush? BarMask => _theme.BarMask;
+
     /// <summary>
-    /// The fill: the gradient when BarGradient is on. Otherwise it follows the
-    /// value's colour unless BarColor pins it, so the bar reddens with the
-    /// number rather than needing to be read separately.
+    /// The fill: the gradient when BarGradient is on, its end turned amber or
+    /// red with the value - one gradient for every level left a calm bar beside
+    /// a red number. Otherwise it follows the value's colour unless BarColor
+    /// pins it, so the bar reddens with the number rather than needing to be
+    /// read separately.
     /// </summary>
-    public Brush BarBrush => _theme.BarGradient ?? _theme.Bar ?? _valueBrush;
+    public Brush BarBrush
+        => _theme.BarGradient is { } calm
+            ? (ReferenceEquals(_valueBrush, _theme.Crit) ? _theme.BarGradientCrit ?? calm
+               : ReferenceEquals(_valueBrush, _theme.Warn) ? _theme.BarGradientWarn ?? calm
+               : calm)
+            : _theme.Bar ?? _valueBrush;
+
+    /// <summary>
+    /// Where the peak reached, as a tick on the bar: 2px wide, centred on the
+    /// spot, and kept inside the track so a full peak still shows.
+    /// </summary>
+    public Thickness PeakMarkerMargin
+        => _worst is double worst
+            ? new Thickness(Math.Clamp(Fraction(worst) * TrackWidth - 1, 0, Math.Max(0, TrackWidth - 2)), -2, 0, -2)
+            : default;
+
+    /// <summary>
+    /// Only once there is a peak, with the bar showing and the setting on. Also
+    /// hidden at the very start of the track, where it would only sit on the
+    /// empty end and look like a stray mark.
+    /// </summary>
+    public Visibility PeakMarkerVisibility
+        => _settings.ShowPeakMarker && _settings.ShowBars && _worst is double worst && Fraction(worst) > 0.01
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    /// <summary>The heading colour: brighter than the track and either fill, so the tick stands out on both.</summary>
+    public Brush PeakMarkerBrush => _theme.Section;
+
+    /// <summary>A reading's share of the bar, 0 to 1.</summary>
+    private double Fraction(double value)
+    {
+        double span = _metric.Max - _metric.Min;
+        return span > 0 ? Math.Clamp((value - _metric.Min) / span, 0, 1) : 0;
+    }
 
     public Visibility BarVisibility
         => _settings.ShowBars ? Visibility.Visible : Visibility.Collapsed;
@@ -201,6 +242,14 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     {
         _worst = null;
         Peak = string.Empty;
+        NotePeakMarker();
+    }
+
+    /// <summary>The marker is worked out from _worst, so it has to be told when that moves.</summary>
+    private void NotePeakMarker()
+    {
+        Set(nameof(PeakMarkerMargin));
+        Set(nameof(PeakMarkerVisibility));
     }
 
     /// <summary>Stable id for settings.json, e.g. "Temperature/CPU".</summary>
@@ -401,11 +450,16 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             _worst = value;
             Peak = (_metric.Invert ? "↓" : "↑")
                    + value.ToString(_metric.Format, CultureInfo.InvariantCulture);
+            NotePeakMarker();
         }
 
-        double span = _metric.Max - _metric.Min;
-        double fraction = span > 0 ? (value - _metric.Min) / span : 0;
-        BarWidth = Math.Clamp(fraction, 0, 1) * TrackWidth;
+        // A segmented bar fills whole blocks: a partly lit block reads as a
+        // rendering fault rather than a reading. Rounded to the nearest, so
+        // the bar is never more than half a block off.
+        double fraction = Fraction(value);
+        if (_theme.BarMask is not null)
+            fraction = Math.Round(fraction * UiTheme.BarSegments) / UiTheme.BarSegments;
+        BarWidth = fraction * TrackWidth;
 
         ValueBrush = _metric.Exceeds(value, _metric.Crit) ? _theme.Crit
                    : _metric.Exceeds(value, _metric.Warn) ? _theme.Warn

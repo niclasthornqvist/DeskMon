@@ -54,9 +54,16 @@ public sealed class Banner
     /// for the widget, whose height changes as its sections fold.
     /// </param>
     /// <param name="strength">How strongly it shows at the top: enough to be seen, faint enough that the text over it reads.</param>
-    public Banner(Border panel, double? height, double strength = 0.3)
+    /// <param name="drift">
+    /// For the widget: the picture at a fixed size, tiled, and drifting slowly
+    /// - see <see cref="Brush"/>. Stretched to fill, as the windows have it,
+    /// it was zoomed right in on the wide strip and jumped to a new zoom
+    /// whenever a list unfolded and the widget changed width.
+    /// </param>
+    public Banner(Border panel, double? height, double strength = 0.3, bool drift = false)
     {
         _strength = strength;
+        _drift = drift;
 
         var mask = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
         mask.GradientStops.Add(new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0));
@@ -209,8 +216,81 @@ public sealed class Banner
         _layer.Opacity = 0;
     }
 
-    private static ImageBrush Brush(ImageSource picture)
-        => new(picture) { Stretch = Stretch.UniformToFill, AlignmentY = AlignmentY.Center };
+    private readonly bool _drift;
+
+    /// <summary>How wide one copy of the picture is when drifting, in pixels - half its own size, so a wide strip shows much more of it than a stretched fill did.</summary>
+    private const double DriftWidth = 300;
+
+    /// <summary>
+    /// How long one full loop of the drift takes. Slow enough to be noticed
+    /// only when you look for it - a moving picture behind the numbers must
+    /// never pull the eye away from them.
+    /// </summary>
+    private static readonly TimeSpan DriftLoop = TimeSpan.FromMinutes(4);
+
+    private ImageBrush Brush(ImageSource picture)
+    {
+        if (!_drift)
+            return new(picture) { Stretch = Stretch.UniformToFill, AlignmentY = AlignmentY.Center };
+
+        // Fixed in pixels rather than relative to the widget, so the picture
+        // keeps its size and place when the widget changes width. Tiled with
+        // every other copy mirrored, so the copies meet without a seam and
+        // the strip is covered however wide it gets.
+        double width = DriftWidth;
+        double height = picture.Width > 0 ? DriftWidth * picture.Height / picture.Width : DriftWidth;
+        var brush = new ImageBrush(picture)
+        {
+            Stretch = Stretch.Fill,
+            TileMode = TileMode.FlipXY,
+            ViewportUnits = BrushMappingMode.Absolute,
+            Viewport = new Rect(0, 0, width, height),
+        };
+
+        // Two copies along and down is where the mirrored pattern repeats, so
+        // the loop starts again on the same picture and never visibly jumps.
+        // Ten frames a second: the movement is under 4 px a second, so more
+        // would only redraw the widget - which sits over games - for nothing.
+        var loop = new RectAnimation(new Rect(0, 0, width, height),
+                                     new Rect(-2 * width, -2 * height, width, height), DriftLoop)
+        {
+            RepeatBehavior = RepeatBehavior.Forever,
+        };
+        Timeline.SetDesiredFrameRate(loop, 10);
+
+        // Through a clock rather than BeginAnimation, so it can be paused in
+        // place during a game and carry on from the same spot afterwards.
+        _driftClock = loop.CreateClock();
+        brush.ApplyAnimationClock(TileBrush.ViewportProperty, _driftClock);
+        if (!_drifting)
+            _driftClock.Controller?.Pause();
+        return brush;
+    }
+
+    private AnimationClock? _driftClock;
+    private bool _drifting = true;
+
+    /// <summary>
+    /// Whether the drift moves. Off while a game runs: every step redraws the
+    /// whole see-through widget on the CPU and has the compositor take it
+    /// again, which is cheap on the desktop but not wanted on top of a game.
+    /// Paused rather than stopped, so the picture stays where it was.
+    /// </summary>
+    public bool Drifting
+    {
+        get => _drifting;
+        set
+        {
+            if (_drifting == value)
+                return;
+
+            _drifting = value;
+            if (value)
+                _driftClock?.Controller?.Resume();
+            else
+                _driftClock?.Controller?.Pause();
+        }
+    }
 
     private void FadeIn(TimeSpan? time = null, TimeSpan after = default)
         => _layer.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(_strength, time ?? FadeInTime)

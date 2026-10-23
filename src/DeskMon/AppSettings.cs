@@ -357,6 +357,25 @@ public sealed class AppSettings
     /// </summary>
     public double BarTrackHeight { get; set; } = 6;
 
+    /// <summary>
+    /// "rounded" is one smooth pill; "segmented" cuts the track into blocks
+    /// like an LED meter, which reads at a glance over a busy game and fills a
+    /// block at a time. A string rather than a bool so another style can join.
+    /// </summary>
+    public string BarStyle { get; set; } = "rounded";
+
+    /// <summary>
+    /// A thin tick on the bar where the peak reached, so how high it got is
+    /// seen against the live bar rather than read from the peak figure.
+    /// </summary>
+    public bool ShowPeakMarker { get; set; } = true;
+
+    /// <summary>
+    /// A short bar in the bar gradient's colours before each section heading,
+    /// so the sections are told apart at a glance.
+    /// </summary>
+    public bool SectionAccent { get; set; } = true;
+
     public double LabelWidth { get; set; } = 56;
     public double ValueWidth { get; set; } = 64;
 
@@ -395,8 +414,8 @@ public sealed class AppSettings
     /// <summary>
     /// Fills the widget's bars and the sessions chart with a gradient from
     /// BarGradientStartColor to BarGradientEndColor. Takes over from BarColor
-    /// and the value's colour while on - the number beside the bar still goes
-    /// amber and red.
+    /// and the value's colour while on - but the gradient's end turns amber
+    /// and red with the number, so a hot reading is never a calm-looking bar.
     /// </summary>
     public bool BarGradient { get; set; } = true;
 
@@ -727,6 +746,7 @@ public sealed class AppSettings
 
         FontFamily ??= "Consolas";
         WidgetLayout ??= "vertical";
+        BarStyle ??= "rounded";
         PreferredGpu ??= "auto";
         PresentMonPath ??= string.Empty;
         BarColor ??= string.Empty;

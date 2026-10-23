@@ -139,6 +139,11 @@ public static class SettingsCatalogue
             new Setting("FontSize", "Text size", "Everything else on the widget scales with it.", Slider: new(8, 24, 0.5)),
             new Setting("ShowBars", "Show bars", "A bar beside each reading."),
             new Setting("ShowPeaks", "Show peaks", "The highest reading so far (lowest for FPS), after the bar."),
+            // Beside ShowBars and ShowPeaks, since they change how those look.
+            new Setting("BarStyle", "Bar style", "rounded is one smooth bar. segmented cuts it into blocks, like an LED meter.",
+                        Choices: new[] { "rounded", "segmented" }),
+            new Setting("ShowPeakMarker", "Peak marker on the bar", "A thin tick on the bar where the peak reached."),
+            new Setting("SectionAccent", "Heading accent", "A short bar in the gradient's colours before each section heading."),
             new Setting("ShowHardwareNames", "Show hardware names", "Your CPU and graphics card at the top of the widget.", NeedsReload: true)),
 
         new("Section headings", "Rename the headings on the widget. Leave a box empty for the default name.",
@@ -157,7 +162,7 @@ public static class SettingsCatalogue
             new Setting("HeaderColor", "Hardware names and peaks", ""),
             new Setting("SectionColor", "Headings", "USAGE, TEMPERATURE and GAME."),
             new Setting("SeparatorColor", "Divider lines", "The line between sections."),
-            new Setting("BarGradient", "Gradient bars", "Fill the bars on the widget and in the sessions chart with the gradient below, instead of one colour."),
+            new Setting("BarGradient", "Gradient bars", "Fill the bars on the widget and in the sessions chart with the gradient below, instead of one colour. Its end still turns amber and red with the reading."),
             new Setting("BarGradientStartColor", "Gradient start", "The colour at the empty end of a bar."),
             new Setting("BarGradientEndColor", "Gradient end", "The colour a full bar reaches."),
             new Setting("BarColor", "Bar", "Without the gradient. Leave empty to colour each bar like its reading: green, amber, red."),

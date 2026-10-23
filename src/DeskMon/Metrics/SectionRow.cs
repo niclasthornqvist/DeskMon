@@ -110,6 +110,15 @@ public sealed class SectionRow : INotifyPropertyChanged, IPanelRow
 
     public Brush Brush => _theme.Section;
     public Brush SeparatorBrush => _theme.Separator;
+
+    /// <summary>
+    /// The short bar before the heading, in the bar gradient's colours: ties
+    /// the headings to the bars under them and marks where each section
+    /// starts. As tall as the icon, so the two read as one mark.
+    /// </summary>
+    public Brush AccentBrush => _theme.SectionAccent;
+    public double AccentHeight => IconSize;
+    public Visibility AccentVisibility => _settings.SectionAccent ? Visibility.Visible : Visibility.Collapsed;
     public double FontSize => Math.Max(8, _settings.FontSize - 1.5);
 
     /// <summary>
