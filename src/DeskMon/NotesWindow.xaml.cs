@@ -667,7 +667,32 @@ public partial class NotesWindow : PanelWindow
         }
 
         LoadGame(game);
-        ShowStatus($"Restored the copy from {When(copy.Taken)}  ·  the notes before it are in HISTORY");
+
+        // The copy can show pictures deleted since; their files are put back
+        // from the Recycle Bin, so the pictures window lists them again at full size.
+        var shown = NotesPictures.FileNamesIn(Editor.Document);
+        var back = RecycleBin.Restore(PictureFolder, shown);
+        if (back.Count > 0)
+            PicturesChanged?.Invoke();
+
+        string pictures = back.Count switch
+        {
+            0 => "",
+            1 => "  ·  1 picture back from the Recycle Bin",
+            _ => $"  ·  {back.Count} pictures back from the Recycle Bin",
+        };
+
+        // Said rather than left to be noticed: a picture whose file is gone
+        // from the Recycle Bin too shows in the notes, from their preview,
+        // yet never in the pictures window - which read as the restore failing.
+        int gone = shown.Count(name => !File.Exists(Path.Combine(PictureFolder, name)));
+        if (gone > 0)
+        {
+            string which = gone == 1 ? "1 picture's file is" : $"{gone} pictures' files are";
+            ShowStatus($"Restored the copy from {When(copy.Taken)}{pictures}  ·  {which} gone for good - only the preview in the notes is left", problem: true);
+            return;
+        }
+        ShowStatus($"Restored the copy from {When(copy.Taken)}{pictures}  ·  the notes before it are in HISTORY");
     }
 
     /// <summary>Where the open game's screenshots are kept.</summary>
@@ -691,6 +716,9 @@ public partial class NotesWindow : PanelWindow
     /// unsaved edits included.
     /// </summary>
     public int PictureCountInNotes() => NotesPictures.FileNamesIn(Editor.Document).Count;
+
+    /// <summary>The file names of the screenshots these notes show, as on screen - for telling which have no file left.</summary>
+    public HashSet<string> PictureNamesInNotes() => NotesPictures.FileNamesIn(Editor.Document);
 
     /// <summary>
     /// Deletes a picture: its file to the Recycle Bin, then out of these notes

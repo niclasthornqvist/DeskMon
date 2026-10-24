@@ -38,16 +38,17 @@
 
             <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
 
-            <!-- What DeskMon needs installed, as one line above the history
-                 rather than in it, so it doesn't scroll away. Filled in code:
-                 the status of each is looked up on this machine. -->
-            <StackPanel x:Name="Requirements" DockPanel.Dock="Top" Margin="12,7,12,7" />
+            <!-- The running version, whether a newer one is out, and what
+                 DeskMon needs installed, as cards - the same cards as the
+                 session history's PLAYTIME FROM SAVES and LOGGED (Ui/StatCard),
+                 so the windows read alike. Above the history rather than in it,
+                 so they don't scroll away. Filled in code (ShowCards); wraps in
+                 a narrow window. -->
+            <WrapPanel x:Name="Stats" DockPanel.Dock="Top" Margin="12,8,4,0" />
 
-            <!-- Whether a newer DeskMon is out, from the daily check - or how to
-                 turn the check on. Filled in code (RefreshUpdate); a newer
-                 version is a link to its release page. -->
-            <TextBlock x:Name="UpdateLine" DockPanel.Dock="Top" Margin="12,0,12,7"
-                       TextWrapping="Wrap" />
+            <!-- How to install whatever is missing, one line each - only when
+                 something is, since that does need reading. -->
+            <StackPanel x:Name="Requirements" DockPanel.Dock="Top" Margin="12,0,12,0" />
             <Border x:Name="RequirementsRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
 
             <!-- Scrolls rather than sizing to content: the list only grows, and

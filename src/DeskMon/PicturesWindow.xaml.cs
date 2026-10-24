@@ -198,6 +198,15 @@ public partial class PicturesWindow : PanelWindow
             }
         };
 
+        // Put out on screen before the window hides, like the banner: Windows
+        // shows the last frame again the instant it reopens, and with the
+        // picture still in it, it flashed up fully before fading in.
+        Hiding += () =>
+        {
+            EmptyState.BeginAnimation(OpacityProperty, null);
+            EmptyState.Opacity = 0;
+        };
+
         _disarm.Tick += (_, _) => Disarm();
         _placementSave.Tick += (_, _) => SavePlacementNow();
         Closing += OnClosing;
@@ -531,8 +540,15 @@ public partial class PicturesWindow : PanelWindow
             return;
         }
 
-        int inNotes = _notes.PictureCountInNotes();
-        string shown = $"{_notes.CurrentGame}|{inNotes}|" + string.Join("|", pictures.Select(p => $"{p.Name}:{p.Bytes}:{p.InNotes}:{p.Favourite}"));
+        // Pictures the notes show with no file behind them - deleted, and gone
+        // from the Recycle Bin too. They can't be tiles, having no file, so
+        // they are counted on a card instead of passing unnoticed.
+        var namesInNotes = _notes.PictureNamesInNotes();
+        int inNotes = namesInNotes.Count;
+        var files = pictures.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        int missing = namesInNotes.Count(name => !files.Contains(name));
+
+        string shown = $"{_notes.CurrentGame}|{inNotes}|{missing}|" + string.Join("|", pictures.Select(p => $"{p.Name}:{p.Bytes}:{p.InNotes}:{p.Favourite}"));
         if (shown == _shown)
             return;
         _shown = shown;
@@ -546,7 +562,7 @@ public partial class PicturesWindow : PanelWindow
         LoadVisibleSoon();
         ShowEmpty(pictures.Count == 0);
 
-        ShowSummary(pictures, null);
+        ShowSummary(pictures, null, missing);
         WarnIfManyInNotes(inNotes);
 
         var unused = pictures.Where(p => !p.InNotes).ToList();
@@ -567,7 +583,8 @@ public partial class PicturesWindow : PanelWindow
     /// hover; each such picture is marked on its tile too. A problem replaces
     /// the cards with what went wrong, in the line under them.
     /// </summary>
-    private void ShowSummary(IReadOnlyList<Picture> pictures, string? problem)
+    /// <param name="missing">Pictures the notes show whose files are gone - see Refresh.</param>
+    private void ShowSummary(IReadOnlyList<Picture> pictures, string? problem, int missing = 0)
     {
         SummaryText.Inlines.Clear();
         Stats.Children.Clear();
@@ -585,6 +602,15 @@ public partial class PicturesWindow : PanelWindow
         // Even at none: the empty picture in the middle of the window says
         // how to take one, and the count still belongs with the other cards.
         Stats.Children.Add(StatCard.Make(_theme, "PICTURES", pictures.Count.ToString(CultureInfo.InvariantCulture)));
+
+        // Next to PICTURES, which it explains: the notes show more than are
+        // listed. In the critical colour - unlike NOT IN NOTES, these can't be
+        // put right from here.
+        if (missing > 0)
+            Stats.Children.Add(StatCard.Make(_theme, "MISSING", missing.ToString(CultureInfo.InvariantCulture),
+                                             "In the notes, but the file is gone - deleted, and not in the Recycle Bin either\n" +
+                                             "Only the small preview in the notes is left, so it can't be listed here.",
+                                             valueBrush: _theme.Crit));
 
         if (pictures.Count > 0)
             Stats.Children.Add(StatCard.Make(_theme, "SIZE", Size(pictures.Sum(p => p.Bytes)),
@@ -634,16 +660,29 @@ public partial class PicturesWindow : PanelWindow
         if (wasShown)
             return;   // already there, switching between two empty games: no need to arrive again
 
-        var duration = new Duration(TimeSpan.FromMilliseconds(320));
+        // After a pause, not at once: the window's first frame - banner, tiles,
+        // layout - takes long enough to swallow most of a fade that starts with
+        // it, so it popped in half-way and jumped the rest. Waiting lets the
+        // window settle first, so the whole rise is seen.
+        var delay = TimeSpan.FromMilliseconds(250);
+        var duration = new Duration(TimeSpan.FromMilliseconds(450));
         var ease = new System.Windows.Media.Animation.CubicEase
         {
             EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
         };
 
+        // The starting place as the base value too: an animation waiting out
+        // its BeginTime shows the base value, which would flash the picture
+        // fully in place for the length of the pause.
+        EmptyState.BeginAnimation(OpacityProperty, null);
+        EmptyShift.BeginAnimation(TranslateTransform.YProperty, null);
+        EmptyState.Opacity = 0;
+        EmptyShift.Y = 16;
+
         EmptyState.BeginAnimation(OpacityProperty,
-            new System.Windows.Media.Animation.DoubleAnimation(0, 1, duration) { EasingFunction = ease });
+            new System.Windows.Media.Animation.DoubleAnimation(0, 1, duration) { BeginTime = delay, EasingFunction = ease });
         EmptyShift.BeginAnimation(TranslateTransform.YProperty,
-            new System.Windows.Media.Animation.DoubleAnimation(10, 0, duration) { EasingFunction = ease });
+            new System.Windows.Media.Animation.DoubleAnimation(16, 0, duration) { BeginTime = delay, EasingFunction = ease });
     }
 
     /// <summary>

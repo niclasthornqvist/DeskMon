@@ -28,6 +28,18 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.64.1", "2026-10-25",
+            "Pictures: \"No pictures yet\" waits a moment, then fades in and rises smoothly, instead of popping in half-way when the window opens",
+            "Fixed: reopening the pictures window flashed \"No pictures yet\" up for a moment before its fade began",
+            "Notes: restoring a copy from HISTORY brings its deleted pictures back from the Recycle Bin, so the pictures window lists them again - and says so when a picture's file is gone from the bin too",
+            "Pictures: a MISSING card beside PICTURES counts the pictures the notes show whose files are gone",
+            "Hardware: a loading screen - three pulsing dots and what it is doing - until every value is in, the online update checks included (at most 15 s; the ping test fills in after), then the values fade in",
+            "Hardware: the window keeps one size, instead of opening small and growing as the values arrive - and remembers its height, like the other windows",
+            "Versions: each day's heading lights up under the mouse, with a thin line between days",
+            "Build.ps1: a build that fails after DeskMon was closed puts the previous DeskMon.exe back, starts it again, and keeps the window open so the error can be read",
+            "Build: fewer \"file is being used by another process\" failures - Build.ps1 waits for DeskMon.exe to come free and tries a locked publish again, and the BUILD button's check leaves no MSBuild processes behind",
+            "Versions: the top is cards like the LOG window's - RUNNING, UPDATE, .NET 8, PAWNIO, PRESENTMON - instead of two lines of small text",
+            "Sessions: the table's rows light up under the mouse like the widget's, with a thin line between rows"),
         new("1.64.0", "2026-10-24",
             "Notes: General stands apart at the top of the notes list, with a line between it and the games",
             "Notes: the DELETE button reads CLEAR on General, since General is only ever cleared",

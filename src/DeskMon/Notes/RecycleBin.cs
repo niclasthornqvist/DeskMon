@@ -87,6 +87,117 @@ internal static class RecycleBin
         return present.Where(File.Exists).ToList();
     }
 
+    /// <summary>
+    /// Puts files deleted out of <paramref name="folder"/> back from the
+    /// Recycle Bin, by name, and returns the names that came back. For notes
+    /// restored from HISTORY: they can show a picture whose file was deleted
+    /// since, and the notes only hold its small preview - so the pictures
+    /// window, which lists files, didn't show it at all.
+    ///
+    /// Read from the bin's own files rather than through the shell, whose
+    /// Restore verb is named in the language Windows is in. Each deleted file
+    /// is a $R file holding it and a $I file saying where it came from; a
+    /// restore is moving the $R back and dropping the $I, which is all Explorer
+    /// does too. Only the user's own bin, on the folder's drive. Never throws:
+    /// a picture not brought back is one the window simply doesn't list.
+    /// </summary>
+    public static List<string> Restore(string folder, IEnumerable<string> names)
+    {
+        var restored = new List<string>();
+        try
+        {
+            string full = Path.GetFullPath(folder);
+            var wanted = names.Where(n => !File.Exists(Path.Combine(full, n)))
+                              .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (wanted.Count == 0)
+                return restored;
+
+            string? sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value;
+            string? root = Path.GetPathRoot(full);
+            if (sid is null || string.IsNullOrEmpty(root))
+                return restored;
+
+            string bin = Path.Combine(root, "$Recycle.Bin", sid);
+            if (!Directory.Exists(bin))
+                return restored;
+
+            // The same name deleted more than once: the newest is the one the
+            // notes were last showing.
+            var found = new Dictionary<string, (string Info, DateTime Deleted)>(StringComparer.OrdinalIgnoreCase);
+            foreach (string info in Directory.EnumerateFiles(bin, "$I*"))
+            {
+                if (ReadInfo(info) is not { } entry
+                    || !string.Equals(Path.GetDirectoryName(entry.From), full.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string name = Path.GetFileName(entry.From);
+                if (wanted.Contains(name) && (!found.TryGetValue(name, out var seen) || entry.Deleted > seen.Deleted))
+                    found[name] = (info, entry.Deleted);
+            }
+
+            foreach (var (name, (info, _)) in found)
+            {
+                // $IABC123.png holds the details, $RABC123.png the file itself.
+                string data = Path.Combine(bin, "$R" + Path.GetFileName(info).Substring(2));
+                string target = Path.Combine(full, name);
+                try
+                {
+                    if (!File.Exists(data) || File.Exists(target))
+                        continue;
+                    File.Move(data, target);
+                    File.Delete(info);   // else the bin would list an entry with nothing behind it
+                    restored.Add(name);
+                }
+                catch (Exception ex)
+                {
+                    App.Log("recycle bin", $"Couldn't bring {name} back from the Recycle Bin: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log("recycle bin", $"Couldn't read the Recycle Bin: {ex.Message}");
+        }
+        return restored;
+    }
+
+    /// <summary>
+    /// Where a $I file says its file was deleted from, and when. Version 2
+    /// (Windows 10 on) gives the path's length then the path; version 1
+    /// (Vista to 8) a fixed 260-character field. Null for anything else.
+    /// </summary>
+    private static (string From, DateTime Deleted)? ReadInfo(string infoPath)
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(infoPath);
+            if (bytes.Length < 28)
+                return null;
+
+            long version = BitConverter.ToInt64(bytes, 0);
+            var deleted = DateTime.FromFileTimeUtc(BitConverter.ToInt64(bytes, 16));
+
+            string from;
+            if (version == 2)
+            {
+                int chars = BitConverter.ToInt32(bytes, 24);
+                if (chars <= 0 || 28 + chars * 2 > bytes.Length)
+                    return null;
+                from = System.Text.Encoding.Unicode.GetString(bytes, 28, chars * 2);
+            }
+            else if (version == 1 && bytes.Length >= 24 + 520)
+                from = System.Text.Encoding.Unicode.GetString(bytes, 24, 520);
+            else
+                return null;
+
+            return (from.TrimEnd('\0'), deleted);
+        }
+        catch (Exception)
+        {
+            return null;   // unreadable or odd: not one of ours to restore
+        }
+    }
+
     private const uint Delete = 0x0003;
     private const ushort Silent = 0x0004, NoConfirmation = 0x0010, AllowUndo = 0x0040, NoErrorUi = 0x0400;
 

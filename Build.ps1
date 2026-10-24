@@ -82,6 +82,53 @@ public class DeskMonWindow {
 
 $wasRunning = [bool](Get-Process DeskMon -ErrorAction SilentlyContinue)
 
+# Starts DeskMon again the way it was running - through its logon task when
+# there is one, so it comes back elevated - and says whether it came up.
+# A function because a failed build needs it too: see Stop-WithFailure.
+function Start-DeskMon {
+    if (-not ($wasRunning -or (Get-ScheduledTask -TaskName 'DeskMon' -ErrorAction SilentlyContinue))) {
+        return
+    }
+    Write-Host "Restarting DeskMon..." -ForegroundColor Cyan
+    if (Get-ScheduledTask -TaskName 'DeskMon' -ErrorAction SilentlyContinue) {
+        Start-ScheduledTask -TaskName 'DeskMon'
+    } else {
+        Start-Process (Join-Path $output 'DeskMon.exe')
+    }
+    Start-Sleep -Seconds 3
+    if (Get-Process DeskMon -ErrorAction SilentlyContinue) {
+        Write-Host "DeskMon is running." -ForegroundColor Green
+    } else {
+        Write-Host "DeskMon did not start - check app\error.log" -ForegroundColor Red
+    }
+}
+
+# The exe as it was before this build, kept outside app\ so a publish that
+# fails half-way - a locked file, a full disk - can't leave a broken one behind.
+$previousExe = Join-Path $env:TEMP 'DeskMon-previous.exe'
+$builtExe    = Join-Path $output 'DeskMon.exe'
+
+# A build that fails after DeskMon was closed used to just exit: DeskMon
+# stayed closed, and when started from the widget's BUILD button the window
+# closed with it, so nothing said why. Now the previous exe is put back and
+# started again, and the window waits so the error can be read.
+function Stop-WithFailure([string]$why) {
+    Write-Host ""
+    Write-Host "Build FAILED: $why" -ForegroundColor Red
+    if (Test-Path $previousExe) {
+        try {
+            Copy-Item $previousExe $builtExe -Force
+            Write-Host "Put the previous DeskMon.exe back." -ForegroundColor Yellow
+        } catch {
+            Write-Host "Couldn't put the previous DeskMon.exe back: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    try { Start-DeskMon } catch { Write-Host "Couldn't restart DeskMon: $($_.Exception.Message)" -ForegroundColor Red }
+    Write-Host ""
+    Read-Host "Press Enter to close" | Out-Null
+    exit 1
+}
+
 foreach ($p in @(Get-Process DeskMon -ErrorAction SilentlyContinue)) {
     $asked = $false
     try { $asked = [DeskMonWindow]::RequestClose([uint32]$p.Id) } catch { }
@@ -98,6 +145,16 @@ foreach ($p in @(Get-Process DeskMon -ErrorAction SilentlyContinue)) {
     Write-Host "Stopping DeskMon (pid $($p.Id))..."
     $p.Kill()
     $p.WaitForExit(5000) | Out-Null
+}
+
+# Everything from here on runs with DeskMon closed, so any error goes through
+# Stop-WithFailure rather than ending the script with the widget gone.
+try {
+
+# A copy left by an earlier run is an older build: never the one to put back.
+Remove-Item $previousExe -Force -ErrorAction SilentlyContinue
+if (Test-Path $builtExe) {
+    Copy-Item $builtExe $previousExe -Force
 }
 
 # Only ever a leftover child of ours, with nothing to flush.
@@ -134,28 +191,51 @@ Get-ChildItem $output -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -eq '.dll' -or $_.Name -in 'DeskMon.deps.json', 'DeskMon.runtimeconfig.json' } |
     Remove-Item -Force
 
-Write-Host "Building..." -ForegroundColor Cyan
-dotnet publish $project --configuration Release --output $output --nologo
+# Whether a file can be opened with nobody else holding it.
+function Test-FileFree([string]$path) {
+    try {
+        $stream = [IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
+        $stream.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build FAILED." -ForegroundColor Red
-    exit 1
+# A process that has exited can still hold its exe for a moment while
+# Windows tears it down, and Defender often scans it right then - so the
+# publish sometimes found DeskMon.exe "being used by another process". Up to
+# 10 s for it to come free, rather than a fixed pause that is sometimes short.
+$freeBy = (Get-Date).AddSeconds(10)
+while ((Test-Path $builtExe) -and -not (Test-FileFree $builtExe) -and (Get-Date) -lt $freeBy) {
+    Start-Sleep -Milliseconds 250
+}
+
+# Tried again when what failed was a file in use - a virus scan or the
+# editor's C# extension holding something under obj\ for a moment - since
+# that clears up by itself. Any other failure is real, and stops at once.
+# Only stdout is captured: with ErrorActionPreference Stop, Windows
+# PowerShell would turn dotnet's stderr lines into a terminating error.
+Write-Host "Building..." -ForegroundColor Cyan
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $lines = @()
+    dotnet publish $project --configuration Release --output $output --nologo | Tee-Object -Variable lines
+    if ($LASTEXITCODE -eq 0) {
+        break
+    }
+    if ($attempt -eq 3 -or -not ($lines -match 'being used by another process|MSB3021|MSB3027')) {
+        Stop-WithFailure "dotnet publish exited with code $LASTEXITCODE - see the output above."
+    }
+    Write-Host "A file was in use - trying again in 3 s ($attempt of 3)..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+}
+
+} catch {
+    Stop-WithFailure $_.Exception.Message
 }
 
 Write-Host ""
-Write-Host "Built: $(Join-Path $output 'DeskMon.exe')" -ForegroundColor Green
+Write-Host "Built: $builtExe" -ForegroundColor Green
+Remove-Item $previousExe -Force -ErrorAction SilentlyContinue
 
-if ($wasRunning -or (Get-ScheduledTask -TaskName 'DeskMon' -ErrorAction SilentlyContinue)) {
-    Write-Host "Restarting DeskMon..." -ForegroundColor Cyan
-    if (Get-ScheduledTask -TaskName 'DeskMon' -ErrorAction SilentlyContinue) {
-        Start-ScheduledTask -TaskName 'DeskMon'
-    } else {
-        Start-Process (Join-Path $output 'DeskMon.exe')
-    }
-    Start-Sleep -Seconds 3
-    if (Get-Process DeskMon -ErrorAction SilentlyContinue) {
-        Write-Host "DeskMon is running." -ForegroundColor Green
-    } else {
-        Write-Host "DeskMon did not start - check app\error.log" -ForegroundColor Red
-    }
-}
+Start-DeskMon

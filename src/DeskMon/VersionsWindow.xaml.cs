@@ -48,6 +48,7 @@ public partial class VersionsWindow : PanelWindow
         {
             ApplyTheme();
             BuildHistory();   // its version names are in the accent
+            ShowCards();      // the cards keep the colours they were made with
         };
         RestorePlacement(_settings.VersionsLeft, _settings.VersionsTop,
                          _settings.VersionsWidth, _settings.VersionsHeight);
@@ -96,6 +97,11 @@ public partial class VersionsWindow : PanelWindow
             foreach (var release in releases)
                 body.Children.Add(ReleaseBlock(release, ReferenceEquals(release, current)));
 
+            // A thin line between days, so where one day's changes end and the
+            // next date starts reads at a glance, folded or not.
+            if (!first)
+                History.Children.Add(new Border { Height = 1, Background = _theme.Separator, Margin = new Thickness(0, 2, 0, 2) });
+
             History.Children.Add(DayHeading(day.Key, releases, body));
             History.Children.Add(body);
             first = false;
@@ -113,7 +119,7 @@ public partial class VersionsWindow : PanelWindow
         {
             Background = Brushes.Transparent,   // the whole strip clicks, not just the letters
             Cursor = Cursors.Hand,
-            Margin = new Thickness(0, 2, 0, 2),
+            Margin = new Thickness(4, 4, 4, 4),
             ToolTip = "Show or hide this day's changes",
         };
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -155,13 +161,37 @@ public partial class VersionsWindow : PanelWindow
         heading.Children.Add(title);
         heading.Children.Add(count);
 
-        heading.MouseLeftButtonUp += (_, _) =>
+        // In a strip of its own so the hover can reach past the text on every
+        // side - the heading's margin is the room it lights up in.
+        var strip = new Grid { Background = Brushes.Transparent };
+        strip.Children.Add(HoverStrip(strip));
+        strip.Children.Add(heading);
+
+        strip.MouseLeftButtonUp += (_, _) =>
         {
             body.Visibility = body.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
             arrow.Text = Arrow(body);
         };
 
-        return heading;
+        return strip;
+    }
+
+    /// <summary>
+    /// The widget's row hover (MainWindow's RowHover), for a day heading: the
+    /// same faint strip, faded in quickly and out a little slower, so it is
+    /// plain which day a click folds. Behind the text; its colour by
+    /// reference, so it follows the theme.
+    /// </summary>
+    private static Border HoverStrip(FrameworkElement owner)
+    {
+        var hover = new Border { CornerRadius = new CornerRadius(4), Opacity = 0, IsHitTestVisible = false };
+        hover.SetResourceReference(Border.BackgroundProperty, "Theme.Ov.14");
+
+        owner.MouseEnter += (_, _) => hover.BeginAnimation(UIElement.OpacityProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromSeconds(0.12)));
+        owner.MouseLeave += (_, _) => hover.BeginAnimation(UIElement.OpacityProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromSeconds(0.2)));
+        return hover;
     }
 
     /// <summary>Down while open, right while folded - the same arrows the widget's section headings use.</summary>
@@ -196,7 +226,7 @@ public partial class VersionsWindow : PanelWindow
     /// </summary>
     private UIElement ReleaseBlock(Changelog.Release release, bool isCurrent)
     {
-        var block = new Grid { Margin = new Thickness(14, 3, 0, 3) };
+        var block = new Grid { Margin = new Thickness(18, 3, 0, 3) };   // under the heading's text, which the hover strip moved in by 4
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(VersionColumn) });
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
@@ -277,43 +307,29 @@ public partial class VersionsWindow : PanelWindow
 
     // --- Requirements -----------------------------------------------------
 
+    /// <summary>What Prerequisites found missing; null while it is still looking.</summary>
+    private IReadOnlyList<Prerequisites.Missing>? _missing;
+
     /// <summary>
     /// What DeskMon needs, each with whether this machine has it - the
     /// question that comes up when setting it up somewhere new, and this is
-    /// the window that is about the program rather than the hardware.
+    /// the window that is about the program rather than the hardware. What is
+    /// missing gets a line of its own under the cards, saying how to install
+    /// it, since that one does need reading.
     ///
-    /// One line, ".NET 8 ✓   PawnIO ✓   PresentMon ✓", with what each is for in
-    /// its tooltip: it used to take four lines above the history for an answer
-    /// that is nearly always "all there". What is missing gets a line of its
-    /// own below, saying how to install it, since that one does need reading.
-    ///
-    /// Drawn at once with "…" and filled in after: the PresentMon search walks
-    /// folders, which has no business on the UI thread.
+    /// The cards go up at once with "…" and are filled in after: the
+    /// PresentMon search walks folders, which has no business on the UI thread.
     /// </summary>
     private async Task ShowRequirementsAsync()
     {
-        Requirements.Children.Clear();
-
-        var line = new TextBlock { FontSize = SmallFontSize, TextWrapping = TextWrapping.Wrap };
-        line.Inlines.Add(new Run("Needs   ") { Foreground = _theme.Header });
-        Requirements.Children.Add(line);
-
-        // The runtime is always there: this window could not be on screen without it.
-        var dotnet = Requirement(line, ".NET 8", ".NET 8 Desktop Runtime\nNeeded to run DeskMon at all.");
-        SetStatus(dotnet, Status.Installed);
-
-        var pawn = Requirement(line, "PawnIO", "PawnIO\nNeeded for the CPU temperature.");
-        var presentMon = Requirement(line, "PresentMon", "PresentMon\nNeeded for FPS and latency.");
+        _missing = null;
+        ShowCards();
 
         var missing = await Task.Run(() => Prerequisites.Check(_settings));
+        _missing = missing;
+        ShowCards();
 
-        SetStatus(pawn, StatusOf(missing, "PawnIO"));
-
-        // Prerequisites does not look for PresentMon when FPS is switched off,
-        // so "not in the missing list" would read as installed when it is
-        // really unknown - say why instead.
-        SetStatus(presentMon, _settings.MeasureFps ? StatusOf(missing, "PresentMon") : Status.Off);
-
+        Requirements.Children.Clear();
         foreach (var item in missing)
         {
             if (item.Name == "PresentMon" && !_settings.MeasureFps)
@@ -325,92 +341,101 @@ public partial class VersionsWindow : PanelWindow
                 Foreground = _theme.Warn,
                 FontSize = SmallFontSize,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 3, 0, 0),
+                Margin = new Thickness(0, 0, 0, 6),
             });
         }
     }
 
+    /// <summary>
+    /// The cards along the top - RUNNING, UPDATE, then one per thing DeskMon
+    /// needs - drawn like the session history's (see StatCard). They were two
+    /// lines of small text, "Needs .NET 8 ✓ PawnIO ✓ …" and "Update …", which
+    /// read as fine print. Built again whole when either half changes: five
+    /// cards, nothing worth keeping between.
+    /// </summary>
+    private void ShowCards()
+    {
+        Stats.Children.Clear();
+
+        Stats.Children.Add(StatCard.Make(_theme, "RUNNING", AppUpdate.Running.ToString(),
+                                         "The DeskMon version open now"));
+        Stats.Children.Add(UpdateCard());
+
+        // The runtime is always there: this window could not be on screen without it.
+        Stats.Children.Add(RequirementCard(".NET 8", Status.Installed,
+                                           ".NET 8 Desktop Runtime\nNeeded to run DeskMon at all."));
+        Stats.Children.Add(RequirementCard("PAWNIO", StatusOf("PawnIO"),
+                                           "PawnIO\nNeeded for the CPU temperature."));
+
+        // Prerequisites does not look for PresentMon when FPS is switched off,
+        // so "not in the missing list" would read as installed when it is
+        // really unknown - say why instead.
+        Stats.Children.Add(RequirementCard("PRESENTMON", _settings.MeasureFps ? StatusOf("PresentMon") : Status.Off,
+                                           "PresentMon\nNeeded for FPS and latency."));
+    }
+
     private enum Status { Checking, Installed, Missing, Off }
 
-    private static Status StatusOf(IReadOnlyList<Prerequisites.Missing> missing, string name)
-        => missing.Any(m => m.Name == name) ? Status.Missing : Status.Installed;
+    private Status StatusOf(string name)
+        => _missing is null ? Status.Checking
+         : _missing.Any(m => m.Name == name) ? Status.Missing
+         : Status.Installed;
+
+    private Border RequirementCard(string name, Status status, string purpose)
+    {
+        var (text, brush) = status switch
+        {
+            Status.Installed => ("✓ installed", _theme.Normal),
+            Status.Missing => ("✗ missing", _theme.Warn),
+            Status.Off => ("FPS off", _theme.Unavailable),
+            _ => ("…", _theme.Unavailable),
+        };
+        return StatCard.Make(_theme, name, text, purpose, valueBrush: brush);
+    }
 
     private double SmallFontSize => Math.Max(8, UiTheme.PanelFontSize - 3);
 
     // --- Updates ------------------------------------------------------------
 
     /// <summary>
-    /// "Update   1.56.0 is out ↗" in the normal colour when the daily check
-    /// found one, "up to date" when it didn't, or how to switch it on. Said
-    /// again whenever a check finishes - MainWindow calls this.
+    /// The cards again with the update check's latest word. Called whenever a
+    /// check finishes - MainWindow calls this - and on every open, since the
+    /// check may have been switched on since.
     /// </summary>
-    public void RefreshUpdate()
-    {
-        UpdateLine.Inlines.Clear();
-        UpdateLine.FontSize = SmallFontSize;
-        UpdateLine.Inlines.Add(new Run("Update  ") { Foreground = _theme.Header });
+    public void RefreshUpdate() => ShowCards();
 
+    /// <summary>
+    /// UPDATE: "1.56.0 is out ↗" in the normal colour when the daily check
+    /// found one - the card a link to its release page - "up to date ✓" when
+    /// it didn't, or that it is off, with how to switch it on in the tooltip.
+    /// </summary>
+    private Border UpdateCard()
+    {
         if (!_settings.CheckForUpdates || string.IsNullOrWhiteSpace(_settings.UpdateRepository))
-        {
-            UpdateLine.Inlines.Add(new Run("not checked - set the release page under Alerts and updates in Settings")
-            {
-                Foreground = _theme.Unavailable,
-            });
-            return;
-        }
+            return StatCard.Make(_theme, "UPDATE", "not checked",
+                                 "Set the release page under Alerts and updates in Settings",
+                                 valueBrush: _theme.Unavailable);
 
         if (AppUpdate.Newer is { } release)
         {
-            var link = new Hyperlink(new Run($"{release.Version} is out ↗"))
-            {
-                Foreground = _theme.Normal,
-                TextDecorations = null,
-                Cursor = Cursors.Hand,
-                ToolTip = $"{release.Name}\nOpens the release page - you have {AppUpdate.Running}.",
-            };
-            link.Click += (_, _) =>
+            var card = StatCard.Make(_theme, "UPDATE", $"{release.Version} is out ↗",
+                                     $"{release.Name}\nOpens the release page - you have {AppUpdate.Running}.",
+                                     valueBrush: _theme.Normal);
+            card.Cursor = Cursors.Hand;
+            card.MouseLeftButtonUp += (_, _) =>
             {
                 try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(release.Url) { UseShellExecute = true }); }
                 catch { /* no browser */ }
             };
-            UpdateLine.Inlines.Add(link);
-            return;
+            return card;
         }
 
         if (AppUpdate.Problem is { } problem)
-        {
-            UpdateLine.Inlines.Add(new Run($"couldn't check: {problem}") { Foreground = _theme.Warn });
-            return;
-        }
+            return StatCard.Make(_theme, "UPDATE", "couldn't check", problem, valueBrush: _theme.Warn);
 
-        UpdateLine.Inlines.Add(new Run(AppUpdate.CheckedAt is { } at
-            ? $"{AppUpdate.Running} is the newest ✓  (checked {at:HH:mm})"
-            : $"{AppUpdate.Running} - checked once a day, first a minute after start")
-        {
-            Foreground = AppUpdate.CheckedAt is null ? _theme.Label : _theme.Normal,
-        });
-    }
-
-    /// <summary>Its name and a mark after it, "…" until the check is done. The purpose is in the tooltip.</summary>
-    private Run Requirement(TextBlock line, string name, string purpose)
-    {
-        line.Inlines.Add(new Run(name + " ") { Foreground = _theme.NotesText, ToolTip = purpose });
-        var mark = new Run("…") { ToolTip = purpose };
-        line.Inlines.Add(mark);
-        line.Inlines.Add(new Run("     "));
-        SetStatus(mark, Status.Checking);
-        return mark;
-    }
-
-    private void SetStatus(Run mark, Status status)
-    {
-        (mark.Text, mark.Foreground) = status switch
-        {
-            Status.Installed => ("✓", _theme.Normal),
-            Status.Missing => ("✗ missing", _theme.Warn),
-            Status.Off => ("– FPS off", _theme.Unavailable),
-            _ => ("…", _theme.Unavailable),
-        };
+        return AppUpdate.CheckedAt is { } at
+            ? StatCard.Make(_theme, "UPDATE", "up to date ✓", $"Checked at {at:HH:mm} - once a day", valueBrush: _theme.Normal)
+            : StatCard.Make(_theme, "UPDATE", "not yet", "Checked once a day, first a minute after start", valueBrush: _theme.Label);
     }
 
     // --- Chrome -----------------------------------------------------------

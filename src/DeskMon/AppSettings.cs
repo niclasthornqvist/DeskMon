@@ -585,6 +585,7 @@ public sealed class AppSettings
     public double? HardwareLeft { get; set; }
     public double? HardwareTop { get; set; }
     public double? HardwareWidth { get; set; }
+    public double? HardwareHeight { get; set; }
 
     // --- Versions window ---
     /// <summary>As <see cref="NotesOpacity"/>, for the versions window.</summary>
@@ -792,7 +793,7 @@ public sealed class AppSettings
         nameof(CollapsedSections), nameof(SectionOrder), nameof(ExpandedMetrics),
         nameof(CollapsedSectionsInGame), nameof(UpdateAnnounced), nameof(SessionsGame),
         nameof(NotesLeft), nameof(NotesTop), nameof(NotesWidth), nameof(NotesHeight),
-        nameof(HardwareLeft), nameof(HardwareTop), nameof(HardwareWidth),
+        nameof(HardwareLeft), nameof(HardwareTop), nameof(HardwareWidth), nameof(HardwareHeight),
         nameof(VersionsLeft), nameof(VersionsTop), nameof(VersionsWidth), nameof(VersionsHeight),
         nameof(SessionsLeft), nameof(SessionsTop), nameof(SessionsWidth), nameof(SessionsHeight),
         nameof(SessionColumns), nameof(SessionsChart), nameof(SteamAppIds), nameof(GogGames),

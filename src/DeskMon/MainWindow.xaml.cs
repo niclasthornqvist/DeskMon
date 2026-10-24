@@ -2943,6 +2943,10 @@ public partial class MainWindow : Window
 
             // Hidden with the notes: it shows their game's pictures, and on
             // its own it would be a window about notes nobody has open.
+            // Along with them, through its own Close - which hides smoothly, so
+            // its picture and banner aren't kept in the frame Windows shows on
+            // reopening. The Hide below is only for the notes hidden some other way.
+            _notes.Hiding += () => _pictures?.Close();
             _notes.IsVisibleChanged += (_, _) =>
             {
                 if (!_notes.IsVisible)
@@ -3154,7 +3158,11 @@ public partial class MainWindow : Window
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        foreach (string arg in new[] { "build", project, "-nologo", "-v", "q" })
+        // -nodeReuse:false: MSBuild otherwise leaves its worker processes
+        // running after the build, and Build.ps1's publish straight after
+        // could find files under obj\ still held by them - "being used by
+        // another process", now and then.
+        foreach (string arg in new[] { "build", project, "-nologo", "-v", "q", "-nodeReuse:false" })
             start.ArgumentList.Add(arg);
 
         using var process = Process.Start(start) ?? throw new InvalidOperationException("dotnet could not be started.");

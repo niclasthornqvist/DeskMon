@@ -27,13 +27,11 @@ public partial class HardwareWindow : PanelWindow
 
     /// <summary>
     /// Collapses a drag or resize into one write, the way the notes window
-    /// does. This one matters twice over: SizeChanged also fires while the
-    /// window re-measures itself around the rows that just arrived.
+    /// does.
     /// </summary>
     private readonly DispatcherTimer _placementSave = new() { Interval = TimeSpan.FromMilliseconds(500) };
 
     private bool _allowClose;
-    private bool _loaded;
 
     /// <summary>
     /// Bumped by every load. Closing and reopening while NVIDIA is still being
@@ -57,8 +55,10 @@ public partial class HardwareWindow : PanelWindow
         // The rows keep the colours they were made with; they are made again
         // each time the window opens.
         _theme.Changed += ApplyTheme;
+        // The height too, now that the window keeps one size rather than
+        // fitting its rows - as the other windows remember theirs.
         RestorePlacement(_settings.HardwareLeft, _settings.HardwareTop,
-                         _settings.HardwareWidth, null);
+                         _settings.HardwareWidth, _settings.HardwareHeight);
 
         Topmost = _settings.NotesAlwaysOnTop;
         DimDuringGames(_settings, () => _settings.HardwareOpacity);
@@ -72,6 +72,22 @@ public partial class HardwareWindow : PanelWindow
         _placementSave.Tick += (_, _) => SavePlacementNow();
 
         Closing += OnClosing;
+
+        // The rows put out before it hides: Windows shows the last frame again
+        // the instant it reopens, which would flash the old rows up before
+        // the loading screen. Blank instead, and the dots come in from there.
+        Hiding += () => RowsScroller.Visibility = Visibility.Hidden;
+
+        // Reopened within the hide's short wait, it was never hidden, so no
+        // fresh load comes (see MainWindow.ShowHardwareAsync): the rows back as they
+        // were, or the window would stay blank. A real open puts the loading
+        // screen up straight after this, before anything is drawn.
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible && Loading.Visibility != Visibility.Visible)
+                RowsScroller.Visibility = Visibility.Visible;
+        };
+
         LocationChanged += (_, _) =>
         {
             FitToScreen();   // dragged lower down the screen: shorter, and the rows scroll
@@ -113,17 +129,15 @@ public partial class HardwareWindow : PanelWindow
     {
         int generation = ++_loadGeneration;
 
-        // "Reading…" only the first time. On a reopen the last rows stay up
-        // until the fresh ones replace them, rather than the window collapsing
-        // to one line and growing back on every open.
-        if (!_loaded)
-            Show("Reading…", string.Empty);
-        _loaded = true;
+        // The loading screen every time, not last time's rows: those are a
+        // reading from the past, and the window keeps its size either way.
+        ShowLoading(true);
 
         // Kept for "start counting from now", which fills the window again.
         _cpuName = cpuName;
         _gpuName = gpuName;
 
+        LoadingText.Text = "Reading hardware…";
         var info = await Task.Run(() => SystemInfo.Collect(cpuName, gpuName, _settings.StabilityCountedFrom));
         var missing = await Task.Run(() => Prerequisites.Check(_settings));
         if (generation != _loadGeneration)
@@ -305,7 +319,7 @@ public partial class HardwareWindow : PanelWindow
         }
 
         Rows.Items.Refresh();
-        ResizeToContent();
+        RowsScroller.ScrollToTop();
 
         // Both started before either is awaited, so the two run side by side
         // and the wait is the slower one's, not the two added together.
@@ -317,6 +331,30 @@ public partial class HardwareWindow : PanelWindow
         var windowsTask = windowsCheck is null ? null : UpdateCheck.WindowsAsync();
         var pingTask = pingCheck is null ? null : NetworkCheck.PingAsync(pingHost);
 
+        // The loading screen stays up until the online checks are in too, so
+        // the window opens on every answer rather than on "Checking…" rows
+        // that change under the reader. Capped, though: a slow network or a
+        // Windows Update that takes its time leaves the rest unread for no
+        // reason, so after MaxLoadingWait the rows show and the late answers
+        // fill in as before. Not the ping test: it measures for a while, and
+        // its row filling in late reads as a measurement still running.
+        var pending = new List<Task>();
+        if (driverTask is not null) pending.Add(driverTask);
+        if (biosTask is not null) pending.Add(biosTask);
+        if (windowsTask is not null) pending.Add(windowsTask);
+
+        bool allInTime = true;
+        if (pending.Count > 0)
+        {
+            LoadingText.Text = "Checking for updates…";
+            var all = Task.WhenAll(pending);
+            allInTime = await Task.WhenAny(all, Task.Delay(MaxLoadingWait)) == all;
+            if (generation != _loadGeneration)
+                return;
+        }
+        if (!allInTime)
+            ShowLoading(false);
+
         if (driverTask is not null)
             ReplaceRow(driverCheck!, await driverTask, generation);
         if (biosTask is not null)
@@ -324,12 +362,21 @@ public partial class HardwareWindow : PanelWindow
         // Last: it is the slowest of the three by far.
         if (windowsTask is not null)
             ReplaceRow(windowsCheck!, await windowsTask, generation);
+
+        // Every update answer already in its row, so the rows appear finished
+        // - all but the ping, which fills in after.
+        if (allInTime && generation == _loadGeneration)
+            ShowLoading(false);
+
         if (pingTask is not null)
         {
             var ping = await pingTask;
             Replace(pingCheck!, CheckRow(ping.Text, ping.Level), generation);
         }
     }
+
+    /// <summary>The longest the loading screen waits on the online checks - see LoadAsync.</summary>
+    private static readonly TimeSpan MaxLoadingWait = TimeSpan.FromSeconds(15);
 
     /// <summary>Puts an online check's verdict where its "checking…" row was.</summary>
     private void ReplaceRow(InfoRow checking, UpdateCheck.Verdict verdict, int generation)
@@ -347,7 +394,6 @@ public partial class HardwareWindow : PanelWindow
         {
             _rows[at] = done;
             Rows.Items.Refresh();
-            ResizeToContent();
         }
     }
 
@@ -451,26 +497,33 @@ public partial class HardwareWindow : PanelWindow
             _rows.Add(new InfoRow(string.Empty, value, _theme, _settings, known: true, secondary: true));
     }
 
-    private void Show(string label, string value)
-    {
-        _rows.Clear();
-        _rows.Add(new InfoRow(label, value, _theme, _settings, known: false));
-        Rows.Items.Refresh();
-    }
-
     /// <summary>
-    /// The window sizes to its content, and the content arrives asynchronously,
-    /// so it has to be told to measure again once the rows are in.
+    /// The loading screen in place of the rows, or the rows fading in in its
+    /// place. The dots only pulse while it is up: this window can be open
+    /// over a game, and an animation left running behind the rows would cost
+    /// a redraw every frame for nothing.
     /// </summary>
-    private void ResizeToContent()
+    private void ShowLoading(bool on)
     {
-        if (!IsLoaded)
-            return;
+        Loading.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        RowsScroller.Visibility = on ? Visibility.Hidden : Visibility.Visible;
 
-        UpdateLayout();
-        SizeToContent = SizeToContent.Manual;
-        SizeToContent = SizeToContent.Height;
-        UpdateLayout();
+        var dots = new[] { LoadingDot1, LoadingDot2, LoadingDot3 };
+        for (int i = 0; i < dots.Length; i++)
+        {
+            dots[i].BeginAnimation(OpacityProperty, !on ? null
+                : new System.Windows.Media.Animation.DoubleAnimation(0.2, 1, TimeSpan.FromMilliseconds(450))
+                {
+                    AutoReverse = true,
+                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+                    BeginTime = TimeSpan.FromMilliseconds(150 * i),   // one after another, a wave
+                });
+            dots[i].Opacity = 0.2;   // the base value, shown before each dot's turn starts
+        }
+
+        if (!on)
+            RowsScroller.BeginAnimation(OpacityProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(250)));
     }
 
     // --- Chrome -----------------------------------------------------------
@@ -559,6 +612,7 @@ public partial class HardwareWindow : PanelWindow
         _settings.HardwareLeft = Left;
         _settings.HardwareTop = Top;
         _settings.HardwareWidth = Width;
+        _settings.HardwareHeight = Height;
         _settings.Save();
     }
 
@@ -568,6 +622,10 @@ public partial class HardwareWindow : PanelWindow
         Panel.BorderBrush = _theme.Border;
         _theme.Dress(Panel);
         HeaderRule.Background = _theme.Separator;
+
+        foreach (var dot in new[] { LoadingDot1, LoadingDot2, LoadingDot3 })
+            dot.Fill = _theme.Accent;
+        LoadingText.Foreground = _theme.Label;
 
         TitleText.Foreground = _theme.Section;
         TitleText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);

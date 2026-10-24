@@ -1337,6 +1337,7 @@ public partial class SessionsWindow : PanelWindow
         BuildHeader(columns, sort, setSort);
 
         Rows.Children.Clear();
+        bool firstRow = true;
         foreach (var item in Sorted(items, sortBy, sort.Descending))
         {
             // The lit blue the widget's toolbar uses for "this one is open":
@@ -1350,6 +1351,26 @@ public partial class SessionsWindow : PanelWindow
             };
             LazyTip(row, () => tooltip(item));
             AddColumns(row, columns);
+
+            // The widget's row hover (MainWindow's RowHover): the same faint
+            // strip, faded in quickly and out a little slower, over a picked
+            // row's blue as well. It was a plain swap to the bar-track grey,
+            // too faint to follow along a line of dates. First, so it is drawn
+            // behind the text; its colour by reference, so it follows the theme.
+            var hover = new Border { Opacity = 0, IsHitTestVisible = false };
+            hover.SetResourceReference(Border.BackgroundProperty, "Theme.Ov.14");
+            Grid.SetColumnSpan(hover, columns.Count + 1);
+            row.Children.Add(hover);
+
+            // A thin line between rows, so a session's date, time and length
+            // read as one line across the gaps between the columns.
+            if (!firstRow)
+            {
+                var rule = new Border { Height = 1, VerticalAlignment = VerticalAlignment.Top, Background = _theme.Separator, IsHitTestVisible = false };
+                Grid.SetColumnSpan(rule, columns.Count + 1);
+                row.Children.Add(rule);
+            }
+            firstRow = false;
 
             for (int i = 0; i < columns.Count; i++)
             {
@@ -1396,8 +1417,10 @@ public partial class SessionsWindow : PanelWindow
             }
 
             // Hover like the other lists, so the tooltip reads as belonging to the row.
-            row.MouseEnter += (_, _) => row.Background = _theme.BarTrack;
-            row.MouseLeave += (_, _) => row.Background = rest;
+            row.MouseEnter += (_, _) => hover.BeginAnimation(UIElement.OpacityProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromSeconds(0.12)));
+            row.MouseLeave += (_, _) => hover.BeginAnimation(UIElement.OpacityProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromSeconds(0.2)));
             if (open is not null)
                 row.MouseLeftButtonUp += (_, _) => open(item);
 
