@@ -767,6 +767,16 @@ public sealed class AppSettings
         UpdateAnnounced ??= string.Empty;
         SessionsGame ??= string.Empty;
 
+        // Numbers WPF refuses outright, rather than merely draws oddly: a text
+        // size of 0 threw at startup and kept DeskMon from starting at all.
+        // The same limits the widget applies where it uses them.
+        if (!double.IsFinite(FontSize) || FontSize < 6)
+            FontSize = 13;
+        if (!double.IsFinite(LabelWidth) || LabelWidth < 0)
+            LabelWidth = 56;
+        if (!double.IsFinite(ValueWidth) || ValueWidth < 0)
+            ValueWidth = 64;
+
         return this;
     }
 

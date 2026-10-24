@@ -27,6 +27,14 @@ internal sealed class MemoryUsers
 
     private static readonly TimeSpan Every = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// While neither list is unfolded. Not never: the widget's width is
+    /// measured with the lists filled, and a list opened later should not
+    /// start from something half a day old - but listing every process every
+    /// five seconds, over a game, for lists nobody can see was waste.
+    /// </summary>
+    private static readonly TimeSpan EveryWhileFolded = TimeSpan.FromSeconds(30);
+
     private DateTime _readAt = DateTime.MinValue;
 
     /// <summary>By what they hold in RAM right now - the working set.</summary>
@@ -39,9 +47,10 @@ internal sealed class MemoryUsers
     public IReadOnlyList<SensorReading> ByCommit { get; private set; } = Array.Empty<SensorReading>();
 
     /// <summary>Reads again if the last read is old enough. On the sensor worker thread.</summary>
-    public void Refresh()
+    /// <param name="shown">Whether the RAM or SWAP list is unfolded - see <see cref="EveryWhileFolded"/>.</param>
+    public void Refresh(bool shown)
     {
-        if (DateTime.UtcNow - _readAt < Every)
+        if (DateTime.UtcNow - _readAt < (shown ? Every : EveryWhileFolded))
             return;
         _readAt = DateTime.UtcNow;
 

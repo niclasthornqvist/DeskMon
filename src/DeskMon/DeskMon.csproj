@@ -14,7 +14,7 @@
     <RootNamespace>DeskMon</RootNamespace>
     <!-- Keep in step with the top entry of Changelog.cs, which is what the
          versions window reports as the running version. -->
-    <Version>1.63.0</Version>
+    <Version>1.64.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- The exe's own icon, for Explorer, the taskbar and DeskMon's windows.
          The same tile as the tray icon (TrayIcon.BuildIcon), drawn out at

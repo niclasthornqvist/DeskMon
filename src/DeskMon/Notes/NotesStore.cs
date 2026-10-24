@@ -255,18 +255,52 @@ public sealed class NotesStore
                 $"{prefix}{DateTime.Now:yyyy-MM-dd_HHmmss}.rtf");
 
             File.Copy(source, target, overwrite: true);
-
-            // The timestamp sorts the way it reads, so name order is age order.
-            var stale = Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf")
-                .OrderByDescending(path => path, StringComparer.Ordinal)
-                .Skip(BackupsKept);
-
-            foreach (string old in stale)
-                File.Delete(old);
+            Prune(prefix);
         }
         catch
         {
             // See above: the save goes ahead regardless.
+        }
+    }
+
+    /// <summary>
+    /// Keeps the newest <see cref="BackupsKept"/> copies of one game. The
+    /// timestamp sorts the way it reads, so name order is age order.
+    /// </summary>
+    private void Prune(string prefix)
+    {
+        var stale = Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf")
+            .OrderByDescending(path => path, StringComparer.Ordinal)
+            .Skip(BackupsKept);
+
+        foreach (string old in stale)
+            File.Delete(old);
+    }
+
+    /// <summary>
+    /// Writes notes that couldn't be saved over their file into
+    /// <see cref="BackupFolder"/> as an ordinary copy, so the notes window's
+    /// HISTORY offers them back. For the moment before other notes replace
+    /// them on screen: the save had failed - the file held by an antivirus
+    /// or a sync tool, or the disk full - and the switch used to throw the
+    /// typing away. Null when kept, else why not.
+    /// </summary>
+    public string? KeepCopy(string gameName, byte[] data)
+    {
+        try
+        {
+            Directory.CreateDirectory(BackupFolder);
+
+            string prefix = SafeFileName(gameName) + "~";
+            AtomicFile.WriteAllBytes(Path.Combine(BackupFolder, $"{prefix}{DateTime.Now:yyyy-MM-dd_HHmmss}.rtf"), data);
+
+            // A prune that fails costs only tidiness; the copy is made.
+            try { Prune(prefix); } catch { }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
         }
     }
 

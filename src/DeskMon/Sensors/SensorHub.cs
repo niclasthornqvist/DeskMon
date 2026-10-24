@@ -63,6 +63,19 @@ public sealed class SensorHub : IDisposable
 
     private bool _opened;
 
+    /// <summary>
+    /// Whether the programs under RAM or SWAP are on screen, so they are kept
+    /// up to date - see MemoryUsers. Set by the widget on the UI thread before
+    /// each read; volatile, since the read runs on a worker.
+    /// </summary>
+    public bool MemoryListsShown
+    {
+        get => _memoryListsShown;
+        set => _memoryListsShown = value;
+    }
+
+    private volatile bool _memoryListsShown = true;
+
     /// <summary>Set when the hardware library failed to start, for the tooltip.</summary>
     public string? StartupError { get; private set; }
 
@@ -198,7 +211,7 @@ public sealed class SensorHub : IDisposable
 
         // Windows' own counters, like the two above - none of them touches the
         // hardware library. The lists refresh every few seconds on their own.
-        _memoryUsers.Refresh();
+        _memoryUsers.Refresh(MemoryListsShown);
         snapshot.TopRamUsers = _memoryUsers.ByRam;
         snapshot.TopCommitUsers = _memoryUsers.ByCommit;
 

@@ -2,6 +2,7 @@
                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                 xmlns:ui="clr-namespace:DeskMon.Ui"
+                xmlns:notes="clr-namespace:DeskMon.Notes"
                 Title="Notes"
                 Width="520" Height="620"
                 MinWidth="320" MinHeight="220"
@@ -13,7 +14,41 @@
     <!-- Chrome, transparency and edge resizing come from PanelWindow; the
          control styles come from the shared dictionary. -->
     <ui:PanelWindow.Resources>
-        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- The picker's rows, with a rule under General. General is not a
+                 game - it is the page you fall back to - so it stands apart from
+                 the games below it instead of reading as the first of them. A
+                 rule on the row rather than a Separator item in the list: the
+                 list is plain strings, and a non-string item would be one more
+                 thing for selection and the arrow keys to step over. -->
+            <Style x:Key="GamePickerRow" TargetType="ComboBoxItem" BasedOn="{StaticResource DarkComboItem}">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBoxItem">
+                            <StackPanel>
+                                <Border x:Name="Back" Background="Transparent" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter />
+                                </Border>
+                                <Border x:Name="Rule" Height="1" Margin="8,3,8,3"
+                                        Background="{DynamicResource Theme.Ov.33}" Visibility="Collapsed" />
+                            </StackPanel>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.2E}" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding}" Value="{x:Static notes:NotesStore.GeneralNotes}">
+                                    <Setter TargetName="Rule" Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
     </ui:PanelWindow.Resources>
 
     <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
@@ -170,6 +205,7 @@
             <ComboBox x:Name="GamePicker" DockPanel.Dock="Top" Margin="12,0,12,8"
                       Style="{StaticResource DarkCombo}"
                       ItemTemplate="{StaticResource GamePickerItem}"
+                      ItemContainerStyle="{StaticResource GamePickerRow}"
                       ToolTip="Which notes are open&#x0a;Every game played, your own notes, and General."
                       SelectionChanged="GamePicker_SelectionChanged" />
 
@@ -545,12 +581,44 @@
                         <!-- Heading and summary both fold the readings below:
                              folded by default so the notes, not the numbers,
                              get the room. The arrow is set in code. -->
-                        <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="▸ Last session"
-                                   FontWeight="SemiBold" Margin="0,0,12,0" Cursor="Hand"
-                                   ToolTip="Click to show or hide the readings"
-                                   MouseLeftButtonUp="SessionFold_Click" />
-                        <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" Cursor="Hand"
-                                   MouseLeftButtonUp="SessionFold_Click" />
+                        <!-- One strip under both, so the click and the hover
+                             cover the whole fold line, gap included, the way a
+                             heading on the widget does. Its own grid, still in
+                             SessionName, so the readings below keep lining up. -->
+                        <Grid x:Name="SessionFoldStrip" Grid.Column="0" Grid.ColumnSpan="2"
+                              Background="Transparent" Cursor="Hand"
+                              MouseLeftButtonUp="SessionFold_Click">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="SessionName" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <!-- The widget's row hover (MainWindow's RowHover):
+                                 the same faint strip, pulled past the text, faded
+                                 in quickly and out a little slower. First, so it
+                                 is drawn behind the text. -->
+                            <Border Grid.ColumnSpan="2" Margin="-5,-2,-4,-2" CornerRadius="4"
+                                    Background="{DynamicResource Theme.Ov.14}"
+                                    Opacity="0" IsHitTestVisible="False">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsMouseOver, ElementName=SessionFoldStrip}" Value="True">
+                                                <DataTrigger.EnterActions>
+                                                    <BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.12" /></Storyboard></BeginStoryboard>
+                                                </DataTrigger.EnterActions>
+                                                <DataTrigger.ExitActions>
+                                                    <BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2" /></Storyboard></BeginStoryboard>
+                                                </DataTrigger.ExitActions>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            </Border>
+                            <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="▸ Last session"
+                                       FontWeight="SemiBold" Margin="0,0,12,0"
+                                       ToolTip="Click to show or hide the readings" />
+                            <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" />
+                        </Grid>
                         <!-- A toggle like the widget's LOG, with the same clock:
                              it opens the same window, the next click puts it
                              away, and it is lit blue while it is open - LOG and

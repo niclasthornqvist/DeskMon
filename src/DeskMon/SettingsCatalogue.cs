@@ -67,6 +67,13 @@ public static class SettingsCatalogue
     /// The minimum should match whatever floor the code that reads the setting
     /// already enforces, or the low end of the slider would do nothing.
     /// </param>
+    /// <param name="Min">
+    /// For a number: the lowest the box accepts - below it the box turns red
+    /// and nothing is applied. Only where a lower value breaks something
+    /// rather than merely doing little: a text size of 0 made WPF throw, and
+    /// saved like that DeskMon could no longer start. Separate from the
+    /// slider's range, whose low end is a suggestion that typing may go past.
+    /// </param>
     public sealed record Setting(
         string Key,
         string Label,
@@ -76,7 +83,8 @@ public static class SettingsCatalogue
         string? Unit = null,
         bool Wide = false,
         EditorKind Kind = EditorKind.Auto,
-        SliderRange? Slider = null);
+        SliderRange? Slider = null,
+        double? Min = null);
 
     /// <param name="Step">What one notch is worth, and what the value snaps to while dragging.</param>
     public sealed record SliderRange(double Min, double Max, double Step);
@@ -136,7 +144,7 @@ public static class SettingsCatalogue
             new Setting("WidgetLayout", "Layout", "vertical stacks the sections one under another. horizontal puts them side by side, for the top or bottom of a screen.",
                         Choices: new[] { "vertical", "horizontal" }),
             new Setting("FontFamily", "Font", "A fixed-width one, like Consolas, stops the numbers jumping as they change.", Kind: EditorKind.Font),
-            new Setting("FontSize", "Text size", "Everything else on the widget scales with it.", Slider: new(8, 24, 0.5)),
+            new Setting("FontSize", "Text size", "Everything else on the widget scales with it.", Slider: new(8, 24, 0.5), Min: 6),
             new Setting("ShowBars", "Show bars", "A bar beside each reading."),
             new Setting("ShowPeaks", "Show peaks", "The highest reading so far (lowest for FPS), after the bar."),
             // Beside ShowBars and ShowPeaks, since they change how those look.
@@ -236,9 +244,9 @@ public static class SettingsCatalogue
         // Minimums are the floors MetricRow already applies: 16 px for the
         // peak column, 1 px for the bar's thickness.
         new("Widget layout", "The widget is as wide as what is in it, so wider columns make a wider widget.",
-            new Setting("LabelWidth", "Label column", "Widen it if labels are cut off.", Unit: "px", Slider: new(20, 200, 1)),
-            new Setting("ValueWidth", "Value column", "", Unit: "px", Slider: new(20, 200, 1)),
-            new Setting("BarTrackWidth", "Bar length", "", Unit: "px", Slider: new(10, 250, 1)),
+            new Setting("LabelWidth", "Label column", "Widen it if labels are cut off.", Unit: "px", Slider: new(20, 200, 1), Min: 0),
+            new Setting("ValueWidth", "Value column", "", Unit: "px", Slider: new(20, 200, 1), Min: 0),
+            new Setting("BarTrackWidth", "Bar length", "", Unit: "px", Slider: new(10, 250, 1), Min: 1),
             new Setting("BarTrackHeight", "Bar thickness", "1 or 2 makes it a thin line.", Unit: "px", Slider: new(1, 20, 1)),
             new Setting("PeakWidth", "Peak column", "Also sets the gap between the bar and the peak figure.", Unit: "px", Slider: new(16, 120, 1))),
 

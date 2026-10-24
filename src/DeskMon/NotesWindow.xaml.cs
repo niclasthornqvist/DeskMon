@@ -779,9 +779,34 @@ public partial class NotesWindow : PanelWindow
         Editor.Focus();
     }
 
-    private void LoadGame(string game)
+    /// <param name="mayRefuse">
+    /// For a switch asked for here - the picker, a search result, NEW: when
+    /// the notes on screen can be neither saved nor kept as a copy, they stay
+    /// on screen and this returns false. A switch from a game starting or
+    /// ending can't wait for that, so it goes ahead with the copy kept if
+    /// it could be.
+    /// </param>
+    private bool LoadGame(string game, bool mayRefuse = false)
     {
         SaveNow();   // never lose what is on screen
+
+        // The save failed - the file held by another program, the disk full -
+        // and the notes on screen are about to be replaced. They used to be
+        // lost with it; kept as a copy, HISTORY can put them back.
+        string? keptFor = null;
+        if (_dirty && _saved is not null)
+        {
+            if (KeepUnsavedCopy())
+            {
+                keptFor = _currentGame;
+            }
+            else if (mayRefuse)
+            {
+                ShowStatus("Not switched - these notes couldn't be saved, or kept as a copy. Copy what you typed somewhere safe.",
+                           problem: true);
+                return false;
+            }
+        }
 
         // An armed delete was aimed at the note it named; a second click
         // after switching must not delete this one instead.
@@ -820,10 +845,18 @@ public partial class NotesWindow : PanelWindow
             DeleteNoteButton.ToolTip = IsGeneral(game)
                 ? "Clear General\nGeneral can't be deleted, only cleared. The old notes go to the Recycle Bin."
                 : "Delete this note\nIt goes to the Recycle Bin.";
+            // General is only ever emptied, never removed, so the button says
+            // what it will really do there rather than promising a delete.
+            DeleteNoteLabel.Text = IsGeneral(game) ? "CLEAR" : "DELETE";
             RefreshPicker();
             RefreshLastSession();
             _dirty = false;
             ShowStatus(state, problem);
+
+            // Said over the load's own message: it is the one thing to act on.
+            if (keptFor is not null)
+                ShowStatus($"{keptFor} couldn't be saved - what was on screen is kept in its HISTORY", problem: true);
+
             if (IsGeneral(game))
                 _banner.Show(GameArt.Motif.Notepad);
             else
@@ -843,6 +876,24 @@ public partial class NotesWindow : PanelWindow
                 _dirty = false;
                 _autoSave.Stop();
             }));
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The notes on screen as a copy in the backups, for when they couldn't
+    /// be saved over their file. False if that failed too.
+    /// </summary>
+    private bool KeepUnsavedCopy()
+    {
+        try
+        {
+            return _store.KeepCopy(_currentGame, Serialise()) is null;
+        }
+        catch
+        {
+            return false;   // the document itself can't be written out
         }
     }
 
@@ -960,7 +1011,16 @@ public partial class NotesWindow : PanelWindow
         var games = new List<string> { NotesStore.GeneralNotes };
         games.AddRange(_store.ListGames().Where(g => !IsGeneral(g)));
 
-        if (!games.Any(g => string.Equals(g, _currentGame, StringComparison.OrdinalIgnoreCase)))
+        // The list is made from file names, which have the characters Windows
+        // forbids replaced: "The Witcher 3: Wild Hunt" is listed as "The
+        // Witcher 3- Wild Hunt". Compared by name alone, the running game
+        // wasn't found and was added a second time - two entries for one
+        // file. Its file's entry takes the real name instead.
+        string file = NotesStore.SafeFileName(_currentGame);
+        int listed = games.FindIndex(g => string.Equals(NotesStore.SafeFileName(g), file, StringComparison.OrdinalIgnoreCase));
+        if (listed >= 0)
+            games[listed] = _currentGame;
+        else
             games.Insert(1, _currentGame);
 
         bool wasLoading = _loading;
@@ -982,8 +1042,10 @@ public partial class NotesWindow : PanelWindow
         if (_loading || GamePicker.SelectedItem is not string game)
             return;
 
-        if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
-            LoadGame(game);
+        // Refused, the picker goes back to the notes still on screen.
+        if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase)
+            && !LoadGame(game, mayRefuse: true))
+            Dispatcher.BeginInvoke(new Action(RefreshPicker));
     }
 
     private bool _tidying;
@@ -1019,14 +1081,25 @@ public partial class NotesWindow : PanelWindow
     ///
     /// Pictures go out as the file has always held them - the small preview at
     /// its own width - however wide and sharp they are on screen. See NotesPictures.
+    ///
+    /// Through NotesPictures.Serialise, which writes the pictures from what it
+    /// learned at the last full save rather than encoding each one again - the
+    /// part that made saving notes full of screenshots stall typing.
     /// </summary>
     private byte[] Serialise()
-        => _pictures.WithStoredPictures(() =>
+    {
+        byte[] rtf = _pictures.Serialise(() =>
         {
             using var stream = new MemoryStream();
             Contents.Save(stream, DataFormats.Rtf);
-            return NotesRtf.WithoutColour(stream.ToArray(), _theme.NotesTextColor);
+            return stream.ToArray();
         });
+
+        // After the pictures are put back, not inside the save: the colour
+        // table is the document's, and stripping it before the stand-ins were
+        // swapped would make the two saves NotesPictures compares differ.
+        return NotesRtf.WithoutColour(rtf, _theme.NotesTextColor);
+    }
 
     public void SaveNow()
     {
@@ -1563,18 +1636,24 @@ public partial class NotesWindow : PanelWindow
             ? NotesStore.GeneralNotes
             : _store.ListGames().FirstOrDefault(g => string.Equals(g, name, StringComparison.OrdinalIgnoreCase));
 
+        // Refused: the notes on screen couldn't be saved, and the status line
+        // says so. Opened with a copy kept, that message stays up rather than
+        // being written over with the news of the new note.
         if (existing is not null)
         {
-            LoadGame(existing);
-            ShowStatus($"There already is a note called {existing} - opened it");
+            if (!LoadGame(existing, mayRefuse: true))
+                return;
+            if (!_statusProblem)
+                ShowStatus($"There already is a note called {existing} - opened it");
         }
         else
         {
-            LoadGame(name);
+            if (!LoadGame(name, mayRefuse: true))
+                return;
             if (_saved is not null)
             {
                 string? error = _store.SaveRtf(name, _saved, hasContent: true);
-                if (error is null)
+                if (error is null && !_statusProblem)
                     ShowStatus("New note created successfully");
                 else
                     ShowStatus("Could not create the file: " + error, problem: true);
@@ -1618,7 +1697,7 @@ public partial class NotesWindow : PanelWindow
         // room for one word.
         // In the warning colour, like the button: it is a question, waiting.
         ShowStatus(IsGeneral(_currentGame)
-            ? "General can't be deleted, only cleared - click DELETE again to clear it"
+            ? "Click CLEAR again to clear General"
             : $"Click DELETE again to delete {_currentGame}",
             problem: true);
 
@@ -1882,8 +1961,10 @@ public partial class NotesWindow : PanelWindow
     {
         SearchPopup.IsOpen = false;
 
-        if (!string.Equals(hit.Game, _currentGame, StringComparison.OrdinalIgnoreCase))
-            LoadGame(hit.Game);
+        // Refused, there is nothing to select: the match is in other notes.
+        if (!string.Equals(hit.Game, _currentGame, StringComparison.OrdinalIgnoreCase)
+            && !LoadGame(hit.Game, mayRefuse: true))
+            return;
 
         // Laid out first, or there are no positions yet to scroll to.
         Editor.UpdateLayout();

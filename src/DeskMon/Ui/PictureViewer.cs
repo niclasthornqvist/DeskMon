@@ -42,7 +42,7 @@ public sealed class PictureViewer : Window
     private int _index;
 
     private readonly Func<string, bool> _isFavourite;
-    private readonly Func<string, bool> _toggleFavourite;
+    private readonly Func<string, string?> _toggleFavourite;
 
     /// <summary>A picture was added (a marked-up copy) or changed (a star): the pictures window lists them again.</summary>
     private readonly Action _changed;
@@ -80,7 +80,7 @@ public sealed class PictureViewer : Window
     /// <param name="replaced">Told the path of a picture marked up in place; see <see cref="SaveMarkup"/>.</param>
     /// <param name="delete">Deletes a picture by its path; see <see cref="Delete"/>.</param>
     public PictureViewer(UiTheme theme, IEnumerable<string> paths, int index, Window near,
-                         Func<string, bool> isFavourite, Func<string, bool> toggleFavourite, Action changed,
+                         Func<string, bool> isFavourite, Func<string, string?> toggleFavourite, Action changed,
                          Action<string> replaced, Func<string, string?> delete)
     {
         _delete = delete;
@@ -543,9 +543,17 @@ public sealed class PictureViewer : Window
     {
         if (_paths.Count == 0)
             return;
-        bool now = _toggleFavourite(Current);
+        // The error, not a new state, comes back: the star is read again
+        // either way, so it shows what the file really holds.
+        string? error = _toggleFavourite(Current);
         ShowFavourite();
-        Note(now ? "Added to favourites" : "Taken out of favourites");
+        if (error is not null)
+        {
+            Note("Couldn't change the favourite: " + error, warn: true);
+            return;
+        }
+
+        Note(_isFavourite(Current) ? "Added to favourites" : "Taken out of favourites");
         _changed();
     }
 
@@ -915,8 +923,19 @@ public sealed class PictureViewer : Window
     ///   or as a copy - a PNG beside it, "2026-10-17_210412 marked.png", dated
     ///   a second after it so it sorts next to it; the original stays as it is.
     /// </summary>
-    private void SaveMarkup(bool inPlace)
+    /// <summary>A mark-up is being written; a second Save waits for it rather than writing twice.</summary>
+    private bool _saving;
+
+    /// <remarks>
+    /// Drawn here, since the marks are on screen, but encoded and written on a
+    /// worker: a 4K PNG takes up to a second to encode, and on the UI thread
+    /// every DeskMon window froze for it.
+    /// </remarks>
+    private async void SaveMarkup(bool inPlace)
     {
+        if (_saving)
+            return;
+
         CommitText();
         if (_image.Source is not BitmapSource picture)
             return;
@@ -927,9 +946,11 @@ public sealed class PictureViewer : Window
         }
 
         string original = Current;
+        _saving = true;
         try
         {
-            var marked = Render(picture);
+            var marked = Render(picture);   // frozen, so the worker may use it
+            Note("Saving…");
             string saved;
             string? binError = null;
 
@@ -942,39 +963,47 @@ public sealed class PictureViewer : Window
                 // original first and move the copy in after, and a move that
                 // failed then (an antivirus holding the file) left the notes
                 // pointing at nothing.
-                var written = File.GetLastWriteTime(original);
-                string temp = original + ".marking";
                 string unmarked = original + ".unmarked";
-                Write(marked, temp, original);
-
-                try
+                await Task.Run(() =>
                 {
-                    File.Replace(temp, original, unmarked);
-                }
-                catch
-                {
-                    // The original is as it was; only the stray copy goes.
-                    try { File.Delete(temp); } catch { }
-                    throw;
-                }
+                    var written = File.GetLastWriteTime(original);
+                    string temp = original + ".marking";
+                    Write(marked, temp, original);
 
-                // The unmarked picture to the Recycle Bin, as before. Should
-                // the bin refuse it, it stays beside the picture - not lost,
-                // and not listed, since it no longer ends in .png or .jpg.
+                    try
+                    {
+                        File.Replace(temp, original, unmarked);
+                    }
+                    catch
+                    {
+                        // The original is as it was; only the stray copy goes.
+                        try { File.Delete(temp); } catch { }
+                        throw;
+                    }
+
+                    // Its date moved on a second, not to now: a picture dropped in
+                    // by hand is ordered by it, and a later one tells the pictures
+                    // window's thumbnail to be made again.
+                    File.SetLastWriteTime(original, written.AddSeconds(1));
+                });
+
+                // The unmarked picture to the Recycle Bin, as before - back on
+                // this thread, as the shell call wants. Should the bin refuse
+                // it, it stays beside the picture - not lost, and not listed,
+                // since it no longer ends in .png or .jpg.
                 binError = RecycleBin.Send(unmarked);
-
-                // Its date moved on a second, not to now: a picture dropped in
-                // by hand is ordered by it, and a later one tells the pictures
-                // window's thumbnail to be made again.
-                File.SetLastWriteTime(original, written.AddSeconds(1));
                 saved = original;
             }
             else
             {
                 saved = MarkedName(original);
-                Write(marked, saved, saved);
-                var taken = NotesPictures.TimeFromFileName(original) ?? File.GetLastWriteTime(original);
-                File.SetLastWriteTime(saved, taken.AddSeconds(1));
+                string target = saved;
+                await Task.Run(() =>
+                {
+                    Write(marked, target, target);
+                    var taken = NotesPictures.TimeFromFileName(original) ?? File.GetLastWriteTime(original);
+                    File.SetLastWriteTime(target, taken.AddSeconds(1));
+                });
                 _paths.Insert(_index + 1, saved);
             }
 
@@ -996,6 +1025,10 @@ public sealed class PictureViewer : Window
         catch (Exception ex)
         {
             Note("Couldn't save: " + ex.Message, warn: true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 

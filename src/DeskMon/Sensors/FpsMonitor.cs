@@ -591,6 +591,12 @@ public sealed class FpsMonitor : IDisposable
         if (process is null)
             return;
 
+        // Unhooked here, not only when the queue gets to StopRun: that can
+        // wait behind a start still checking PresentMon's signature, and the
+        // lines the old run printed meanwhile landed in the chains just
+        // cleared - the next run's, a game switched to or tabbed back into.
+        process.OutputDataReceived -= OnOutputLine;
+
         // Off the UI thread, on the same queue as the starts. A clean shutdown
         // starts a helper process and waits for two processes to exit - up to
         // five seconds - and this runs every time you tab out of an
@@ -606,7 +612,8 @@ public sealed class FpsMonitor : IDisposable
     {
         // Unhooked first, so lines PresentMon prints while it shuts down can't
         // refill the chains - those frames would otherwise be counted into the
-        // session after it was meant to have stopped.
+        // session after it was meant to have stopped. Stop has usually done
+        // this already; for a run overtaken while it started, this is the one.
         process.OutputDataReceived -= OnOutputLine;
 
         try

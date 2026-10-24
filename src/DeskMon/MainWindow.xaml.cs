@@ -264,7 +264,7 @@ public partial class MainWindow : Window
         _theme.Dress(Panel);
         ApplyOpacity();
         Topmost = _settings.AlwaysOnTop;
-        FontSize = _settings.FontSize;
+        FontSize = SafeFontSize();
         FontFamily = SafeFont(_settings.FontFamily);
 
         // The menu's ticks are set as it opens - see WidgetMenu_Opened.
@@ -317,6 +317,7 @@ public partial class MainWindow : Window
         {
             _userHidden = !show;
             if (show) Show(); else Hide();
+            UpdateDrift();
         };
         _tray.SetAlwaysOnTop += SetAlwaysOnTop;
         _tray.SetLocked += SetLocked;
@@ -793,15 +794,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        // While a game runs, back off to the slower interval.
-        double wantedInterval = _inGame
+        // While a game runs, back off to the slower interval - and while the
+        // widget is hidden from the tray too: nothing is drawn then, but the
+        // readings still feed the alerts and the session's peaks, which used
+        // to stop entirely - no temperature alert for someone playing with
+        // only the FPS overlay up, and a session log missing its worst figures.
+        double wantedInterval = _inGame || _userHidden
             ? Math.Max(250, _settings.GameIntervalMs)
             : Math.Max(100, _settings.IntervalMs);
         if (Math.Abs(_timer.Interval.TotalMilliseconds - wantedInterval) > 1)
             _timer.Interval = TimeSpan.FromMilliseconds(wantedInterval);
-
-        if (_userHidden)
-            return;   // nothing on screen to update; game tracking already ran
 
         if (_reading)
             return;   // a slow read must not queue up more reads behind it
@@ -810,6 +812,12 @@ public partial class MainWindow : Window
         try
         {
             var hub = _hub;
+
+            // The program lists behind RAM and SWAP are the costly part of a
+            // read that nothing else uses; kept fresh only while one is open.
+            hub.MemoryListsShown = !_userHidden
+                && _rows.Exists(row => row.IsExpanded && row.Key is "Usage/RAM" or "Usage/SWAP");
+
             var snapshot = await Task.Run(hub.Read);
 
             // FPS is measured by a separate process, not by SensorHub. One read
@@ -1187,7 +1195,12 @@ public partial class MainWindow : Window
         }
 
         _inGame = true;
-        _backdrop.Drifting = false;   // each step redraws the whole widget - not worth it over a game
+        UpdateDrift();   // each step redraws the whole widget - not worth it over a game
+
+        // A hotkey Windows refused earlier is tried again now - a game is
+        // when the screenshot and overlay keys are wanted. Does nothing for
+        // ones already registered.
+        RegisterHotkeys();
         ApplyOpacity();   // fade back, so the panel stops competing with the game
         ApplyLayout();    // the game's folded sections, if it has its own
 
@@ -1302,7 +1315,7 @@ public partial class MainWindow : Window
         _gameName = null;
         _gamePid = 0;
         _inGame = false;
-        _backdrop.Drifting = true;
+        UpdateDrift();
         _gameListed = false;
         _namedPid = 0;   // the game may have exited, freeing its pid - see UpdateGameState
         UpdateGameTitle();
@@ -2475,7 +2488,7 @@ public partial class MainWindow : Window
         _theme.Apply(_settings);
 
         Topmost = _settings.AlwaysOnTop;
-        FontSize = _settings.FontSize;
+        FontSize = SafeFontSize();
         FontFamily = SafeFont(_settings.FontFamily);
         ApplyOpacity();
 
@@ -2590,6 +2603,12 @@ public partial class MainWindow : Window
     /// One hotkey of <see cref="RegisterHotkeys"/>. Does nothing - and says so
     /// - when the text is the one already registered, so unchanged settings
     /// don't take the key away from Windows and hand it back.
+    ///
+    /// Only a combination Windows took counts as registered. One that was
+    /// refused - held by another program at logon, say - used to be recorded
+    /// all the same and never tried again, so the hotkey stayed dead until the
+    /// setting was changed; now every call tries it again (see TrackGame).
+    /// True when the tooltip's note changed.
     /// </summary>
     private static bool Reregister(GlobalHotkey? hotkey, string gesture,
                                    ref string? registered, ref string? note, string name)
@@ -2597,9 +2616,13 @@ public partial class MainWindow : Window
         if (hotkey is null || registered == gesture)
             return false;
 
-        registered = gesture;
-        note = hotkey.Register(gesture) is { } error ? $"{name}: {error}" : null;
-        return true;
+        string? error = hotkey.Register(gesture);
+        registered = error is null ? gesture : null;
+
+        string? wanted = error is null ? null : $"{name}: {error}";
+        bool changed = wanted != note;
+        note = wanted;
+        return changed;
     }
 
     // --- Screenshots -------------------------------------------------------
@@ -2681,6 +2704,13 @@ public partial class MainWindow : Window
                     Screenshot.Save(shot, path, quality);
                     return Screenshot.Preview(shot, takenAt);
                 });
+
+                // The notes may have moved on while the file was saved - the
+                // game exiting takes them to General, or another was picked -
+                // and the picture would have gone into those. Back to the
+                // game it was taken for, whose folder the file is in.
+                if (!string.Equals(notes.CurrentGame, game, StringComparison.OrdinalIgnoreCase))
+                    notes.ShowFor(game);
 
                 notes.InsertScreenshot(preview, path, takenAt);
             }
@@ -2985,6 +3015,12 @@ public partial class MainWindow : Window
         // The position is already saved at the end of every drag.
         _restarting = true;
 
+        // The open session written now, before the new copy starts: it
+        // recovers whatever session was left open, and racing this copy's own
+        // close, it could write the same evening twice - its last checkpoint,
+        // then this copy's line. Ended here, there is nothing left to recover.
+        FinishSession("cut short, settings reloaded");
+
         // Let go of the single-instance lock first, or the replacement sees
         // this process still holding it and exits immediately.
         var app = Application.Current as App;
@@ -3002,6 +3038,11 @@ public partial class MainWindow : Window
         {
             _restarting = false;
             app?.TakeSingleInstanceLock();
+
+            // Carrying on: the game still running gets a session again,
+            // since the one above was ended for a restart that didn't happen.
+            if (_inGame && _gamePid != 0)
+                BeginOrResumeSession(_gamePid, _gameName);
             _tray?.Notify("DeskMon", "Couldn't restart to reload the settings: " + ex.Message, warning: true);
             return;
         }
@@ -3203,7 +3244,19 @@ public partial class MainWindow : Window
             _needsPrime = true;
 
         _paused = paused;
+
+        // Through the dispatcher: SystemEvents may call from a thread of its
+        // own, and the drift's clock belongs to the UI thread.
+        Dispatcher.BeginInvoke(new Action(UpdateDrift));
     }
+
+    /// <summary>
+    /// The background moves only while someone can see it move. Every step
+    /// redraws the whole see-through widget, and it went on stepping ten
+    /// times a second while the widget was hidden from the tray, or the PC
+    /// was locked or asleep - as well as over a game, where it already stopped.
+    /// </summary>
+    private void UpdateDrift() => _backdrop.Drifting = !_inGame && !_userHidden && !_paused;
 
     private void OnClosed(object? sender, EventArgs e)
     {
@@ -3289,6 +3342,15 @@ public partial class MainWindow : Window
         try { return new FontFamily(name); }
         catch { return new FontFamily("Consolas"); }
     }
+
+    /// <summary>
+    /// The text size, kept to what WPF takes. 0, a negative or NaN made
+    /// setting FontSize throw - and in the constructor, before the tray icon
+    /// existed, that left DeskMon running with no window, holding the
+    /// single-instance lock, so no later start could show one either.
+    /// </summary>
+    private double SafeFontSize()
+        => double.IsFinite(_settings.FontSize) ? Math.Clamp(_settings.FontSize, 6, 48) : 13;
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;

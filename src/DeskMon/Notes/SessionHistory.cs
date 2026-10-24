@@ -237,13 +237,29 @@ public sealed class SessionHistory
             if (!File.Exists(path))
                 File.WriteAllText(path, $"# DeskMon session history - {game}{Environment.NewLine}", Utf8WithBom);
 
-            File.AppendAllText(path, line + Environment.NewLine, Utf8WithBom);
+            // A crash or power cut mid-append can leave the last line without
+            // its break, and this one would then be written onto the end of
+            // it - two sessions in one line that reads as neither.
+            string start = EndsWithLineBreak(path) ? string.Empty : Environment.NewLine;
+            File.AppendAllText(path, start + line + Environment.NewLine, Utf8WithBom);
             return null;
         }
         catch (Exception ex)
         {
             return ex.Message;
         }
+    }
+
+    /// <summary>Whether the file's last byte is a line break - or the file is empty, which needs none.</summary>
+    private static bool EndsWithLineBreak(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                          FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length == 0)
+            return true;
+
+        stream.Seek(-1, SeekOrigin.End);
+        return stream.ReadByte() == '\n';
     }
 
     // --- The session still being played -----------------------------------

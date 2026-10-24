@@ -337,6 +337,16 @@ internal sealed class NotesPictures
 
         /// <summary>The full-size file's own width, once known: no point decoding wider.</summary>
         public int FileWidth { get; set; } = int.MaxValue;
+
+        /// <summary>
+        /// This picture's group in the RTF, learned from a full save - see
+        /// NotesPictures.Serialise - and what it was learned for: a preview
+        /// swapped by mark-up, or a picture resized, is learned again.
+        /// </summary>
+        public string? RtfGroup { get; set; }
+        public ImageSource? RtfGroupOf { get; set; }
+        public double RtfGroupWidth { get; set; }
+        public double RtfGroupHeight { get; set; }
     }
 
     // Weak, so pictures from notes that have been closed or edited away go
@@ -563,6 +573,15 @@ internal sealed class NotesPictures
     /// layout pass in between, so nothing on screen flickers.
     /// </summary>
     public T WithStoredPictures<T>(Func<T> save)
+        => WithPictures(save, placeholders: false, tracked: null);
+
+    /// <param name="placeholders">
+    /// Each tracked picture as a tiny stand-in of its own rather than its
+    /// stored preview - see <see cref="Serialise"/>. Its stored width and
+    /// height are kept, which is all its place in the RTF depends on.
+    /// </param>
+    /// <param name="tracked">Filled with the tracked pictures, the i-th wearing placeholder i.</param>
+    private T WithPictures<T>(Func<T> save, bool placeholders, List<Picture>? tracked)
     {
         var shown = new List<(Image Image, ImageSource Source, double Width, double Height)>();
         var spaced = new List<(Image Image, Thickness Margin, Geometry? Clip)>();
@@ -587,7 +606,8 @@ internal sealed class NotesPictures
                 continue;
 
             shown.Add((image, image.Source, image.Width, image.Height));
-            image.Source = picture.Stored;
+            image.Source = placeholders ? Placeholder(shown.Count - 1) : picture.Stored;
+            tracked?.Add(picture);
             image.Width = picture.StoredWidth;
             image.Height = picture.StoredHeight;
         }
@@ -614,6 +634,269 @@ internal sealed class NotesPictures
             foreach (var link in underlined)
                 link.TextDecorations = NoUnderline;
         }
+    }
+
+    // --- Saving without re-encoding every picture ------------------------------
+    //
+    // WPF's RTF writer encodes every picture as PNG on every save, and the notes
+    // save after each pause in typing - twenty screenshots made that a stall of
+    // 100 ms or more on the UI thread. A picture's part of the RTF is one group,
+    // {\pict\picwgoalN\pichgoalN\pngblip <hex>}, which depends only on the
+    // stored preview and its stored size. So each one's group is learned once,
+    // from a real full save, and later saves write the document with tiny
+    // stand-ins and put the learned groups back in their place - text work only.
+    //
+    // Learned only from a full save made at the same moment as a stand-in save,
+    // with everything outside the picture groups compared between the two. Any
+    // difference and the shortcut is never used again for these notes: the file
+    // is always byte for byte what the full save would have written.
+
+    /// <summary>A difference turned up between the two saves; full saves only from now on, for this editor.</summary>
+    private bool _spliceBroken;
+
+    /// <summary>
+    /// The document as RTF, as <c>WithStoredPictures(save)</c> would write
+    /// it - but without encoding the pictures again when their groups are
+    /// already known. <paramref name="save"/> writes the document as it is.
+    /// </summary>
+    public byte[] Serialise(Func<byte[]> save)
+    {
+        if (_spliceBroken)
+            return WithStoredPictures(save);
+
+        var tracked = new List<Picture>();
+        byte[] quick = WithPictures(save, placeholders: true, tracked);
+
+        // Every picture known at the size it is stored at: the stand-ins swapped
+        // for their groups, and that is the save.
+        // Equals, not ==: a stored height is usually NaN (unset, so the width
+        // decides), and NaN == NaN is false - every save would learn again.
+        if (tracked.All(p => p.RtfGroup is not null && ReferenceEquals(p.RtfGroupOf, p.Stored)
+                             && p.RtfGroupWidth.Equals(p.StoredWidth) && p.RtfGroupHeight.Equals(p.StoredHeight))
+            && Splice(quick, tracked) is { } spliced)
+            return spliced;
+
+        // A picture new to these notes, or resized: the full save, as it
+        // always was, and the groups learned from it for next time.
+        byte[] full = WithStoredPictures(save);
+        Learn(quick, full, tracked);
+        return full;
+    }
+
+    /// <summary>Stand-in i: a few pixels of its own, so its group in the RTF can be told from every other.</summary>
+    private static BitmapSource Placeholder(int index)
+    {
+        while (Placeholders.Count <= index)
+        {
+            int width = Placeholders.Count + 1;
+            var pixels = new byte[width * 4];
+            new Random(width).NextBytes(pixels);
+            var bitmap = BitmapSource.Create(width, 1, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+            bitmap.Freeze();
+            Placeholders.Add(bitmap);
+        }
+
+        return Placeholders[index];
+    }
+
+    private static readonly List<BitmapSource> Placeholders = new();
+
+    /// <summary>Each stand-in's picture data as WPF writes it, by index - learned from the stand-in saves.</summary>
+    private static readonly Dictionary<string, int> PlaceholderData = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Pairs the two saves' picture groups in order. Everything between the
+    /// groups must be the same in both, and so must every group that isn't a
+    /// stand-in's; then the stand-ins' places in the full save are the real
+    /// pictures' groups, kept on each picture.
+    /// </summary>
+    private void Learn(byte[] quick, byte[] full, List<Picture> tracked)
+    {
+        try
+        {
+            string a = System.Text.Encoding.Latin1.GetString(quick);
+            string b = System.Text.Encoding.Latin1.GetString(full);
+            var quickGroups = PictGroups(a);
+            var fullGroups = PictGroups(b);
+
+            if (quickGroups.Count != fullGroups.Count || quickGroups.Count < tracked.Count)
+            {
+                Broken("the saves have different numbers of pictures");
+                return;
+            }
+
+            var learned = new Dictionary<int, string>();
+            int quickAt = 0, fullAt = 0;
+            for (int k = 0; k < quickGroups.Count; k++)
+            {
+                var (qs, qe) = quickGroups[k];
+                var (fs, fe) = fullGroups[k];
+
+                int between = qs - quickAt;
+                if (between != fs - fullAt || string.CompareOrdinal(a, quickAt, b, fullAt, between) != 0)
+                {
+                    Broken("the text around the pictures differs");
+                    return;
+                }
+
+                string quickGroup = a[qs..qe];
+                string fullGroup = b[fs..fe];
+
+                if (StandIn(quickGroup) is int index && index < tracked.Count)
+                    learned[index] = fullGroup;
+                else if (quickGroup != fullGroup)
+                {
+                    Broken("a picture that isn't a stand-in came out differently");
+                    return;
+                }
+
+                quickAt = qe;
+                fullAt = fe;
+            }
+
+            if (a.Length - quickAt != b.Length - fullAt
+                || string.CompareOrdinal(a, quickAt, b, fullAt, a.Length - quickAt) != 0)
+            {
+                Broken("the text after the pictures differs");
+                return;
+            }
+
+            if (learned.Count != tracked.Count)
+            {
+                Broken("a stand-in wasn't found in the save");
+                return;
+            }
+
+            foreach (var (index, group) in learned)
+            {
+                var picture = tracked[index];
+                picture.RtfGroup = group;
+                picture.RtfGroupOf = picture.Stored;
+                picture.RtfGroupWidth = picture.StoredWidth;
+                picture.RtfGroupHeight = picture.StoredHeight;
+            }
+        }
+        catch (Exception ex)
+        {
+            Broken(ex.Message);
+        }
+    }
+
+    /// <summary>The stand-in save with each stand-in's group replaced by its picture's. Null if a stand-in can't be placed.</summary>
+    private static byte[]? Splice(byte[] quick, List<Picture> tracked)
+    {
+        string text = System.Text.Encoding.Latin1.GetString(quick);
+        var result = new System.Text.StringBuilder(text.Length + tracked.Sum(p => p.RtfGroup!.Length));
+        int at = 0, placed = 0;
+
+        foreach (var (start, end) in PictGroups(text))
+        {
+            result.Append(text, at, start - at);
+            if (StandIn(text[start..end]) is int index && index < tracked.Count)
+            {
+                result.Append(tracked[index].RtfGroup);
+                placed++;
+            }
+            else
+            {
+                result.Append(text, start, end - start);
+            }
+            at = end;
+        }
+        result.Append(text, at, text.Length - at);
+
+        // Every picture accounted for exactly once, or this isn't the save it should be.
+        return placed == tracked.Count ? System.Text.Encoding.Latin1.GetBytes(result.ToString()) : null;
+    }
+
+    /// <summary>Which stand-in a picture group is, from its data; null for a real picture.</summary>
+    private static int? StandIn(string group)
+    {
+        string? data = PictureData(group);
+        if (data is null)
+            return null;
+
+        if (PlaceholderData.TryGetValue(data, out int index))
+            return index;
+
+        // Not seen yet: a stand-in's data is short - a few pixels - and can be
+        // matched against the stand-ins made so far by encoding each once.
+        if (data.Length > 2048)
+            return null;
+
+        for (int i = 0; i < Placeholders.Count; i++)
+        {
+            if (PlaceholderData.ContainsValue(i))
+                continue;
+            if (PictureData(GroupOf(Placeholders[i])) is { } known)
+            {
+                PlaceholderData[known] = i;
+                if (known == data)
+                    return i;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The group WPF writes for one picture on its own - how a stand-in's data is learned.</summary>
+    private static string GroupOf(BitmapSource picture)
+    {
+        var document = new FlowDocument(new Paragraph(new InlineUIContainer(new Image
+        {
+            Source = picture,
+            Width = picture.PixelWidth,
+            Height = picture.PixelHeight,
+        })));
+
+        using var stream = new MemoryStream();
+        new TextRange(document.ContentStart, document.ContentEnd).Save(stream, DataFormats.Rtf);
+        string rtf = System.Text.Encoding.Latin1.GetString(stream.ToArray());
+        return PictGroups(rtf) is { Count: > 0 } groups ? rtf[groups[0].Start..groups[0].End] : string.Empty;
+    }
+
+    /// <summary>The hex after \pngblip, without the line breaks, or null for a group that isn't a PNG.</summary>
+    private static string? PictureData(string group)
+    {
+        int blip = group.IndexOf(@"\pngblip", StringComparison.Ordinal);
+        if (blip < 0)
+            return null;
+
+        var data = new System.Text.StringBuilder(group.Length - blip);
+        for (int i = blip + @"\pngblip".Length; i < group.Length - 1; i++)
+            if (Uri.IsHexDigit(group[i]))
+                data.Append(group[i]);
+        return data.ToString();
+    }
+
+    /// <summary>Every {\pict ...} group, in order, found by counting braces - escaped ones skipped.</summary>
+    private static List<(int Start, int End)> PictGroups(string rtf)
+    {
+        var groups = new List<(int, int)>();
+        int from = 0;
+        while ((from = rtf.IndexOf(@"{\pict", from, StringComparison.Ordinal)) >= 0)
+        {
+            int depth = 0, end = -1;
+            for (int i = from; i < rtf.Length; i++)
+            {
+                char c = rtf[i];
+                if (c == '\\') { i++; continue; }
+                if (c == '{') depth++;
+                else if (c == '}' && --depth == 0) { end = i + 1; break; }
+            }
+
+            if (end < 0)
+                break;   // unbalanced: not one to touch
+            groups.Add((from, end));
+            from = end;
+        }
+        return groups;
+    }
+
+    private void Broken(string why)
+    {
+        _spliceBroken = true;
+        App.Log("notes save shortcut", $"Turned off for this session: {why}. Saves write every picture again, as before.");
     }
 
     /// <summary>Sets a property back to exactly what it was - including "never set", which a plain assignment can't express.</summary>

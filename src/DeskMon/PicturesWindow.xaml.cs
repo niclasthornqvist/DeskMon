@@ -857,12 +857,18 @@ public partial class PicturesWindow : PanelWindow
         return star;
     }
 
-    private bool ToggleFavourite(string path)
+    private void ToggleFavourite(string path)
     {
-        bool now = PictureFavourites.Toggle(_notes.PictureFolder, System.IO.Path.GetFileName(path));
+        string name = System.IO.Path.GetFileName(path);
+        if (PictureFavourites.Toggle(_notes.PictureFolder, name) is { } error)
+        {
+            // Nothing changed, so nothing to rebuild - only the reason to give.
+            Say($"Couldn't change the star on {name}: {error}");
+            return;
+        }
+
         _shown = null;   // rebuilt with the star where it now is
         Refresh();
-        return now;
     }
 
     /// <summary>
@@ -1165,6 +1171,7 @@ public partial class PicturesWindow : PanelWindow
         if (screen <= 0)
             return;
 
+        var wanted = new List<(TileParts Parts, double Distance)>();
         foreach (var tile in Tiles.Children.OfType<Border>())
         {
             if (tile.Tag is not TileParts parts)
@@ -1174,11 +1181,34 @@ public partial class PicturesWindow : PanelWindow
             bool near = top + tile.ActualHeight >= -screen && top <= 2 * screen;
 
             if (near && parts.Image.Source is null && !parts.Loading)
-                _ = LoadThumbAsync(parts);
+            {
+                // How far off the view it is: 0 on screen, else the gap to it.
+                double distance = top + tile.ActualHeight < 0 ? -(top + tile.ActualHeight)
+                                : top > screen ? top - screen
+                                : 0;
+                wanted.Add((parts, distance));
+            }
             else if (!near && parts.Image.Source is not null)
+            {
                 parts.Image.Source = null;
+            }
         }
+
+        // The ones in view queued first, then outwards: decodes are taken a
+        // couple at a time (see DecodeGate), so the order is the order they
+        // appear in, and what is looked at doesn't wait behind what isn't.
+        foreach (var (parts, _) in wanted.OrderBy(w => w.Distance))
+            _ = LoadThumbAsync(parts);
     }
+
+    /// <summary>
+    /// At most two thumbnails decoded at once. Every tile near the view used
+    /// to start its own at the same moment, and a PNG - the usual screenshot -
+    /// is decoded at full size before it is scaled down, about 33 MB for a 4K
+    /// one: thirty at once took every core and several hundred MB, and this
+    /// window can be open beside the notes over a game.
+    /// </summary>
+    private static readonly System.Threading.SemaphoreSlim DecodeGate = new(2);
 
     // --- Deleting ------------------------------------------------------------
 
@@ -1307,8 +1337,22 @@ public partial class PicturesWindow : PanelWindow
         }
 
         parts.Loading = true;
-        var thumb = await Task.Run(() => Decode(parts.Path, ThumbPixels));
-        parts.Loading = false;
+        BitmapSource? thumb;
+        await DecodeGate.WaitAsync();
+        try
+        {
+            // Gone while it waited its turn - the window put away, or the
+            // tiles rebuilt for another game: no decode for a tile that is
+            // no longer there to show it.
+            thumb = IsVisible && parts.Frame.IsLoaded
+                ? await Task.Run(() => Decode(parts.Path, ThumbPixels))
+                : null;
+        }
+        finally
+        {
+            DecodeGate.Release();
+            parts.Loading = false;
+        }
         if (thumb is null)
             return;
 

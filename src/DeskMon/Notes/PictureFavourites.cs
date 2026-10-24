@@ -21,7 +21,15 @@ public static class PictureFavourites
     /// <summary>The starred file names in <paramref name="folder"/>; empty when there are none or the file can't be read.</summary>
     public static HashSet<string> Load(string folder)
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Unreadable: no stars, rather than no pictures window.
+        TryLoad(folder, out var names);
+        return names;
+    }
+
+    /// <summary>False when the file is there but couldn't be read - not the same as having no stars.</summary>
+    private static bool TryLoad(string folder, out HashSet<string> names)
+    {
+        names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             string path = Path.Combine(folder, FileName);
@@ -29,32 +37,46 @@ public static class PictureFavourites
                 foreach (string line in File.ReadAllLines(path))
                     if (line.Trim() is { Length: > 0 } name)
                         names.Add(name);
+            return true;
         }
         catch
         {
-            // Unreadable: no stars, rather than no pictures window.
+            names.Clear();
+            return false;
         }
-
-        return names;
     }
 
     /// <summary>
-    /// Stars the picture, or takes its star away. True if it is a favourite
-    /// now. Names of pictures no longer in the folder are dropped as it
-    /// writes, so a deleted picture's star doesn't linger in the file.
+    /// Stars the picture, or takes its star away. Null when done, else why
+    /// not - shown to the user, who clicked for it. Names of pictures no
+    /// longer in the folder are dropped as it writes, so a deleted picture's
+    /// star doesn't linger in the file.
+    ///
+    /// Never throws: it runs from a click, and a folder Windows wouldn't
+    /// write to was an unhandled error. Nor does it write over a file it
+    /// couldn't read - the stars in it would all have been replaced by the
+    /// one just clicked.
     /// </summary>
-    public static bool Toggle(string folder, string name)
+    public static string? Toggle(string folder, string name)
     {
-        var names = Load(folder);
-        bool now = !names.Remove(name);
-        if (now)
-            names.Add(name);
+        try
+        {
+            if (!TryLoad(folder, out var names))
+                return $"{FileName} couldn't be read, so it was left as it is";
 
-        names.RemoveWhere(n => !File.Exists(Path.Combine(folder, n)));
+            if (!names.Remove(name))
+                names.Add(name);
 
-        Directory.CreateDirectory(folder);
-        AtomicFile.WriteAllText(Path.Combine(folder, FileName),
-                                string.Join(Environment.NewLine, names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase)));
-        return now;
+            names.RemoveWhere(n => !File.Exists(Path.Combine(folder, n)));
+
+            Directory.CreateDirectory(folder);
+            AtomicFile.WriteAllText(Path.Combine(folder, FileName),
+                                    string.Join(Environment.NewLine, names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase)));
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
     }
 }

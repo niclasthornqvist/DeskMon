@@ -581,7 +581,12 @@ public partial class SettingsWindow : PanelWindow
 
         box.TextChanged += (_, _) =>
         {
-            bool ok = TryRead(box.Text, property, list, out object? value);
+            // Below the setting's floor counts as not a value yet, like "1." -
+            // a text size of 0 applied on the way to typing something else
+            // made WPF throw, and saved, kept DeskMon from starting.
+            bool ok = TryRead(box.Text, property, list, out object? value)
+                      && !(setting.Min is double min && value is IConvertible number
+                           && Convert.ToDouble(number, CultureInfo.InvariantCulture) < min);
             MarkValid(box, ok);
 
             if (ok)

@@ -158,9 +158,56 @@ internal sealed class TopmostGuard
                 || theirs.Bottom <= mine.Top || theirs.Top >= mine.Bottom)
                 continue;   // somewhere else on the screen
 
+            if (!MayRaisePast(above))
+                return;   // giving way to it for now - see MayRaisePast
+
             SetWindowPos(_handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             return;
         }
+    }
+
+    /// <summary>The window last raised past, how often in a row, and since when.</summary>
+    private IntPtr _raisedPast;
+    private int _raises;
+    private DateTime _raisesSince;
+
+    /// <summary>Given way to until then: a window that keeps putting itself back over this one.</summary>
+    private DateTime _yieldUntil;
+
+    private const int RaisesBeforeYielding = 5;
+    private static readonly TimeSpan RaiseWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan YieldFor = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Whether to raise past <paramref name="other"/> once more. Another
+    /// always-on-top window that raises itself as well - a picture-in-picture
+    /// video, another monitoring tool - would otherwise trade places with this
+    /// one on every tick, both flickering, for as long as they overlapped.
+    /// Past the fifth time in ten seconds against the same window, it is let
+    /// be for a minute; then tried again, in case it has stopped.
+    /// </summary>
+    private bool MayRaisePast(IntPtr other)
+    {
+        var now = DateTime.UtcNow;
+        if (other == _raisedPast && now < _yieldUntil)
+            return false;
+
+        if (other != _raisedPast || now - _raisesSince > RaiseWindow)
+        {
+            _raisedPast = other;
+            _raises = 0;
+            _raisesSince = now;
+        }
+
+        if (++_raises > RaisesBeforeYielding)
+        {
+            _yieldUntil = now + YieldFor;
+            _raises = 0;
+            _raisesSince = _yieldUntil;   // counting starts afresh once the minute is up
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>Hidden by the shell - a suspended Store app, a window on another virtual desktop.</summary>

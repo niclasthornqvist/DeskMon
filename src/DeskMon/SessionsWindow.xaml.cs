@@ -88,14 +88,20 @@ public partial class SessionsWindow : PanelWindow
     private static readonly Brush HighestHover = Frozen(Color.FromRgb(0xFD, 0xBA, 0x74));
 
     /// <summary>
-    /// The lowest bar, in pink. Of the colours left, the one that stays apart
-    /// from both the blue and the orange for colour-blind eyes too: purple or
-    /// teal would read as another blue, yellow as the warning amber. Neutral,
-    /// like the orange - lowest is the worst for frame rates and the best for
-    /// temperatures.
+    /// The lowest bar, in a soft red - asked for over the old pink, which read
+    /// as a second highlight rather than the bottom. Kept pale, well short of
+    /// the theme's critical red, since lowest is the worst for frame rates but
+    /// the best for temperatures and must not look like an alarm.
     /// </summary>
-    private static readonly Brush LowestBrush = Frozen(Color.FromRgb(0xF4, 0x72, 0xB6));
-    private static readonly Brush LowestHover = Frozen(Color.FromRgb(0xF9, 0xA8, 0xD4));
+    private static readonly Brush LowestBrush = Frozen(Color.FromRgb(0xF2, 0x8B, 0x8B));
+    private static readonly Brush LowestHover = Frozen(Color.FromRgb(0xF8, 0xB4, 0xB4));
+
+    /// <summary>
+    /// The average, drawn as a dashed line across the bars rather than as a
+    /// bar of its own: no session is the average. Green, which is apart from
+    /// the blue bars, the orange and the red in lightness as well as hue.
+    /// </summary>
+    private static readonly Brush AverageBrush = Frozen(Color.FromRgb(0x4A, 0xDE, 0x80));
 
     private static Brush Frozen(Color colour)
     {
@@ -158,7 +164,8 @@ public partial class SessionsWindow : PanelWindow
         new("avg", "Avg FPS", 62, true, g => Whole(g.AverageFps), g => g.AverageFps),
         // Lowest first on the first click: the games that need work are the question.
         new("score", "Score", 52, true, g => Whole(g.Score), g => g.Score, DescendingFirst: false, Score: g => g.Score),
-        new("last", "Last played", 104, false, g => g.LastPlayed.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture), g => g.LastPlayed),
+        // 10 wider for the gap text columns leave on their left (ColumnGap).
+        new("last", "Last played", 114, false, g => g.LastPlayed.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture), g => g.LastPlayed),
     };
 
     /// <summary>"143.4 h" - GamePlaytime.Describe's "hours" spelled short, for a column.</summary>
@@ -173,11 +180,14 @@ public partial class SessionsWindow : PanelWindow
         {
             // The number DELETE names, so the row it will take out can be found.
             new("id", "ID", 40, true, s => s.Id.ToString(CultureInfo.InvariantCulture), s => s.Id),
-            new("date", "Date", 108, false, s => s.Start.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture), s => s.Start),
+            // Widths take in the gap text columns now leave on their left (see ColumnGap).
+            new("date", "Date", 118, false, s => s.Start.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture), s => s.Start),
             // By time of day, not by date: "which sessions were late at night" is
             // the only reason to sort by this column, and Date already does dates.
-            new("time", "Time", 92, false, s => $"{s.Start:HH:mm}–{s.End:HH:mm}", s => s.Start.TimeOfDay, DescendingFirst: false),
-            new("length", "Length", 74, true, s => SessionRecord.Describe(s.Length), s => s.Length),
+            // The dash spaced: unspaced, "20:14–22:45" ran together into one
+            // long number.
+            new("time", "Time", 108, false, s => $"{s.Start:HH:mm} – {s.End:HH:mm}", s => s.Start.TimeOfDay, DescendingFirst: false),
+            new("length", "Length", 74, true, s => Compact(s.Length), s => s.Length),
             new("avg", "Avg FPS", 62, true, s => Whole(s.AverageFps), s => s.AverageFps),
             new("score", "Score", 52, true, s => Whole(PerformanceScore.For(s)?.Score), s => PerformanceScore.For(s)?.Score,
                 DescendingFirst: false, Score: s => PerformanceScore.For(s)?.Score),
@@ -243,6 +253,24 @@ public partial class SessionsWindow : PanelWindow
 
     private static string Whole(double? value)
         => value is double v ? v.ToString("0", CultureInfo.InvariantCulture) : "–";
+
+    /// <summary>
+    /// "2h 05m" - a session's length for the Length column. Shorter than
+    /// Describe's "2 h 5 min", whose four words a column of them made hard to
+    /// scan, and the minutes in two digits so they line up down the
+    /// right-aligned column. Describe stays for sentences and tooltips.
+    /// </summary>
+    private static string Compact(TimeSpan length)
+        => length.TotalHours >= 1
+            ? $"{(int)length.TotalHours}h {length.Minutes:00}m"
+            : $"{Math.Max(0, (int)length.TotalMinutes)}m";
+
+    /// <summary>
+    /// Space on the left of a text column that follows another. Number columns
+    /// keep 10 on their right, but text started flush against whatever came
+    /// before it, so the ID ran into the date and the date into the time.
+    /// </summary>
+    private const double ColumnGap = 10;
 
     /// <summary>A score in the widget's own green, amber or red - good, fair, needs work.</summary>
     private Brush ScoreBrush(int score) => PerformanceScore.Band(score) switch
@@ -989,6 +1017,27 @@ public partial class SessionsWindow : PanelWindow
         HighestText.Visibility = HighestSwatch.Visibility;
         LowestSwatch.Visibility = markLowest ? Visibility.Visible : Visibility.Collapsed;
         LowestText.Visibility = LowestSwatch.Visibility;
+        AverageSwatch.Visibility = HighestSwatch.Visibility;
+        AverageText.Visibility = HighestSwatch.Visibility;
+
+        // The figures beside their keys: the colour alone only said which bar
+        // was highest, and finding its value meant hovering it or reading it
+        // off the axis. Taken from the bars drawn, so they match what is seen.
+        // The average outside the block: the chart draws its line too.
+        double average = 0;
+        if (anyBar)
+        {
+            // Average FPS weighted by session length, as the AVG FPS card is:
+            // a plain mean let short menu sessions at 300+ fps pull it far
+            // above the card's figure. The other readings are a plain mean -
+            // weighting minutes played by minutes played would favour long ones.
+            average = measure.Key == "avg" && WeightedFps(shown) is double weighted
+                ? weighted
+                : values.Average();
+            AverageText.Text = "average " + BarValue(average);
+            HighestText.Text = "highest " + BarValue(values.Max());
+            LowestText.Text = "lowest " + BarValue(lowest);
+        }
 
         if (!anyBar)
         {
@@ -1014,7 +1063,11 @@ public partial class SessionsWindow : PanelWindow
         double plotLeft = AxisWidth;
         double plotWidth = width - AxisWidth;
         double plotTop = LabelRoom;
-        double plotHeight = height - LabelRoom - 1;
+        // Room under the baseline for the lower half of the "0" label, which is
+        // centred on its gridline like the others. With only 1 px there, the
+        // chart's clipping cut the 0 off at the bottom.
+        const double ZeroRoom = 8;
+        double plotHeight = height - LabelRoom - ZeroRoom;
         double baseline = plotTop + plotHeight;
 
         // Gridlines at a quarter steps of a round top value; labels on the left
@@ -1136,6 +1189,19 @@ public partial class SessionsWindow : PanelWindow
 
             Chart.Children.Add(hover);
         }
+
+        // After the bars, so the line stays visible where it crosses them.
+        // Dashed, so it reads as a level rather than as one more gridline.
+        // Not hit-testable: the bars' tooltips under it must still work.
+        double averageY = Math.Round(baseline - plotHeight * Math.Min(1, average / top)) + 0.5;
+        Chart.Children.Add(new System.Windows.Shapes.Line
+        {
+            X1 = plotLeft, X2 = width, Y1 = averageY, Y2 = averageY,
+            Stroke = AverageBrush,
+            StrokeThickness = 1.5,
+            StrokeDashArray = new DoubleCollection { 4, 3 },
+            IsHitTestVisible = false,
+        });
     }
 
     /// <summary>
@@ -1143,7 +1209,7 @@ public partial class SessionsWindow : PanelWindow
     /// the settings' gradient rising from the baseline. The gradient spans the
     /// whole plot height rather than the bar, so like the widget's bars only a
     /// tall one reaches the end colour. The highest and lowest keep their
-    /// orange and pink, which is what makes them findable.
+    /// orange and red, which is what makes them findable.
     /// </summary>
     private (Brush Normal, Brush Lit) PlainBar(double barHeight, double plotHeight)
     {
@@ -1293,7 +1359,7 @@ public partial class SessionsWindow : PanelWindow
                     Foreground = columns[i].Score?.Invoke(item) is int score ? ScoreBrush(score)
                                : i == 0 ? _theme.Label : _theme.NotesText,
                     TextAlignment = columns[i].Number ? TextAlignment.Right : TextAlignment.Left,
-                    Margin = new Thickness(0, 3, columns[i].Number ? 10 : 0, 3),
+                    Margin = new Thickness(columns[i].Number || i == 0 ? 0 : ColumnGap, 3, columns[i].Number ? 10 : 0, 3),
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 };
 
@@ -1365,7 +1431,8 @@ public partial class SessionsWindow : PanelWindow
                 Foreground = sorted ? _theme.Label : _theme.Header,
                 FontSize = SmallFont,
                 TextAlignment = column.Number ? TextAlignment.Right : TextAlignment.Left,
-                Margin = new Thickness(0, 0, column.Number ? 10 : 0, 0),
+                // The same gap as the cells, so each heading starts over its column.
+                Margin = new Thickness(column.Number || i == 0 ? 0 : ColumnGap, 0, column.Number ? 10 : 0, 0),
                 Background = Brushes.Transparent,   // the whole cell clicks, not just the letters
                 Cursor = Cursors.Hand,
                 ToolTip = $"Sort by {column.Header}",
@@ -1900,6 +1967,9 @@ public partial class SessionsWindow : PanelWindow
         PickerLabel.Foreground = _theme.Label;
         ChartTitleText.Foreground = _theme.Label;
         ChartTitleText.FontSize = SmallFont;
+        AverageSwatch.Background = AverageBrush;
+        AverageText.Foreground = _theme.Label;
+        AverageText.FontSize = SmallFont;
         HighestSwatch.Background = HighestBrush;
         HighestText.Foreground = _theme.Label;
         HighestText.FontSize = SmallFont;

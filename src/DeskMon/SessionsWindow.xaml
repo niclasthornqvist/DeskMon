@@ -97,7 +97,8 @@
                 </Button>
 
                 <!-- A tray with an arrow coming down into it: saved to a file.
-                     Saves rather than opens a window, so no ↗ mark. -->
+                     Saves rather than opens a window, so no ↗ mark. The format
+                     in the label, so it is clear before clicking what comes out. -->
                 <Button x:Name="ExportButton" Style="{StaticResource ToolButton}"
                         ToolTip="Save this game&apos;s sessions as a CSV file&#x0a;For a spreadsheet - every session in the table, with its averages and peaks."
                         Click="Export_Click">
@@ -105,7 +106,7 @@
                         <Path Style="{StaticResource ToolIcon}"
                               Data="M5,0.5 V6.5 M2.5,4 L5,6.5 L7.5,4
                                     M0.5,6.5 V9.5 H9.5 V6.5" />
-                        <TextBlock Text="EXPORT" />
+                        <TextBlock Text="EXPORT CSV" />
                     </StackPanel>
                 </Button>
 
@@ -200,6 +201,13 @@
                           MinWidth="150" VerticalAlignment="Center" />
                 <TextBlock x:Name="ChartTitleText" Text="per session"
                            Margin="8,0,0,0" VerticalAlignment="Center" />
+                <!-- The average over the bars drawn, so the chart can be read
+                     as one figure without adding the bars up by eye. Its key
+                     is a short line, not a square: it is drawn as a line
+                     across the chart, not as a bar. -->
+                <Border x:Name="AverageSwatch" Width="10" Height="2" CornerRadius="1"
+                        Margin="14,0,5,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="AverageText" Text="average" VerticalAlignment="Center" />
                 <!-- The key for the one bar drawn in another colour, so the
                      colour is explained where it is seen, not in a tooltip. -->
                 <Border x:Name="HighestSwatch" Width="8" Height="8" CornerRadius="2"

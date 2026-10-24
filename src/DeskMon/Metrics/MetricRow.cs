@@ -123,7 +123,9 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// The whole groove. <see cref="BarWidth"/> is the filled part of it, which
     /// is why the two cannot share a name.
     /// </summary>
-    public double TrackWidth => _settings.BarTrackWidth;
+    // Floored at 1 like the height: a hand-edited 0 or negative width is not
+    // a Width WPF accepts, and the bar's maths divides the track into blocks.
+    public double TrackWidth => Math.Max(1, _settings.BarTrackWidth);
 
     /// <summary>Floored at 1, since a bar no pixels tall is not a setting.</summary>
     public double TrackHeight => Math.Max(1, _settings.BarTrackHeight);
