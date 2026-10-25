@@ -137,6 +137,7 @@
                 <ComboBox x:Name="GamePicker" Grid.Column="1"
                           Style="{StaticResource DarkCombo}"
                           ItemTemplate="{StaticResource GamePickerItem}"
+                          ItemContainerStyle="{StaticResource GamePickerRow}"
                           SelectionChanged="GamePicker_SelectionChanged"
                           VerticalAlignment="Center" />
             </Grid>
@@ -169,20 +170,28 @@
             <!-- Which game, at the bottom right of its banner: the game's own
                  logo where Steam has one, else its name in large type over a
                  short accent bar. Beside the summary and the chart's picker
-                 rather than the cards, which keep the full width. Never takes
-                 a click. Set in code with the banner. As tall as the tallest
-                 logo whatever it holds, so the chart below stays where it is
-                 when one game has a logo and the next only its name. -->
+                 rather than the cards, which keep the full width. Set in code
+                 with the banner. As tall as the tallest logo whatever it
+                 holds, so the chart below stays where it is when one game has
+                 a logo and the next only its name. The logo or name opens the
+                 game's Steam page; the grid itself has no background, so only
+                 they take the click. -->
             <Grid x:Name="GameTitle" Grid.Row="1" Grid.RowSpan="2" Grid.Column="1"
                   VerticalAlignment="Bottom" HorizontalAlignment="Right"
-                  Height="76" Margin="8,6,16,4" IsHitTestVisible="False" Opacity="0">
+                  Height="76" Margin="8,6,16,4" Opacity="0">
                 <Grid.Effect>
                     <DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.9" Color="Black" />
                 </Grid.Effect>
                 <Image x:Name="GameLogo" MaxWidth="190" MaxHeight="76" Stretch="Uniform"
                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                       RenderOptions.BitmapScalingMode="HighQuality" />
-                <StackPanel x:Name="GameNamePanel" VerticalAlignment="Bottom">
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       RenderTransformOrigin="1,1"
+                       MouseEnter="GameTitle_MouseEnter" MouseLeave="GameTitle_MouseLeave"
+                       MouseLeftButtonUp="GameTitle_Click" />
+                <StackPanel x:Name="GameNamePanel" VerticalAlignment="Bottom"
+                            RenderTransformOrigin="1,1" Background="Transparent"
+                            MouseEnter="GameTitle_MouseEnter" MouseLeave="GameTitle_MouseLeave"
+                            MouseLeftButtonUp="GameTitle_Click">
                     <Border x:Name="GameNameBar" Width="26" Height="3" CornerRadius="1.5"
                             HorizontalAlignment="Right" Margin="0,0,0,5" />
                     <TextBlock x:Name="GameName" MaxWidth="170" TextWrapping="Wrap"

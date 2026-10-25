@@ -244,6 +244,10 @@ public partial class MainWindow : Window
     private bool _hidden;     // parked behind a fullscreen app
     private bool _paused;     // machine locked or asleep
     private bool _trimmed;    // startup memory has been handed back
+
+    /// <summary>The young-object GC in OnTick: when it last ran, and how often.</summary>
+    private DateTime _lastYoungCollect = DateTime.UtcNow;
+    private static readonly TimeSpan YoungCollectEvery = TimeSpan.FromSeconds(30);
     private bool _detailsBuilt; // expandable rows have had their lists filled in
     private bool _widthLocked;  // panel width pinned, so only height follows content
     private bool _restarting; // restarting to reload settings.json
@@ -288,6 +292,10 @@ public partial class MainWindow : Window
         VersionText.Text = "v" + Changelog.Current + (_settings.DeveloperRebuild ? " (Developer mode)" : "");
         VersionText.ToolTip = $"DeskMon {Changelog.Current}\nClick to see what changed.";
         ApplyVersionStyle();
+
+        _clockTimer.Tick += (_, _) => UpdateClock();
+        UpdateClock();
+        _clockTimer.Start();
 
         // Only for working on DeskMon itself - see AppSettings.DeveloperRebuild.
         if (BuildScript() is { } script)
@@ -880,6 +888,20 @@ public partial class MainWindow : Window
                 _trimmed = true;
                 TrimMemory();   // hand back everything JIT and startup needed
             }
+
+            // A young-object GC every half minute. .NET sizes that generation
+            // from the CPU's L3 cache - 96 MB on a 7800X3D - and left to
+            // itself held about 50 MB for a widget that makes 100 KB of
+            // garbage a second and keeps 12 MB, collecting every few minutes.
+            // Collected this often it stays at a few MB, for about 0.1 ms each.
+            // The setting meant for it (GCgen0size) is only read from an
+            // environment variable, not from the app's own config, and a
+            // user-wide variable would change every .NET program.
+            if (DateTime.UtcNow - _lastYoungCollect >= YoungCollectEvery)
+            {
+                _lastYoungCollect = DateTime.UtcNow;
+                GC.Collect(0, GCCollectionMode.Forced, blocking: true);
+            }
         }
         finally
         {
@@ -1009,11 +1031,17 @@ public partial class MainWindow : Window
         // Windows has handed to something new can never be mistaken for the
         // session still being open.
         //
-        // Not ended on the spot, though: noted, and only written once the game
-        // has stayed gone for RelaunchGrace - see BeginOrResumeSession for the
-        // way back. The end written is still the moment it exited.
+        // Not ended on the spot, though: kept open for RelaunchGrace in case
+        // the game comes back - see BeginOrResumeSession for the way back.
+        // Its line is written now all the same, so it is in the history the
+        // moment the game is gone instead of three minutes later; a game that
+        // does come back takes it out again. The end written is still the
+        // moment it exited.
         if (_sessionProcess is not null && _sessionExitedAt is null && SessionProcessExited())
+        {
             _sessionExitedAt = ExitTimeOf(_sessionProcess) ?? DateTime.Now;
+            LogExitedSession();
+        }
 
         if (_sessionExitedAt is { } exitedAt && DateTime.Now - exitedAt >= RelaunchGrace)
             FinishSession();
@@ -1419,6 +1447,7 @@ public partial class MainWindow : Window
         if (_sessionPid != 0 && game is not null
             && string.Equals(game, _sessionGame, StringComparison.OrdinalIgnoreCase))
         {
+            TakeBackLoggedLine();
             WatchSessionProcess(pid);
             return false;
         }
@@ -1663,6 +1692,13 @@ public partial class MainWindow : Window
         _sessionEnergyWh = null;
         _sessionDriver = _sessionBuild = null;
 
+        // Written when the game quit, and it never came back - see
+        // LogExitedSession. A second line now would log the session twice.
+        bool alreadyLogged = _loggedLine is not null;
+        _loggedLine = null;
+        if (alreadyLogged)
+            return;
+
         if (!_settings.LogSessionToFile || game is null)
             return;   // nothing to file it under, or switched off
 
@@ -1670,14 +1706,77 @@ public partial class MainWindow : Window
             return;
 
         _sessions.Append(game, DescribeSession(started, ended, frames, extras, note));
+        RefreshAfterSession();
+    }
 
-        // The notepad shows the last session under the notes, and the one that
-        // just ended is now it; the history window lists it too.
-        //
-        // Guarded, because this runs inside the polling tick, and an error on
-        // the UI thread shuts DeskMon down: a fault in redrawing either window
-        // must not take the widget away - perhaps in the middle of the next
-        // game. The line is already written; the windows catch up on reopening.
+    /// <summary>
+    /// The line in the log for the session waiting out RelaunchGrace, written
+    /// when its game quit; null while the game runs, or if nothing was written.
+    /// Kept so the game coming back can take it out again.
+    /// </summary>
+    private string? _loggedLine;
+
+    /// <summary>
+    /// Writes the session's line the moment its game is seen to have quit,
+    /// rather than once RelaunchGrace is over: three minutes of an empty
+    /// history after quitting read as the session not having been logged at
+    /// all. The session itself stays open for the grace - see
+    /// TakeBackLoggedLine for a game that comes back.
+    /// Under FinishSession's rules: nothing when logging is off or the session
+    /// is too short - FinishSession then decides as it always did.
+    /// </summary>
+    private void LogExitedSession()
+    {
+        if (_sessionGame is null || _sessionExitedAt is not { } ended || !_settings.LogSessionToFile)
+            return;
+        if (ended - _sessionStartedAt < ShortestLoggedSession)
+            return;
+
+        // What HarvestFrames would add, without taking it, as CheckpointSession
+        // does: harvesting here and again when tracking stops would count the
+        // game's frames twice.
+        var frames = _sessionStats.Copy();
+        if (_gamePid == _sessionPid)
+            frames.Add(_fps.SessionTotals);
+
+        string line = DescribeSession(_sessionStartedAt, ended, frames, SessionExtras(), null);
+        if (_sessions.Append(_sessionGame, line) is not null)
+            return;   // not written: FinishSession tries again at the end of the grace
+
+        _loggedLine = line;
+
+        // Its line is in the log now; a recovery after a crash would add it again.
+        _sessions.ClearOpenSession();
+        RefreshAfterSession();
+    }
+
+    /// <summary>
+    /// The game came back within RelaunchGrace, so the session carries on:
+    /// the line written when it quit comes out of the log, and one line for
+    /// the whole stretch is written when it really ends.
+    /// </summary>
+    private void TakeBackLoggedLine()
+    {
+        if (_loggedLine is not { } line || _sessionGame is null)
+            return;
+
+        _loggedLine = null;
+        if (SessionRecord.Parse(line) is { } logged && _sessions.Delete(_sessionGame, logged) is { } problem)
+            App.Log("taking back a session line", problem);
+        RefreshAfterSession();
+    }
+
+    /// <summary>
+    /// The notepad shows the last session under the notes, and the history
+    /// window lists them, so both are redrawn whenever the log changes.
+    ///
+    /// Guarded, because this runs inside the polling tick, and an error on
+    /// the UI thread shuts DeskMon down: a fault in redrawing either window
+    /// must not take the widget away - perhaps in the middle of the next
+    /// game. The line is already written; the windows catch up on reopening.
+    /// </summary>
+    private void RefreshAfterSession()
+    {
         try
         {
             _notes?.RefreshLastSession();
@@ -1702,7 +1801,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void CheckpointSession()
     {
-        if (_sessionPid == 0 || _sessionGame is null || !_settings.LogSessionToFile)
+        // Nor once its line is in the log: recovered after a crash, the saved
+        // copy would put the session there twice.
+        if (_sessionPid == 0 || _sessionGame is null || !_settings.LogSessionToFile || _loggedLine is not null)
             return;
 
         var now = DateTime.Now;
@@ -1868,6 +1969,30 @@ public partial class MainWindow : Window
         bool lit = VersionText.IsMouseOver || _versions is { IsVisible: true };
         VersionText.Foreground = lit ? _theme.Section : _theme.Header;
         VersionText.FontSize = Math.Max(8, _settings.FontSize - 2.5);
+
+        // The clock is the version number's partner at the other corner.
+        ClockText.Foreground = _theme.Header;
+        ClockText.FontSize = VersionText.FontSize;
+    }
+
+    /// <summary>Fires on each new minute - see UpdateClock.</summary>
+    private readonly DispatcherTimer _clockTimer = new();
+
+    /// <summary>
+    /// Shows the time and sets the timer for the next whole minute. Its own
+    /// timer, not the polling tick: that one slows down in games, stops while
+    /// paused and runs at whatever interval is set, so the minute would turn
+    /// over up to seconds late. English day names, as the rest of the widget.
+    /// </summary>
+    private void UpdateClock()
+    {
+        var now = DateTime.Now;
+        ClockText.Text = now.ToString("dddd - yyyy-MM-dd - HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+        // A few milliseconds past the minute, so a timer that fires a hair
+        // early still lands on the new one rather than showing the old again.
+        _clockTimer.Interval = TimeSpan.FromSeconds(60 - now.Second) - TimeSpan.FromMilliseconds(now.Millisecond)
+                               + TimeSpan.FromMilliseconds(50);
     }
 
     /// <summary>
@@ -3417,6 +3542,7 @@ public partial class MainWindow : Window
         _timer.Stop();
         _relayout.Stop();
         _overlayTimer.Stop();
+        _clockTimer.Stop();
 
         if (!_restarting)
         {

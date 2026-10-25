@@ -28,6 +28,21 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.66.0", "2026-10-25",
+            "Widget: the day, date and time at the bottom right - \"Sunday - 2026-10-25 - 04:01\" - turning over on the minute",
+            "Faster: about 45 MB less memory - .NET kept a 50 MB nursery sized from the CPU's cache, now emptied every 30 s in about 0.1 ms",
+            "Faster: an NVIDIA card is read in 21 ms instead of 79 - its PCIe traffic, which DeskMon never shows, is no longer asked for",
+            "Sessions: All games' cards have the icons one game's have - the clock on LOGGED, and on PLAYTIME the icon of the source most of its hours come from",
+            "Sessions: click the game's logo to open its Steam store page - it grows a little under the mouse to show it is a button",
+            "Sessions and notes: the game lists have a line under All games / General and more room around each game",
+            "Fix: Sessions' table headings show in full when sorted - \"▼ Stutters\" and \"▼ CPU+GPU kWh\" were cut off, and the latter even unsorted in themes with a wider font",
+            "Sessions: each bar in the chart has its session ID under it, the number in the table's ID column - every second or fifth one when the bars are narrow",
+            "Sessions: right-click the SCORE card to give a game its own target frame rate - a game locked to 60, like Factorio, no longer scores \"Needs optimising\" against a 240 Hz target",
+            "Fix: the 1% low - in the widget's LOW and in new sessions - leaves out loading screens (frames of 100 ms or more), which sank short sessions' lows and scores; the 0.1% low and Stutters still count them",
+            "Fix: SWAP shows what the page file really holds - it counted memory programs had only reserved, so a game like Factorio read 100 % with the page file empty",
+            "Fix: Sessions shows a GOG game's Steam store banner before its newest screenshot - Factorio had a screenshot of Visual Studio behind it",
+            "Sessions: a session is in the history the moment its game quits, not 3 minutes later - a game that restarts itself within those 3 minutes still makes one session",
+            "Fix: a game that stops responding for a moment, e.g. while loading, stays the game - its \"(Not responding)\" window was taken for a new game called Desktop Window Manager"),
         new("1.65.0", "2026-10-25",
             "Sessions: a stutter count per session - frames 2.5 times slower than usual (and at least 8 ms) - as a Stutters column and a Stutters per hour chart",
             "Sessions: CPU+GPU energy per session in kWh, and with an energy price set in Settings a Cost column - both in the CSV export too",

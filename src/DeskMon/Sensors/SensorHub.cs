@@ -123,6 +123,10 @@ public sealed class SensorHub : IDisposable
             _computer.Open();
             _opened = true;
             ResolveSensors(preferredGpu);
+
+            // Not for --list-sensors, which is there to show every sensor.
+            if (!allHardware)
+                SkipNvidiaPcieTraffic();
         }
         catch (Exception ex)
         {
@@ -132,6 +136,78 @@ public sealed class SensorHub : IDisposable
         }
 
         Prime();
+    }
+
+    // --- NVIDIA: GPU power without the PCIe traffic ---------------------------
+    //
+    // LibreHardwareMonitor reads an NVIDIA card's power and its PCIe traffic in
+    // one block, run whenever it holds an NVML handle - and the two traffic
+    // queries each wait on the driver sampling the bus. Measured on an RTX 4070
+    // SUPER: 79 ms per GPU update with them, 21 ms without, and 31 against
+    // 22 ms of CPU. DeskMon never shows PCIe traffic, and the library has no
+    // switch for it, so the handle is taken from it and the power - the one
+    // figure in that block DeskMon uses - is read here through the library's
+    // own NVML wrapper with that handle.
+    //
+    // By reflection into the library's internals, so every step checks it
+    // found what it expected: anything different in a later version and
+    // nothing is touched - the GPU is read exactly as before.
+
+    private System.Reflection.MethodInfo? _nvmlPowerUsage;
+    private object? _nvmlDevice;
+    private ISensor? _nvmlPowerSensor;
+    private System.Reflection.PropertyInfo? _sensorValue;   // the library's Sensor is internal; ISensor.Value has no setter
+
+    private void SkipNvidiaPcieTraffic()
+    {
+        try
+        {
+            var gpu = _polled.FirstOrDefault(h => h.HardwareType == HardwareType.GpuNvidia);
+            if (gpu is null || _gpuPower is not { Name: "GPU Package" } powerSensor)
+                return;
+
+            const System.Reflection.BindingFlags Any = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            var handle = gpu.GetType().GetField("_nvmlDevice", Any | System.Reflection.BindingFlags.Instance);
+            var power = gpu.GetType().Assembly.GetType("LibreHardwareMonitor.Interop.NvidiaML")
+                ?.GetMethod("NvmlDeviceGetPowerUsage", Any | System.Reflection.BindingFlags.Static);
+            var value = powerSensor.GetType().GetProperty("Value", Any | System.Reflection.BindingFlags.Instance);
+            if (handle is null || power is null || power.ReturnType != typeof(int?) || value?.SetMethod is null || value.PropertyType != typeof(float?))
+                return;
+
+            // A Nullable<NvmlDevice> comes back boxed as the device, or null without one.
+            if (handle.GetValue(gpu) is not { } device
+                || power.GetParameters() is not [var parameter] || parameter.ParameterType != device.GetType())
+                return;
+
+            handle.SetValue(gpu, null);
+            (_nvmlPowerUsage, _nvmlDevice, _nvmlPowerSensor, _sensorValue) = (power, device, powerSensor, value);
+        }
+        catch
+        {
+            // Left as it was: slower, but every figure still there.
+        }
+    }
+
+    /// <summary>The power the library no longer reads itself - see SkipNvidiaPcieTraffic. Under _gate.</summary>
+    private void ReadNvidiaPower()
+    {
+        if (_nvmlPowerUsage is null || _nvmlPowerSensor is null || _sensorValue is null)
+            return;
+
+        float? watts = null;   // n/a, like any sensor that stops answering
+        try
+        {
+            // Milliwatts, as the library converts them for its own sensor.
+            if (_nvmlPowerUsage.Invoke(null, new[] { _nvmlDevice }) is int milliwatts)
+                watts = milliwatts / 1000f;
+        }
+        catch { }
+
+        try
+        {
+            _sensorValue.SetValue(_nvmlPowerSensor, watts);
+        }
+        catch { }
     }
 
     private void ResolveSensors(string preferredGpu)
@@ -286,6 +362,7 @@ public sealed class SensorHub : IDisposable
 
                 foreach (var device in _polled)
                     device.Update();
+                ReadNvidiaPower();
 
                 _hardware = new HardwareValues
                 {

@@ -59,18 +59,63 @@ internal sealed class NativeStats
         snapshot.RamTotalGb = status.ullTotalPhys / BytesPerGb;
         snapshot.RamUsedGb = (status.ullTotalPhys - status.ullAvailPhys) / BytesPerGb;
 
-        // Windows has no "swap used" counter. ullTotalPageFile / ullAvailPageFile
-        // are the system *commit* limit and headroom, so the part of the commit
-        // charge that doesn't fit in physical RAM is what actually lives in the
-        // pagefile. Same derivation psutil uses for swap on Windows.
-        double physUsed = status.ullTotalPhys - status.ullAvailPhys;
-        double commitUsed = status.ullTotalPageFile - status.ullAvailPageFile;
-        double swapTotal = Math.Max(0, (double)status.ullTotalPageFile - status.ullTotalPhys);
-        double swapUsed = Math.Clamp(commitUsed - physUsed, 0, swapTotal);
+        // What the page files really hold, from the kernel's own count. It
+        // used to be worked out as commit charge minus RAM in use (psutil's
+        // way), but commit counts memory programs have reserved and never
+        // touched: a game reserving gigabytes read as a full page file - 100 %
+        // through whole Factorio sessions on a 6.5 GB one that held 0 MB.
+        if (ReadPageFiles() is not (double total, double used))
+            return;
 
-        snapshot.SwapTotalGb = swapTotal / BytesPerGb;
-        snapshot.SwapUsedGb = swapUsed / BytesPerGb;
-        snapshot.SwapLoad = swapTotal > 0 ? swapUsed / swapTotal * 100.0 : 0;
+        snapshot.SwapTotalGb = total / BytesPerGb;
+        snapshot.SwapUsedGb = used / BytesPerGb;
+        snapshot.SwapLoad = total > 0 ? used / total * 100.0 : 0;
+    }
+
+    private const int SystemPageFileInformation = 18;
+    private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
+
+    // Kept between reads: a tick shouldn't allocate. Grown if the list of
+    // page files ever outgrows it - one entry per drive, so it rarely will.
+    private IntPtr _pageFileBuffer = Marshal.AllocHGlobal(1024);
+    private int _pageFileBufferSize = 1024;
+
+    /// <summary>
+    /// Size and use of all page files together, in bytes; (0, 0) with none.
+    /// Null if Windows wouldn't say. Same cheap kernel call as the rest of
+    /// this class - no WMI or performance counters (see the class summary).
+    /// </summary>
+    private (double Total, double Used)? ReadPageFiles()
+    {
+        int status, length;
+        while ((status = NtQuerySystemInformation(SystemPageFileInformation, _pageFileBuffer, _pageFileBufferSize, out length))
+               == StatusInfoLengthMismatch && _pageFileBufferSize < 1 << 16)
+        {
+            Marshal.FreeHGlobal(_pageFileBuffer);
+            _pageFileBufferSize *= 4;
+            _pageFileBuffer = Marshal.AllocHGlobal(_pageFileBufferSize);
+        }
+        if (status != 0)
+            return null;
+
+        // SYSTEM_PAGEFILE_INFORMATION entries, chained by their first field:
+        // NextEntryOffset, TotalSize, TotalInUse, PeakUsage (all ULONG, in
+        // pages), then the file's name. Walked only as far as Windows wrote
+        // this time - nothing at all with no page file - so a longer list left
+        // in the buffer by an earlier read is never counted.
+        double pageSize = Environment.SystemPageSize;
+        double total = 0, used = 0;
+        int offset = 0;
+        while (offset + 16 <= Math.Min(length, _pageFileBufferSize))
+        {
+            int next = Marshal.ReadInt32(_pageFileBuffer, offset);
+            total += (uint)Marshal.ReadInt32(_pageFileBuffer, offset + 4) * pageSize;
+            used += (uint)Marshal.ReadInt32(_pageFileBuffer, offset + 8) * pageSize;
+            if (next <= 0)
+                break;
+            offset += next;
+        }
+        return (total, used);
     }
 
     private static ulong ToUInt64(FILETIME ft) => ((ulong)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
@@ -103,4 +148,7 @@ internal sealed class NativeStats
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQuerySystemInformation(int infoClass, IntPtr info, int length, out int returnLength);
 }

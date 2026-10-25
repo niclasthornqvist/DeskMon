@@ -85,6 +85,13 @@ public sealed class SessionRecord
     /// </summary>
     public int Id { get; internal set; }
 
+    /// <summary>
+    /// The game whose log it came from, set when the log is read - the line
+    /// itself doesn't name it. Null for a line parsed on its own. For the
+    /// score, which may use a target of the game's own.
+    /// </summary>
+    public string? Game { get; internal set; }
+
     /// <summary>The session ended because DeskMon did, not the game - so it may have run longer.</summary>
     public bool CutShort => Note?.Contains("cut short", StringComparison.OrdinalIgnoreCase) == true;
 

@@ -41,6 +41,14 @@ internal static class ForegroundState
         if (foreground == IntPtr.Zero || foreground == ownWindow || IsShellWindow(foreground))
             return new Foreground(fullscreen, 0);
 
+        // A program that stops answering for a few seconds - a game loading -
+        // has its window swapped for a "(Not responding)" ghost, a copy owned
+        // by dwm.exe. A fullscreen game's ghost is fullscreen too, so it was
+        // taken for a new game named Desktop Window Manager. The window it
+        // stands in for is the one that counts, so the game stays the game.
+        if (IsGhostWindow(foreground) && HungWindowFromGhostWindow(foreground) is var hung && hung != IntPtr.Zero)
+            foreground = hung;
+
         // Borderless fullscreen: the window must look the part - no title bar,
         // and covering its whole monitor.
         if (!fullscreen)
@@ -113,23 +121,38 @@ internal static class ForegroundState
     /// </summary>
     private static bool IsShellWindow(IntPtr window)
     {
+        Classify(window);
+        return _wasShell;
+    }
+
+    /// <summary>A hung window's "(Not responding)" stand-in - see Inspect. Shares the class-name cache.</summary>
+    private static bool IsGhostWindow(IntPtr window)
+    {
+        Classify(window);
+        return _wasGhost;
+    }
+
+    private static void Classify(IntPtr window)
+    {
         if (window == _classOf && window != IntPtr.Zero)
-            return _wasShell;
+            return;
+
+        var className = new StringBuilder(64);
+        GetClassName(window, className, className.Capacity);
+        string name = className.ToString();
 
         _classOf = window;
-        _wasShell = HasShellClass(window);
-        return _wasShell;
+        _wasShell = IsShellClass(name);
+        _wasGhost = name == "Ghost";
     }
 
     private static IntPtr _classOf;
     private static bool _wasShell;
+    private static bool _wasGhost;
 
-    private static bool HasShellClass(IntPtr window)
+    private static bool IsShellClass(string className)
     {
-        var className = new StringBuilder(64);
-        GetClassName(window, className, className.Capacity);
-
-        return className.ToString() is "Progman"
+        return className is "Progman"
                                     or "WorkerW"
                                     or "Shell_TrayWnd"
                                     or "Shell_SecondaryTrayWnd"
@@ -211,6 +234,11 @@ internal static class ForegroundState
 
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    // Exported by user32 since Vista, though not in the SDK headers. Zero for
+    // anything that isn't a ghost, which Inspect then leaves as it was.
+    [DllImport("user32.dll")]
+    private static extern IntPtr HungWindowFromGhostWindow(IntPtr hwnd);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]

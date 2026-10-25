@@ -766,6 +766,74 @@ public partial class SessionsWindow : PanelWindow
         GameLogo.Visibility = logo is null ? Visibility.Collapsed : Visibility.Visible;
         GameNamePanel.Visibility = logo is null ? Visibility.Visible : Visibility.Collapsed;
         GameName.Text = name ?? string.Empty;
+
+        // A link only for a game: the All games collage has no one page.
+        bool link = !_allGames && !string.IsNullOrEmpty(name);
+        foreach (var title in new FrameworkElement[] { GameLogo, GameNamePanel })
+        {
+            title.Cursor = link ? Cursors.Hand : null;
+            title.ToolTip = link ? $"Open {name} on the Steam store" : null;
+        }
+    }
+
+    /// <summary>
+    /// Grows the logo a little under the mouse - with the hand cursor, what
+    /// says it is a button: on its own it reads as part of the picture.
+    /// </summary>
+    private void GameTitle_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is FrameworkElement title && title.Cursor == Cursors.Hand)
+            ScaleTitle(title, 1.06);
+    }
+
+    private void GameTitle_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is FrameworkElement title)
+            ScaleTitle(title, 1);
+    }
+
+    private static void ScaleTitle(FrameworkElement title, double to)
+    {
+        if (title.RenderTransform is not ScaleTransform scale)
+            title.RenderTransform = scale = new ScaleTransform();
+
+        var grow = new System.Windows.Media.Animation.DoubleAnimation(to, TimeSpan.FromMilliseconds(to > 1 ? 120 : 200))
+        {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+        };
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+    }
+
+    /// <summary>
+    /// The game's page on the Steam store, in the browser. Its app id from
+    /// the art lookup, from the last time it ran from Steam, or - a GOG copy
+    /// whose art came from the cache - the store's search by name; the
+    /// store's search page when none of them knows it.
+    /// </summary>
+    private async void GameTitle_Click(object sender, MouseButtonEventArgs e)
+    {
+        // Not while faded out: the title still takes clicks at opacity 0.
+        if (_allGames || GamePicker.SelectedItem is not string game || GameTitle.Opacity < 0.5)
+            return;
+
+        string? id = (_art.TryGetValue(game, out var art) ? art.SteamAppId : null)
+                     ?? GamePlaytime.RememberedSteamAppId(game, _settings)
+                     ?? await GameArt.OwnThread(() => GameArt.StoreAppId(game));
+
+        // Digits only: the id goes into a URL, and settings.json is hand-editable.
+        string url = id is not null && id.Length > 0 && id.All(char.IsAsciiDigit)
+            ? $"https://store.steampowered.com/app/{id}/"
+            : "https://store.steampowered.com/search/?term=" + Uri.EscapeDataString(game);
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            App.Log("opening the Steam page", ex);
+        }
     }
 
     /// <summary>
@@ -863,15 +931,71 @@ public partial class SessionsWindow : PanelWindow
                     "Weighted by how long each session ran, so a few minutes in a menu don't outweigh an evening");
 
         if (PerformanceScore.ForGame(_sessions) is int score)
-            AddStat("SCORE", $"{score}  {PerformanceScore.Grade(score)}",
-                    $"Performance out of 100, from the last {PerformanceScore.GameSessions} sessions with a frame rate, " +
-                    "weighted by how long each ran.\n" +
-                    $"Full marks need {PerformanceScore.Target:0} fps - the target frame rate in Settings.\n" +
-                    "Point at a session for how its score was reached.",
-                    valueBrush: ScoreBrush(score));
+        {
+            string target = PerformanceScore.HasOwnTarget(game)
+                ? $"Full marks need {PerformanceScore.TargetFor(game):0} fps - this game's own target."
+                : $"Full marks need {PerformanceScore.Target:0} fps - the target frame rate in Settings.";
+            var card = AddStat("SCORE", $"{score}  {PerformanceScore.Grade(score)}",
+                               $"Performance out of 100, from the last {PerformanceScore.GameSessions} sessions with a frame rate, " +
+                               "weighted by how long each ran.\n" +
+                               target + "\nRight-click to give this game a target of its own.\n" +
+                               "Point at a session for how its score was reached.",
+                               valueBrush: ScoreBrush(score));
+            card.ContextMenu = TargetMenu(game);
+        }
 
         AddSummary($"First played {first.ToString("d MMM yyyy", CultureInfo.InvariantCulture)}  ·  " +
                    $"last {last.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture)}");
+    }
+
+    /// <summary>Frame rates offered for a game's own target: the common caps and refresh rates.</summary>
+    private static readonly int[] TargetChoices = { 30, 60, 90, 120, 144, 165, 240 };
+
+    /// <summary>
+    /// SCORE's right-click menu: a target frame rate for this game alone, or
+    /// back to Settings' one. For games locked below the monitor's rate -
+    /// Factorio runs at 60 by design and scored "Needs optimising" against
+    /// 240 while running perfectly. Every score on screen is redone at once.
+    /// </summary>
+    private ContextMenu TargetMenu(string game)
+    {
+        var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenu") };
+        bool own = PerformanceScore.HasOwnTarget(game);
+        double current = PerformanceScore.TargetFor(game);
+
+        void Pick(double? fps)
+        {
+            if (fps is double value)
+                _settings.GameTargetFps[game] = value;
+            else
+                _settings.GameTargetFps.Remove(game);
+            _settings.Save();
+            ShowSelection(GamePicker.SelectedItem, _history.Games());
+        }
+
+        var settings = new MenuItem
+        {
+            Header = $"Settings' target ({PerformanceScore.Target:0} fps)",
+            IsCheckable = true,
+            IsChecked = !own,
+        };
+        settings.Click += (_, _) => Pick(null);
+        menu.Items.Add(settings);
+        menu.Items.Add(new Separator());
+
+        foreach (int fps in TargetChoices)
+        {
+            var item = new MenuItem
+            {
+                Header = $"{fps} fps for {game}",
+                IsCheckable = true,
+                IsChecked = own && current == fps,
+            };
+            item.Click += (_, _) => Pick(fps);
+            menu.Items.Add(item);
+        }
+
+        return menu;
     }
 
     /// <summary>Counts lookups, so one for a game already left behind doesn't land on the next.</summary>
@@ -935,8 +1059,9 @@ public partial class SessionsWindow : PanelWindow
     /// <param name="source">For a time figure: where it is from, shown as that source's icon before the name.</param>
     /// <param name="valueBrush">The figure's colour, when it should say good or bad - the score's; bright text otherwise.</param>
     /// <param name="at">Where among the cards; the end when left out. The playtime arrives last but goes first.</param>
-    private void AddStat(string name, string value, string? tooltip = null, PlaytimeSource? source = null,
-                         Brush? valueBrush = null, int? at = null)
+    /// <returns>The card, for one that needs more - SCORE's right-click menu.</returns>
+    private FrameworkElement AddStat(string name, string value, string? tooltip = null, PlaytimeSource? source = null,
+                                     Brush? valueBrush = null, int? at = null)
     {
         FrameworkElement? icon = null;
         if (source is { } from)
@@ -951,6 +1076,7 @@ public partial class SessionsWindow : PanelWindow
             Stats.Children.Insert(Math.Clamp(index, 0, Stats.Children.Count), card);
         else
             Stats.Children.Add(card);
+        return card;
     }
 
     /// <summary>
@@ -976,10 +1102,18 @@ public partial class SessionsWindow : PanelWindow
         var most = _games.MaxBy(g => g.Playtime.Time)!;
         var latest = _games.MaxBy(g => g.LastPlayed)!;
 
+        // The same icons as one game's cards: the clock on LOGGED, and on
+        // PLAYTIME the source most of its hours come from. One icon, not one
+        // per source: three side by side looked odd, and the tooltip says the
+        // total is from several.
+        var mostFrom = _games.Where(g => g.Playtime.Source != PlaytimeSource.Logged)
+                             .GroupBy(g => g.Playtime.Source)
+                             .MaxBy(group => group.Sum(g => g.Playtime.Time.Ticks))?.Key;
         if (playtime > total)
-            AddStat("PLAYTIME", GamePlaytime.Describe(playtime), "Every game's whole playtime, from Steam, GOG Galaxy or their saves where known");
+            AddStat("PLAYTIME", GamePlaytime.Describe(playtime), "Every game's whole playtime, from Steam, GOG Galaxy or their saves where known",
+                    mostFrom);
 
-        AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged");
+        AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged", PlaytimeSource.Logged);
         AddStat("SESSIONS", sessions.ToString(CultureInfo.InvariantCulture));
         AddStat("GAMES", _games.Count.ToString(CultureInfo.InvariantCulture));
 
@@ -1105,7 +1239,11 @@ public partial class SessionsWindow : PanelWindow
         // centred on its gridline like the others. With only 1 px there, the
         // chart's clipping cut the 0 off at the bottom.
         const double ZeroRoom = 8;
-        double plotHeight = height - LabelRoom - ZeroRoom;
+        // Under that, each bar's session ID - the number in the table's ID
+        // column - so a bar can be found in the table without hovering it.
+        double idSize = Math.Max(8, SmallFont - 2);
+        double idRoom = idSize + 4;
+        double plotHeight = height - LabelRoom - ZeroRoom - idRoom;
         double baseline = plotTop + plotHeight;
 
         // Gridlines at a quarter steps of a round top value; labels on the left
@@ -1149,6 +1287,12 @@ public partial class SessionsWindow : PanelWindow
         // none, and the rest are a hover away in the tooltip.
         double labelSize = Math.Max(8, SmallFont - 1);
         bool labelAll = values.Max(v => ValueWidth(BarValue(v), labelSize)) <= slot - 2;
+
+        // Every ID when they fit side by side, else every second, fifth or
+        // tenth - counted from the newest, so the latest session always has
+        // its number. Run together they would read as one long number.
+        double idWidth = ValueWidth(shown[^1].Id.ToString(CultureInfo.InvariantCulture), idSize) + 4;
+        int idEvery = new[] { 1, 2, 5, 10 }.FirstOrDefault(n => n * slot >= idWidth, 10);
 
         for (int i = 0; i < shown.Count; i++)
         {
@@ -1238,6 +1382,23 @@ public partial class SessionsWindow : PanelWindow
                     Fill = _theme.Accent,
                     IsHitTestVisible = false,
                 });
+            }
+
+            // Below the change triangle's row, whether or not there is a bar.
+            if ((shown.Count - 1 - i) % idEvery == 0)
+            {
+                string id = session.Id.ToString(CultureInfo.InvariantCulture);
+                double idTextWidth = ValueWidth(id, idSize);
+                var idLabel = new TextBlock
+                {
+                    Text = id,
+                    FontSize = idSize,
+                    Foreground = _theme.Header,
+                    IsHitTestVisible = false,
+                };
+                Canvas.SetLeft(idLabel, Math.Clamp(plotLeft + i * slot + slot / 2 - idTextWidth / 2, plotLeft, width - idTextWidth));
+                Canvas.SetTop(idLabel, baseline + ZeroRoom);
+                Chart.Children.Add(idLabel);
             }
 
             Chart.Children.Add(hover);
@@ -1602,11 +1763,31 @@ public partial class SessionsWindow : PanelWindow
     }
 
     /// <summary>The fixed columns, then one that takes the rest - for the "cut short" mark.</summary>
-    private static void AddColumns<T>(Grid grid, IReadOnlyList<Column<T>> columns)
+    private void AddColumns<T>(Grid grid, IReadOnlyList<Column<T>> columns)
     {
-        foreach (var column in columns)
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(column.Width) });
+        for (int i = 0; i < columns.Count; i++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ColumnWidth(columns[i], i)) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+    }
+
+    /// <summary>
+    /// The column's set width, or wider if its heading needs it - with room
+    /// for the sort arrow whether or not it is sorted, so sorting never makes
+    /// the columns jump. Fixed widths alone cut "▼ Stutters" to "▼ Stutter",
+    /// and a theme with a wider font cut "CPU+GPU kWh" even unsorted.
+    /// </summary>
+    private double ColumnWidth<T>(Column<T> column, int index)
+    {
+        // The heading's own margin - see BuildHeader - and a few pixels spare.
+        // Measured in the font the heading row really has: the theme's window
+        // font reaches it through the tree, not through this window's own
+        // FontFamily, which ValueWidth reads.
+        double margin = column.Number ? 10 : index == 0 ? 0 : ColumnGap;
+        var font = (FontFamily)TableHeader.GetValue(System.Windows.Documents.TextElement.FontFamilyProperty);
+        double text = new FormattedText("▼ " + column.Header, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                                        new Typeface(font, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                                        SmallFont, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace;
+        return Math.Max(column.Width, Math.Ceiling(text + margin + 4));
     }
 
     /// <summary>
@@ -1688,7 +1869,7 @@ public partial class SessionsWindow : PanelWindow
         // The margins, the scroll bar, and room for "cut short".
         const double Around = 100;
 
-        double needed = VisibleSessionColumns().Sum(c => c.Width) + Around;
+        double needed = VisibleSessionColumns().Select(ColumnWidth).Sum() + Around;
         if (Width < needed)
             Width = Math.Min(needed, SystemParameters.WorkArea.Width);
     }

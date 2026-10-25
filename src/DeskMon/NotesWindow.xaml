@@ -18,36 +18,8 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Ui/PanelStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
-
-            <!-- The picker's rows, with a rule under General. General is not a
-                 game - it is the page you fall back to - so it stands apart from
-                 the games below it instead of reading as the first of them. A
-                 rule on the row rather than a Separator item in the list: the
-                 list is plain strings, and a non-string item would be one more
-                 thing for selection and the arrow keys to step over. -->
-            <Style x:Key="GamePickerRow" TargetType="ComboBoxItem" BasedOn="{StaticResource DarkComboItem}">
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="ComboBoxItem">
-                            <StackPanel>
-                                <Border x:Name="Back" Background="Transparent" Padding="{TemplateBinding Padding}">
-                                    <ContentPresenter />
-                                </Border>
-                                <Border x:Name="Rule" Height="1" Margin="8,3,8,3"
-                                        Background="{DynamicResource Theme.Ov.33}" Visibility="Collapsed" />
-                            </StackPanel>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.2E}" />
-                                </Trigger>
-                                <DataTrigger Binding="{Binding}" Value="{x:Static notes:NotesStore.GeneralNotes}">
-                                    <Setter TargetName="Rule" Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
-            </Style>
+            <!-- The picker's rows, with the rule under General: GamePickerRow in
+                 the shared dictionary, shared with the sessions window. -->
         </ResourceDictionary>
     </ui:PanelWindow.Resources>
 

@@ -90,10 +90,17 @@ public sealed class FrameStats
     public double? AverageFps => Frames > 0 && TotalMs > 0 ? 1000.0 * Frames / TotalMs : null;
 
     /// <summary>The frame rate across the slowest 1% of the session's frames.</summary>
-    public double? OnePercentLow => Low(0.01, OnePercentFloor);
+    /// <remarks>
+    /// Over frames under 100 ms only, as the jitter is: a frame that long is a
+    /// loading screen or a save, not a dip in play. Counted in full, 30 s of
+    /// loading in a 10-minute Factorio session made up most of its slowest 1%
+    /// and took a steady 60 fps to a "1% low" of 9 - and its score with it.
+    /// The long frames still show in the 0.1% low and the stutter count.
+    /// </remarks>
+    public double? OnePercentLow => Low(0.01, OnePercentFloor, playOnly: true);
 
     /// <summary>The frame rate across the slowest 0.1% - single long frames, the hitches.</summary>
-    public double? PointOnePercentLow => Low(0.001, PointOnePercentFloor);
+    public double? PointOnePercentLow => Low(0.001, PointOnePercentFloor, playOnly: false);
 
     /// <summary>
     /// How far a frame time typically is from the average, in milliseconds -
@@ -163,16 +170,20 @@ public sealed class FrameStats
     /// widget's lows are (see FpsMonitor.LowAverage): their total time, taken
     /// from the slowest bins down, the last bin only in part.
     /// </summary>
-    private double? Low(double fraction, int floor)
+    /// <param name="playOnly">Leave out the last bin - frames of 100 ms or more, see OnePercentLow.</param>
+    private double? Low(double fraction, int floor, bool playOnly)
     {
-        if (Frames < floor)
+        // The share is of the frames counted, so leaving the long ones out
+        // doesn't make the slowest 1% reach further into normal play.
+        long frames = playOnly ? Frames - _counts[Bins] : Frames;
+        if (frames < floor)
             return null;
 
-        long wanted = Math.Max(1, (long)Math.Round(fraction * Frames));
+        long wanted = Math.Max(1, (long)Math.Round(fraction * frames));
         long taken = 0;
         double time = 0;
 
-        for (int i = Bins; i >= 0 && taken < wanted; i--)
+        for (int i = playOnly ? Bins - 1 : Bins; i >= 0 && taken < wanted; i--)
         {
             if (_counts[i] == 0)
                 continue;

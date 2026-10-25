@@ -648,6 +648,14 @@ public sealed class AppSettings
     /// </summary>
     public double TargetFps { get; set; } = 60;
 
+    /// <summary>
+    /// A target of its own for a game that can't reach <see cref="TargetFps"/>
+    /// by design - Factorio runs at 60 whatever the monitor, and scored
+    /// "Needs optimising" against 240 while running perfectly. By game name;
+    /// set by right-clicking the SCORE card in the sessions window.
+    /// </summary>
+    public Dictionary<string, double> GameTargetFps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>What the chart's bars measure: "avg", "length", "score" or a peak's "Label|Unit".</summary>
     public string SessionsChart { get; set; } = "avg";
 
@@ -756,6 +764,9 @@ public sealed class AppSettings
         NotGames ??= new List<string>();
         AlwaysGames ??= new List<string>();
         SessionColumns ??= DefaultSessionColumns();
+        // Rebuilt rather than only null-checked: the deserialiser makes a
+        // case-sensitive one, and the game names in the logs vary in case.
+        GameTargetFps = new Dictionary<string, double>(GameTargetFps ?? new(), StringComparer.OrdinalIgnoreCase);
         PlaytimeFromSaves ??= DefaultPlaytimeFromSaves();
         SteamAppIds ??= new Dictionary<string, string>();
         GogGames ??= new Dictionary<string, string>();
@@ -816,6 +827,7 @@ public sealed class AppSettings
         nameof(SessionColumns), nameof(SessionsChart), nameof(SteamAppIds), nameof(GogGames),
         nameof(PicturesLeft), nameof(PicturesTop), nameof(PicturesWidth), nameof(PicturesHeight),
         nameof(PicturesSort),
+        nameof(GameTargetFps),   // the SCORE card's right-click menu
         // Right-click on the hardware window's stability line. Off this list
         // it was only ever written once, as null, and every later click was
         // lost on the next start.

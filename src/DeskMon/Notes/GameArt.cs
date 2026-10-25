@@ -12,13 +12,15 @@ namespace DeskMon.Notes;
 /// A wide picture of a game, for the banner behind the top of the sessions
 /// window - the way Steam's library page shows one behind a game's name.
 ///
-/// Found without the network, best first:
+/// Found best first:
 ///   1. Steam's own library art, which Steam keeps on disk for every game in
 ///      the library: appcache\librarycache\&lt;appid&gt;, as library_hero.jpg
 ///      (the wide banner), or the smaller header.jpg when that is all there is.
-///   2. The newest screenshot DeskMon took of the game - a game from GOG, or
-///      one with no Steam art, still has a picture of itself.
-/// Null when neither exists; the window then draws <see cref="Drawn"/>.
+///   2. With online art on, the Steam store's banner - kept in the art cache
+///      after the first fetch, so a GOG copy gets the real banner too.
+///   3. The newest screenshot DeskMon took of the game - a game the store
+///      hasn't got still has a picture of itself.
+/// Null when none exists; the window then draws <see cref="Drawn"/>.
 ///
 /// Everything returned is frozen, so it can be made on a worker thread: the
 /// lookup reads Steam's manifests and decodes a large JPEG, which the window
@@ -43,7 +45,8 @@ public static class GameArt
     /// banner's corner. Either can be null; the window then draws the
     /// picture or writes the name.
     /// </summary>
-    public sealed record Art(ImageSource? Picture, ImageSource? Logo);
+    /// <param name="SteamAppId">The game's Steam app id where the lookup learned it, for the logo's link to its store page.</param>
+    public sealed record Art(ImageSource? Picture, ImageSource? Logo, string? SteamAppId = null);
 
     /// <param name="steamAppId">The app id remembered from the last time the game ran, or null to look it up by name.</param>
     /// <param name="online">Whether the Steam store may be asked when this PC has no picture (the OnlineGameArt setting).</param>
@@ -59,7 +62,25 @@ public static class GameArt
         if (logo is null && online)
             logo = StoreFile(game, ref appId, ".logo.png", LogoUrls);
 
-        return new Art(picture, Load(logo, 600));
+        return new Art(picture, Load(logo, 600), appId);
+    }
+
+    /// <summary>
+    /// The game's Steam app id from the store's search by name - for a game
+    /// whose art came from the cache, so no lookup learned its id this run.
+    /// Null when the store has no game of that name, or can't be reached.
+    /// Blocks, so for a worker thread.
+    /// </summary>
+    public static string? StoreAppId(string game)
+    {
+        try
+        {
+            return SearchStore(game);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -151,14 +172,20 @@ public static class GameArt
     }
 
     /// <summary>
-    /// The best picture there is: on this PC first, the Steam store last.
+    /// The best picture there is: Steam's on this PC, then the Steam store's,
+    /// then the game's own newest screenshot.
     /// <paramref name="appId"/> comes back filled in when the store's search
     /// found the game, so its logo can be fetched without searching again.
     /// </summary>
+    /// The store before the screenshots: a screenshot is whatever was on the
+    /// screen when the key was pressed - an editor, the desktop - and a GOG
+    /// copy of Factorio wore one of Visual Studio as its banner while the
+    /// store's real one sat in the cache. A miss is cached for a week, so a
+    /// game the store hasn't got still falls through to its screenshot cheaply.
     private static string? Find(string game, ref string? appId, string screenshotFolder, bool online)
         => SteamArt(appId, "library_hero.jpg", "library_header.jpg", "header.jpg")
-           ?? NewestScreenshot(screenshotFolder)
-           ?? (online ? StoreFile(game, ref appId, ".jpg", BannerUrls) : null);
+           ?? (online ? StoreFile(game, ref appId, ".jpg", BannerUrls) : null)
+           ?? NewestScreenshot(screenshotFolder);
 
     /// <summary>The store's own image server, by the old fixed address every app had.</summary>
     private static string Cdn(string appId, string file) => $"https://cdn.akamai.steamstatic.com/steam/apps/{appId}/{file}";

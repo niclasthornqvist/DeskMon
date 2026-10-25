@@ -32,7 +32,9 @@ namespace DeskMon.Notes;
 /// a measured frame rate: the frame rate is what the score is about.
 ///
 /// The lows and frame times are over the session's every frame (see
-/// FrameStats), written into the log from 1.57 on. Not the LOW and WORST
+/// FrameStats), written into the log from 1.57 on - from 1.66 the 1% low
+/// leaves out frames of 100 ms or more, the loading screens; sessions logged
+/// before keep the 1% low they were written with. Not the LOW and WORST
 /// peaks: those are the lowest the widget's last-25-seconds figures dipped to,
 /// which is a loading screen at 1 fps in almost every game. A session from
 /// before 1.57 is scored on its frame rate and thermals only, and says so.
@@ -61,6 +63,20 @@ public static class PerformanceScore
     public static double Target => Math.Max(10, _settings?.TargetFps ?? 60);
 
     /// <summary>
+    /// The target <paramref name="game"/> is scored against: its own, set in
+    /// the sessions window, or <see cref="Target"/>. A game locked to 60 can't
+    /// earn full marks against a 240 Hz monitor however well it runs.
+    /// </summary>
+    public static double TargetFor(string? game)
+        => game is not null && _settings?.GameTargetFps.TryGetValue(game, out double own) == true && double.IsFinite(own)
+            ? Math.Max(10, own)
+            : Target;
+
+    /// <summary>Whether <paramref name="game"/> has a target of its own rather than Settings' one.</summary>
+    public static bool HasOwnTarget(string? game)
+        => game is not null && _settings?.GameTargetFps.ContainsKey(game) == true;
+
+    /// <summary>
     /// The session's score and how it was reached, or null when no frame rate
     /// was measured. Worked out once per session and target: the history's
     /// table asked three or four times a row - for the cell, its colour and
@@ -69,14 +85,16 @@ public static class PerformanceScore
     /// </summary>
     public static Result? For(SessionRecord session)
     {
-        double target = Target;
+        // The game's own target where it has one; kept with the score, so a
+        // change to either target re-scores on the next ask.
+        double target = TargetFor(session.Game);
         lock (Scores)
         {
             if (Scores.TryGetValue(session, out var known) && known.Target == target)
                 return known.Result;
         }
 
-        var result = Score(session);
+        var result = Score(session, target);
         lock (Scores)
             Scores.AddOrUpdate(session, new Scored(target, result));
         return result;
@@ -86,12 +104,10 @@ public static class PerformanceScore
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SessionRecord, Scored> Scores = new();
 
-    private static Result? Score(SessionRecord session)
+    private static Result? Score(SessionRecord session, double target)
     {
         if (session.AverageFps is not double average || average <= 0)
             return null;
-
-        double target = Target;
 
         var parts = new List<(string Name, string Detail, double Value, double Share)>
         {

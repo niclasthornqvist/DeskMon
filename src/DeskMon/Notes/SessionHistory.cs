@@ -72,7 +72,10 @@ public sealed class SessionHistory
                 .ToList();
 
             for (int i = 0; i < sessions.Count; i++)
+            {
                 sessions[i].Id = i + 1;
+                sessions[i].Game = game;
+            }
 
             return sessions;
         }
