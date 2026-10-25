@@ -1970,9 +1970,17 @@ public partial class MainWindow : Window
         VersionText.Foreground = lit ? _theme.Section : _theme.Header;
         VersionText.FontSize = Math.Max(8, _settings.FontSize - 2.5);
 
-        // The clock is the version number's partner at the other corner.
-        ClockText.Foreground = _theme.Header;
-        ClockText.FontSize = VersionText.FontSize;
+        // The clock: the time well above the rows' size so it is readable at a
+        // glance from across the desk, in the section colour, and the day and
+        // date at the version's small size so the pair is no taller than it.
+        // From the font setting rather than fixed, so it scales with the rest.
+        ClockAccent.Background = _theme.SectionAccent;
+        ClockTime.Foreground = _theme.Section;
+        ClockTime.FontSize = _settings.FontSize + 10;
+        ClockDay.Foreground = _theme.Section;
+        ClockDay.FontSize = VersionText.FontSize;
+        ClockDate.Foreground = _theme.Header;
+        ClockDate.FontSize = VersionText.FontSize;
     }
 
     /// <summary>Fires on each new minute - see UpdateClock.</summary>
@@ -1987,7 +1995,11 @@ public partial class MainWindow : Window
     private void UpdateClock()
     {
         var now = DateTime.Now;
-        ClockText.Text = now.ToString("dddd - yyyy-MM-dd - HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        // The day in capitals, like the section headings it sits under.
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        ClockTime.Text = now.ToString("HH:mm", culture);
+        ClockDay.Text = now.ToString("dddd", culture).ToUpperInvariant();
+        ClockDate.Text = now.ToString("yyyy-MM-dd", culture);
 
         // A few milliseconds past the minute, so a timer that fires a hair
         // early still lands on the new one rather than showing the old again.

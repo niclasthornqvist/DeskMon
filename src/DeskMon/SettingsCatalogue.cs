@@ -120,146 +120,161 @@ public static class SettingsCatalogue
     /// <param name="Note">One line under the heading, for what every setting in the group shares.</param>
     public sealed record Group(string Title, string? Note, params Setting[] Settings);
 
-    private const string OpacityRange = "0.1 – 1";
-
+    // The groups follow what you came to change rather than which file reads
+    // it: the widget's own look, then games, then the windows, and the
+    // fine-tuning (refresh intervals) last. Each help line is one short
+    // sentence - longer ones wrapped to three or four lines in the window and
+    // stopped being read. Opacities have no unit: their slider already shows
+    // the range, and "0.1 – 1" squeezed the box beside it.
     public static readonly Group[] Groups =
     {
         // First: it changes everything after it. The dropdown is drawn by the
         // window itself (ThemeRow), with the picked theme described under it.
-        new("Theme", "The look of the whole program at once: colours, fonts and corners. Anything a theme sets can still be changed below - doing so makes it Custom.",
+        // The windows' colours are here, not under Notes: they colour every
+        // window, as the rest of this group does.
+        new("Theme", "Colours, fonts and corners in one go. Changing any of them below makes it Custom.",
             new Setting("Theme", "Theme", "", Choices: ThemeCatalogue.Names),
-            new Setting("AccentColor", "Accent colour", "What lights up: open windows on the toolbar, ticked boxes, sliders, selected rows, links and the sessions chart."),
-            new Setting("WindowFontFamily", "Window font", "Every window but the widget, with its menus and tooltips. The notes keep their own.", Kind: EditorKind.Font),
+            new Setting("AccentColor", "Accent colour", "Ticked boxes, sliders, selected rows, links and the sessions chart."),
+            new Setting("WindowFontFamily", "Window font", "Every window but the widget. The notes keep their own.", Kind: EditorKind.Font),
+            // No reload any more: every window repaints on UiTheme.Changed.
+            new Setting("NotesBackgroundColor", "Window background", "The notepad and the other windows."),
+            new Setting("NotesTextColor", "Window text", "Normal text in the notepad and the other windows."),
             new Setting("CornerRadius", "Corner roundness", "0 is square.", Unit: "px", Slider: new(0, 24, 1)),
             new Setting("Glow", "Glow", "A soft light around the widget and the windows."),
-            new Setting("GlowColor", "Glow colour", "Leave empty to glow in the accent colour.")),
+            new Setting("GlowColor", "Glow colour", "Empty glows in the accent colour.")),
 
         new("Widget", null,
             new Setting("StartWithWindows", "Start with Windows", "Starts DeskMon when you log in, without a UAC prompt.", Kind: EditorKind.Startup),
-            new Setting("Opacity", "Opacity", "How solid the widget is on the desktop. 1 is fully solid.", Unit: OpacityRange, Slider: OpacitySlider),
-            new Setting("GameOpacity", "Opacity during games", "Lower, so the widget doesn't distract from the game.", Unit: OpacityRange, Slider: OpacitySlider),
-            new Setting("WidgetBackdrop", "DeskMon picture", "How strongly DeskMon's logo shows behind the readings. 0 hides it.", Unit: "0 – 1", Slider: new(0, 1, 0.01)),
             new Setting("AlwaysOnTop", "Always on top", "Keep the widget above other windows."),
-            new Setting("Locked", "Lock position", "Stops the widget from being dragged by accident. Its buttons still work."),
-            new Setting("WidgetLayout", "Layout", "vertical stacks the sections one under another. horizontal puts them side by side, for the top or bottom of a screen.",
+            new Setting("Locked", "Lock position", "Stops it being dragged by accident. Its buttons still work."),
+            new Setting("Opacity", "Opacity", "1 is fully solid.", Slider: OpacitySlider),
+            new Setting("GameOpacity", "Opacity during games", "Lower, so the widget doesn't distract from the game.", Slider: OpacitySlider),
+            new Setting("WidgetBackdrop", "DeskMon picture", "The logo behind the readings. 0 hides it.", Slider: new(0, 1, 0.01)),
+            new Setting("WidgetLayout", "Layout", "Horizontal puts the sections side by side.",
                         Choices: new[] { "vertical", "horizontal" }),
-            new Setting("FontFamily", "Font", "A fixed-width one, like Consolas, stops the numbers jumping as they change.", Kind: EditorKind.Font),
-            new Setting("FontSize", "Text size", "Everything else on the widget scales with it.", Slider: new(8, 24, 0.5), Min: 6),
+            new Setting("FontFamily", "Font", "Fixed-width, like Consolas, keeps the numbers from jumping.", Kind: EditorKind.Font),
+            new Setting("FontSize", "Text size", "Everything on the widget scales with it.", Slider: new(8, 24, 0.5), Min: 6),
+            new Setting("SectionAccent", "Heading accent", "A short bar before each section heading."),
+            new Setting("ShowHardwareNames", "Show hardware names", "Your CPU and graphics card at the top.", NeedsReload: true)),
+
+        // The bars and the columns they sit in, together: the columns are
+        // mostly the bar's length and the space around it. Minimums are the
+        // floors MetricRow already applies: 16 px for the peak column, 1 px
+        // for the bar's thickness.
+        new("Bars and columns", "Wider columns make a wider widget.",
             new Setting("ShowBars", "Show bars", "A bar beside each reading."),
-            new Setting("ShowPeaks", "Show peaks", "The highest reading so far (lowest for FPS), after the bar."),
-            // Beside ShowBars and ShowPeaks, since they change how those look.
-            new Setting("BarStyle", "Bar style", "rounded is one smooth bar. segmented cuts it into blocks, like an LED meter.",
+            new Setting("BarStyle", "Bar style", "Segmented cuts the bar into blocks, like an LED meter.",
                         Choices: new[] { "rounded", "segmented" }),
-            new Setting("ShowPeakMarker", "Peak marker on the bar", "A thin tick on the bar where the peak reached."),
-            new Setting("SectionAccent", "Heading accent", "A short bar in the gradient's colours before each section heading."),
-            new Setting("ShowHardwareNames", "Show hardware names", "Your CPU and graphics card at the top of the widget.", NeedsReload: true)),
+            new Setting("BarTrackWidth", "Bar length", "", Unit: "px", Slider: new(10, 250, 1), Min: 1),
+            new Setting("BarTrackHeight", "Bar thickness", "1 or 2 makes it a thin line.", Unit: "px", Slider: new(1, 20, 1)),
+            new Setting("ShowPeaks", "Show peaks", "The highest reading so far (lowest for FPS), after the bar."),
+            new Setting("ShowPeakMarker", "Peak marker on the bar", "A thin tick where the peak reached."),
+            new Setting("LabelWidth", "Label column", "Widen it if labels are cut off.", Unit: "px", Slider: new(20, 200, 1), Min: 0),
+            new Setting("ValueWidth", "Value column", "", Unit: "px", Slider: new(20, 200, 1), Min: 0),
+            new Setting("PeakWidth", "Peak column", "Also the gap between the bar and the peak.", Unit: "px", Slider: new(16, 120, 1))),
 
-        new("Section headings", "Rename the headings on the widget. Leave a box empty for the default name.",
-            new Setting("SectionTitles", "", "")),
-
-        // Expanded by the window into a tick-box grid, a row per section and
-        // a column per layout - like SectionTitles, one setting standing for
-        // two lists: HiddenSections and HiddenSectionsInGame.
-        new("Sections shown", "Untick a section to leave it off the widget, heading and all - separately for the desktop and while a game runs.",
-            new Setting("HiddenSections", "", "")),
-
-        new("Widget colours", "Click a swatch to pick a colour and its opacity. Default puts the built-in colour back.",
+        new("Widget colours", "Click a swatch to pick a colour. Empty uses the built-in one.",
             new Setting("BackgroundColor", "Background", ""),
             new Setting("BorderColor", "Border", "The outline around the widget."),
             new Setting("LabelColor", "Labels", "Names like CPU and RAM."),
             new Setting("HeaderColor", "Hardware names and peaks", ""),
-            new Setting("SectionColor", "Headings", "USAGE, TEMPERATURE and GAME."),
+            new Setting("SectionColor", "Headings", "USAGE, TEMPERATURE, GAME and the rest."),
             new Setting("SeparatorColor", "Divider lines", "The line between sections."),
-            new Setting("BarGradient", "Gradient bars", "Fill the bars on the widget and in the sessions chart with the gradient below, instead of one colour. Its end still turns amber and red with the reading."),
-            new Setting("BarGradientStartColor", "Gradient start", "The colour at the empty end of a bar."),
+            new Setting("BarGradient", "Gradient bars", "Bars in the gradient below. Their end still turns amber and red."),
+            new Setting("BarGradientStartColor", "Gradient start", "The empty end of a bar."),
             new Setting("BarGradientEndColor", "Gradient end", "The colour a full bar reaches."),
-            new Setting("BarColor", "Bar", "Without the gradient. Leave empty to colour each bar like its reading: green, amber, red."),
+            new Setting("BarColor", "Bar", "Without the gradient. Empty colours each bar by its reading."),
             new Setting("BarTrackColor", "Bar background", "The empty part of the bar."),
             new Setting("NormalColor", "Normal reading", "Below the warning level."),
             new Setting("WarnColor", "Warning", "At or above the warning level."),
             new Setting("CritColor", "Critical", "At or above the critical level."),
             new Setting("UnavailableColor", "Unavailable", "Readings shown as n/a.")),
 
-        new("Games and FPS", null,
-            new Setting("MeasureFps", "Measure FPS", "Count frames with PresentMon while a game runs."),
-            new Setting("HideFpsWithoutGame", "Hide FPS without a game", "Hide the FPS section on the widget while no game is running. Off shows it all the time, as n/a until a game starts."),
-            new Setting("ShowFpsOverlay", "FPS overlay", "The frame rate in large figures in the top-right corner of the game's screen. Clicks go through it to the game."),
-            new Setting("FpsOverlayHotkey", "FPS overlay hotkey", "Shows and hides the FPS overlay from inside the game. Empty turns it off."),
-            new Setting("FpsOverlaySize", "FPS overlay size", "", Slider: new(16, 96, 1)),
-            new Setting("FpsOverlayOpacity", "FPS overlay opacity", "", Unit: OpacityRange, Slider: OpacitySlider),
-            // No reload: read when each game starts.
-            new Setting("SteamPlaytime", "Playtime from Steam", "For Steam games, the playtime after the game's name is Steam's total, read from Steam's files on this PC. Off, or for other games, it is the time DeskMon has logged."),
-            new Setting("GogPlaytime", "Playtime from GOG Galaxy", "For GOG games, the playtime is GOG Galaxy's total, read from Galaxy's database on this PC. Off, or without Galaxy, it is the time DeskMon has logged."),
-            // No reload: read each time the sessions window looks for a picture.
-            new Setting("OnlineGameArt", "Game pictures from the Steam store", "When a game has no picture or logo on this PC, the sessions window looks it up on the Steam store by name, and asks Steam's servers anonymously for a newer game's logo. Copies are kept in %LOCALAPPDATA%\\DeskMon\\cache. Off sends nothing and shows a drawn picture instead."),
-            new Setting("PauseWhenFullscreen", "Hide during games", "Hide the widget completely while a game is in front, instead of showing it over the game."),
-            new Setting("GameLayout", "Separate layout for games", "Sections you fold while a game runs are remembered apart from the desktop's, and the widget switches by itself. Starts with DISK and NETWORK folded in games."),
-            // No reload: PerformanceScore reads it every time a score is shown.
-            new Setting("TargetFps", "Target frame rate", "The frame rate a game needs for full marks in its performance score in the sessions window - your monitor's refresh rate is a good choice. Every session is scored again when it changes.", Unit: "fps", Slider: new(30, 360, 1)),
-            new Setting("PingHost", "Ping server", "Pinged every two seconds while a game runs, for the PING row under NETWORK: a game server's address, or 1.1.1.1. Empty pings nothing."),
-            new Setting("PreferredGpu", "Graphics card", "Which card to report. auto picks a dedicated card over the one built into the CPU.",
-                        NeedsReload: true, Choices: new[] { "auto", "nvidia", "amd", "intel" }),
-            new Setting("NotGames", "Never treat as a game", "Keeps fullscreen browsers and video players from counting as games. Add from what is running, or type a name.", Wide: true, Kind: EditorKind.ProgramList),
-            new Setting("AlwaysGames", "Always treat as a game", "For games played in a window, which otherwise aren't noticed: measured and logged whenever they are in front, fullscreen or not.", Wide: true, Kind: EditorKind.ProgramList)),
+        // Expanded by the window into a tick-box grid, a row per section and
+        // a column per layout - like SectionTitles, one setting standing for
+        // two lists: HiddenSections and HiddenSectionsInGame.
+        new("Sections shown", "Untick a section to hide it - separately on the desktop and in games.",
+            new Setting("HiddenSections", "", "")),
+
+        new("Section headings", "Rename the widget's headings. Empty keeps the default name.",
+            new Setting("SectionTitles", "", "")),
+
+        // What counts as a game and how the widget behaves around one. The
+        // frame-rate settings have a group of their own below.
+        new("Games", null,
+            new Setting("PauseWhenFullscreen", "Hide during games", "Hide the widget completely while a game is in front."),
+            new Setting("GameLayout", "Separate layout for games", "Sections folded in a game are remembered apart from the desktop's."),
+            new Setting("GameStartCheck", "Check what runs beside a game", "After 20 s, warn about a heavy browser, Windows Update or a virus scan."),
+            new Setting("PingHost", "Ping server", "Pinged every 2 s in games for the PING row. Empty pings nothing."),
+            new Setting("NotGames", "Never treat as a game", "Fullscreen browsers and video players, for example.", Wide: true, Kind: EditorKind.ProgramList),
+            new Setting("AlwaysGames", "Always treat as a game", "Games played in a window, which aren't noticed otherwise.", Wide: true, Kind: EditorKind.ProgramList)),
             // PresentMonPath is left out on purpose: settings.json only. The
             // automatic search finds every normal install, and a box here made
             // it too easy to point an administrator process at any program.
 
-        new("Notes and sessions", null,
+        new("FPS", null,
+            new Setting("MeasureFps", "Measure FPS", "Count frames with PresentMon while a game runs."),
+            new Setting("HideFpsWithoutGame", "Hide FPS without a game", "Off shows the FPS section as n/a until a game starts."),
+            // No reload: PerformanceScore reads it every time a score is shown.
+            new Setting("TargetFps", "Target frame rate", "Full marks in the performance score. Your monitor's refresh rate suits.", Unit: "fps", Slider: new(30, 360, 1)),
+            new Setting("ShowFpsOverlay", "FPS overlay", "The frame rate in large figures, top right of the game."),
+            new Setting("FpsOverlayHotkey", "FPS overlay hotkey", "Shows and hides the overlay in the game. Empty turns it off."),
+            new Setting("FpsOverlaySize", "FPS overlay size", "", Unit: "px", Slider: new(16, 96, 1)),
+            new Setting("FpsOverlayOpacity", "FPS overlay opacity", "", Slider: OpacitySlider)),
+
+        new("Notes", null,
             new Setting("AutoOpenNotesWithGame", "Open notes with a game", "Show the notepad when a game starts."),
-            new Setting("NotesAlwaysOnTop", "Windows on top", "Keep the notepad, hardware, versions and settings windows above the game."),
-            new Setting("LogSessionToFile", "Log sessions", "Write a line about each session to the session history when you quit a game."),
-            new Setting("GameStartCheck", "Check what runs beside a game", "20 seconds into a game, say so if a heavy program is running beside it - a browser using gigabytes, Windows Update or a virus scan busy on the CPU."),
-            // Min 0: a negative price would only turn the column into nonsense.
-            new Setting("EnergyPrice", "Energy price", "What a kWh costs, for the LOG window's Cost column. 0 hides it. The energy is the CPU's and GPU's own, so the whole PC draws more.", Unit: "per kWh", Min: 0),
-            new Setting("EnergyCurrency", "Currency", "Written after the cost - kr, €, $. Empty for just the number."),
-            new Setting("ScreenshotHotkey", "Screenshot hotkey", "Puts a screenshot of the game into its notes, from inside the game. Empty turns it off."),
+            new Setting("ScreenshotHotkey", "Screenshot hotkey", "Puts a screenshot of the game into its notes. Empty turns it off."),
             // Floor 10: Screenshot.Save clamps there, below it is only smear.
-            new Setting("ScreenshotQuality", "Screenshot quality", "The full-size file. 100 saves a lossless PNG; lower saves a much smaller JPEG - 90 is hard to tell from the original.", Slider: new(10, 100, 5)),
-            // No reload any more: every window repaints on UiTheme.Changed.
-            new Setting("NotesBackgroundColor", "Window background", "Background of the notepad and the other windows."),
-            new Setting("NotesTextColor", "Notes text colour", "Normal text colour in the notepad and the other windows."),
-            new Setting("NotesFolder", "Notes folder", "Where notes are saved. Empty means %APPDATA%\\DeskMon\\notes, your own for this Windows user.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder),
-            new Setting("SessionFolder", "Session history folder", "Empty means %APPDATA%\\DeskMon\\sessions, your own for this Windows user.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder)),
+            new Setting("ScreenshotQuality", "Screenshot quality", "100 is a lossless PNG. Lower is a smaller JPEG - 90 looks the same.", Slider: new(10, 100, 5)),
+            new Setting("NotesFolder", "Notes folder", "Empty uses %APPDATA%\\DeskMon\\notes.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder)),
+
+        // Playtime and pictures are here because the sessions window is where
+        // they show most - the widget's playtime follows the same switches.
+        new("Sessions", null,
+            new Setting("LogSessionToFile", "Log sessions", "Save each play session to the history when the game quits."),
+            // No reload: read when each game starts.
+            new Setting("SteamPlaytime", "Playtime from Steam", "Steam's own total for Steam games, instead of DeskMon's."),
+            new Setting("GogPlaytime", "Playtime from GOG Galaxy", "Galaxy's own total for GOG games, instead of DeskMon's."),
+            // No reload: read each time the sessions window looks for a picture.
+            new Setting("OnlineGameArt", "Game pictures from Steam", "Look up missing pictures on the Steam store. Off sends nothing."),
+            // Min 0: a negative price would only turn the column into nonsense.
+            new Setting("EnergyPrice", "Energy price", "Per kWh, for the Cost column. 0 hides it.", Unit: "/kWh", Min: 0),
+            new Setting("EnergyCurrency", "Currency", "After the cost: kr, €, $. Empty shows just the number."),
+            new Setting("SessionFolder", "Session history folder", "Empty uses %APPDATA%\\DeskMon\\sessions.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder)),
 
         new("Alerts and updates", null,
-            new Setting("Alerts", "Alerts", "A notification when a reading stays red - CPU or GPU too hot, memory or a drive nearly full. During a game it also shows under the FPS overlay."),
-            new Setting("AlertAfterSeconds", "Alert after", "How long a reading has to stay red first, so a spike doesn't alert.", Unit: "s", Slider: new(10, 600, 10)),
-            new Setting("CheckForUpdates", "Check for updates", "Once a day, look for a newer DeskMon and say so. Nothing is downloaded or installed."),
-            new Setting("UpdateRepository", "Release page", "Where DeskMon is published, as owner/repository on GitHub. Empty checks nothing.", Wide: true)),
+            new Setting("Alerts", "Alerts", "Notify when a reading stays red - too hot, or nearly full."),
+            new Setting("AlertAfterSeconds", "Alert after", "How long it has to stay red first, so a spike doesn't alert.", Unit: "s", Slider: new(10, 600, 10)),
+            new Setting("CheckForUpdates", "Check for updates", "Once a day. Nothing is downloaded or installed."),
+            new Setting("UpdateRepository", "Release page", "owner/repository on GitHub. Empty checks nothing.", Wide: true)),
 
-        // No NeedsReload: the hardware window re-reads every time it opens,
-        // so a change already shows on the next open without a restart.
-        new("Hardware window", null,
-            new Setting("CheckDriverOnline", "Check online for a newer driver, BIOS and Windows", "Asks nvidia.com or amd.com about the graphics card, asus.com about an ASUS board, and Windows Update about Windows, and runs a short ping test (to PingHost, or 1.1.1.1), each time the hardware window opens. Off still warns when the driver or BIOS is over 3 months old (yellow) or a year old (red).")),
+        // No NeedsReload on the check: the hardware window re-reads every time
+        // it opens, so a change already shows on the next open.
+        new("Hardware", null,
+            new Setting("PreferredGpu", "Graphics card", "Which card to report. Auto prefers a dedicated one.",
+                        NeedsReload: true, Choices: new[] { "auto", "nvidia", "amd", "intel" }),
+            new Setting("CheckDriverOnline", "Look online for updates", "Newer driver, BIOS and Windows, when the hardware window opens. Off still flags old ones.")),
 
         // The rule in the note is PanelWindow.DimDuringGames: an unfocused
         // window during a game takes the lower of its own value and GameOpacity.
-        new("Window opacity", "1 is fully solid. During a game, a window you aren't using is never more solid than Opacity during games.",
-            new Setting("NotesOpacity", "Notepad", "", Unit: OpacityRange, Slider: OpacitySlider),
-            new Setting("HardwareOpacity", "Hardware", "", Unit: OpacityRange, Slider: OpacitySlider),
-            new Setting("VersionsOpacity", "Versions", "", Unit: OpacityRange, Slider: OpacitySlider),
-            new Setting("SessionsOpacity", "Sessions", "", Unit: OpacityRange, Slider: OpacitySlider),
-            // Dragging this one fades the very window the slider is in, so
-            // near 0.1 the slider itself gets hard to see. Same floor anyway:
-            // PanelWindow never goes below it, and the box still reads clearly.
-            new Setting("SettingsOpacity", "Settings", "This window.", Unit: OpacityRange, Slider: OpacitySlider)),
-
-        // Minimums are the floors MetricRow already applies: 16 px for the
-        // peak column, 1 px for the bar's thickness.
-        new("Widget layout", "The widget is as wide as what is in it, so wider columns make a wider widget.",
-            new Setting("LabelWidth", "Label column", "Widen it if labels are cut off.", Unit: "px", Slider: new(20, 200, 1), Min: 0),
-            new Setting("ValueWidth", "Value column", "", Unit: "px", Slider: new(20, 200, 1), Min: 0),
-            new Setting("BarTrackWidth", "Bar length", "", Unit: "px", Slider: new(10, 250, 1), Min: 1),
-            new Setting("BarTrackHeight", "Bar thickness", "1 or 2 makes it a thin line.", Unit: "px", Slider: new(1, 20, 1)),
-            new Setting("PeakWidth", "Peak column", "Also sets the gap between the bar and the peak figure.", Unit: "px", Slider: new(16, 120, 1))),
+        // Dragging Settings fades the very window the slider is in, so near 0.1
+        // the slider itself gets hard to see. Same floor anyway: PanelWindow
+        // never goes below it, and the box still reads clearly.
+        new("Windows", "1 is fully solid. In games, a window not in use is no more solid than the widget.",
+            new Setting("NotesAlwaysOnTop", "Windows on top", "Keep the notepad, hardware, versions and settings windows above the game."),
+            new Setting("NotesOpacity", "Notepad opacity", "", Slider: OpacitySlider),
+            new Setting("HardwareOpacity", "Hardware opacity", "", Slider: OpacitySlider),
+            new Setting("VersionsOpacity", "Versions opacity", "", Slider: OpacitySlider),
+            new Setting("SessionsOpacity", "Sessions opacity", "", Slider: OpacitySlider),
+            new Setting("SettingsOpacity", "Settings opacity", "This window.", Slider: OpacitySlider)),
 
         // Minimums are the floors MainWindow already applies to each timer
         // (100, 250 and 500 ms), so the low end of a slider always does something.
-        new("Refresh rate", "Slower means less work for your PC while it runs.",
+        new("Refresh rate", "Slower means less work for your PC.",
             new Setting("IntervalMs", "Refresh", "How often the widget updates on the desktop.", Unit: "ms", Slider: new(100, 5000, 50)),
             new Setting("GameIntervalMs", "Refresh during games", "Slower by default, so the game gets the PC.", Unit: "ms", Slider: new(250, 10000, 250)),
-            new Setting("SensorIntervalMs", "Temperature reads", "How often temperatures are really read. Reading them is slow, so this matters most for game performance.", NeedsReload: true, Unit: "ms", Slider: new(1000, 30000, 500)),
-            new Setting("HiddenCheckMs", "Check while hidden", "While hidden behind a fullscreen app, how often to check whether it has gone.", Unit: "ms", Slider: new(500, 10000, 250))),
+            new Setting("SensorIntervalMs", "Temperature reads", "Reading temperatures is slow, so this matters most in games.", NeedsReload: true, Unit: "ms", Slider: new(1000, 30000, 500)),
+            new Setting("HiddenCheckMs", "Check while hidden", "How often to check whether a fullscreen app has gone.", Unit: "ms", Slider: new(500, 10000, 250))),
     };
 }

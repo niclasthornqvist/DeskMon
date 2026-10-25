@@ -200,13 +200,22 @@
                            MouseLeave="VersionText_HoverChanged" />
             </Grid>
 
-            <!-- The day, date and time at the bottom right, dim and small like
-                 the version number opposite it at the top - "Sunday -
-                 2026-10-25 - 04:01". Before the rows in the markup, docked at
+            <!-- The time at the bottom right, large, with the day and date
+                 stacked small beside it - a desk clock rather than a footnote,
+                 led by the same accent bar as the section headings so it reads
+                 as part of the widget. Before the rows in the markup, docked at
                  the bottom: the rows are the DockPanel's filling last child.
-                 Ticked over on the minute - see UpdateClock. -->
-            <TextBlock x:Name="ClockText" DockPanel.Dock="Bottom"
-                       HorizontalAlignment="Right" Margin="0,4,0,0" />
+                 Ticked over on the minute - see UpdateClock; sized and
+                 coloured in ApplyVersionStyle, as both follow settings. -->
+            <StackPanel x:Name="ClockPanel" DockPanel.Dock="Bottom" Orientation="Horizontal"
+                        HorizontalAlignment="Right" Margin="0,6,0,0">
+                <Border x:Name="ClockAccent" Width="3" CornerRadius="1.5" Margin="0,2,7,2" />
+                <TextBlock x:Name="ClockTime" FontWeight="Bold" VerticalAlignment="Center" />
+                <StackPanel VerticalAlignment="Center" Margin="8,0,0,0">
+                    <TextBlock x:Name="ClockDay" FontWeight="SemiBold" />
+                    <TextBlock x:Name="ClockDate" />
+                </StackPanel>
+            </StackPanel>
 
             <!-- IsSharedSizeScope: the metric rows' MetricSide columns are one
                  width across the panel - see the MetricRow template. -->

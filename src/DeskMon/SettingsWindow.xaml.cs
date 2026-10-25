@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -116,18 +117,34 @@ public partial class SettingsWindow : PanelWindow
 
     // --- Building the form ------------------------------------------------
 
+    /// <summary>Each group's button in the sidebar and its page of rows, in catalogue order.</summary>
+    private readonly List<(ToggleButton Tab, UIElement Page)> _groups = new();
+
+    /// <summary>
+    /// The group on show. Kept across a rebuild (a theme switch) and while the
+    /// window is hidden, so it opens where you left it.
+    /// </summary>
+    private int _shownGroup;
+
     private void Build()
     {
+        Groups.Children.Clear();
+        _groups.Clear();
+
         foreach (var group in SettingsCatalogue.Groups)
         {
-            Rows.Children.Add(Heading(group, first: Rows.Children.Count == 0));
+            // Every page is built up front, not when first shown: the tick
+            // boxes' refreshers and the theme dropdown have to exist whichever
+            // group is open, or RefreshValues and ShowTheme would miss them.
+            var page = new StackPanel();
+            page.Children.Add(Heading(group, first: true));
 
             foreach (var setting in group.Settings)
             {
                 // Kept by Windows, so there is no property to look up.
                 if (setting.Kind == SettingsCatalogue.EditorKind.Startup)
                 {
-                    Rows.Children.Add(StartupRow(setting));
+                    page.Children.Add(StartupRow(setting));
                     continue;
                 }
 
@@ -135,9 +152,41 @@ public partial class SettingsWindow : PanelWindow
                 // row, not the window.
                 var property = typeof(AppSettings).GetProperty(setting.Key);
                 if (property is not null)
-                    Rows.Children.Add(Row(setting, property));
+                    page.Children.Add(Row(setting, property));
             }
+
+            int index = _groups.Count;
+            var tab = new ToggleButton
+            {
+                Style = (Style)FindResource("GroupTab"),
+                Content = group.Title,
+            };
+            tab.Click += (_, _) =>
+            {
+                ShowGroup(index);
+                RowsScroller.ScrollToTop();   // a new page starts at its heading
+            };
+
+            Groups.Children.Add(tab);
+            _groups.Add((tab, page));
         }
+
+        ShowGroup(Math.Min(_shownGroup, _groups.Count - 1));
+    }
+
+    /// <summary>
+    /// One group's rows on the right and its button lit. Every button is set,
+    /// the clicked one included: a ToggleButton unticks itself on a second
+    /// click, which would leave the page up with nothing lit.
+    /// </summary>
+    private void ShowGroup(int index)
+    {
+        _shownGroup = index;
+        Rows.Children.Clear();
+        Rows.Children.Add(_groups[index].Page);
+
+        for (int i = 0; i < _groups.Count; i++)
+            _groups[i].Tab.IsChecked = i == index;
     }
 
     /// <summary>
@@ -191,6 +240,16 @@ public partial class SettingsWindow : PanelWindow
         if (property.PropertyType == typeof(bool))
             return Switch(setting, property, text);
 
+        // The swatch goes beside the box, where a slider would, rather than
+        // inside the control column: there it made colour boxes 36 px
+        // narrower than every other box in the form.
+        if (setting.Kind == SettingsCatalogue.EditorKind.Auto && setting.Choices is null
+            && setting.Key.EndsWith("Color", StringComparison.Ordinal))
+        {
+            var (colourBox, swatch) = Colour(setting, property);
+            return SideBySide(text, colourBox, swatch);
+        }
+
         FrameworkElement editor = setting.Kind switch
         {
             SettingsCatalogue.EditorKind.Font => FontChoice(setting, property),
@@ -200,11 +259,7 @@ public partial class SettingsWindow : PanelWindow
 
             _ => setting.Choices is { } choices
                 ? Choice(setting, property, choices)
-                : property.PropertyType == typeof(List<string>)
-                    ? Text(setting, property, list: true)
-                    : setting.Key.EndsWith("Color", StringComparison.Ordinal)
-                        ? Colour(setting, property)
-                        : Text(setting, property, list: false),
+                : Text(setting, property, list: property.PropertyType == typeof(List<string>)),
         };
 
         if (setting.Wide)
@@ -219,7 +274,7 @@ public partial class SettingsWindow : PanelWindow
             ? NumberSlider(range, property, box)
             : null;
 
-        return SideBySide(text, WithUnit(editor, setting.Unit), slider);
+        return SideBySide(text, editor, slider, setting.Unit);
     }
 
     /// <summary>The name, a "Needs a reload" tag if it has one, and the description.</summary>
@@ -268,17 +323,25 @@ public partial class SettingsWindow : PanelWindow
         };
 
     /// <summary>
-    /// Text on the left, control in the fixed right-hand column - and a slider,
-    /// if the setting has one, just left of that column. The slider gets a
-    /// column of its own rather than a share of the 150 px one, so the boxes
-    /// still line up with every other row's.
+    /// Width of the unit column after the control - "ms", "px", "/kWh". Every
+    /// row has it, unit or not: with the unit inside the control column, each
+    /// box was as much narrower as its unit was long.
     /// </summary>
-    private Grid SideBySide(FrameworkElement text, FrameworkElement control, FrameworkElement? beside = null)
+    private const double UnitColumn = 40;
+
+    /// <summary>
+    /// Text on the left, control in the fixed right-hand column, its unit
+    /// after it - and a slider or a colour swatch, if the setting has one,
+    /// just left of the control. Those get a column of their own rather than a
+    /// share of the 150 px one, so the boxes line up with every other row's.
+    /// </summary>
+    private Grid SideBySide(FrameworkElement text, FrameworkElement control, FrameworkElement? beside = null, string? unit = null)
     {
         var grid = new Grid { Margin = RowMargin };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(EditorColumn) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(UnitColumn) });
 
         text.Margin = new Thickness(0, 0, 12, 0);
         control.VerticalAlignment = VerticalAlignment.Center;
@@ -293,6 +356,20 @@ public partial class SettingsWindow : PanelWindow
             beside.Margin = new Thickness(0, 0, 10, 0);
             Grid.SetColumn(beside, 1);
             grid.Children.Add(beside);
+        }
+
+        if (unit is not null)
+        {
+            var label = new TextBlock
+            {
+                Text = unit,
+                Foreground = _theme.Label,
+                FontSize = SmallFont,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 0, 0),
+            };
+            Grid.SetColumn(label, 3);
+            grid.Children.Add(label);
         }
 
         return grid;
@@ -368,31 +445,6 @@ public partial class SettingsWindow : PanelWindow
             : Math.Round(snapped, 4).ToString("0.###", CultureInfo.InvariantCulture);
     }
 
-    /// <summary>The control with its unit after it - "ms", "px" - when it has one.</summary>
-    private FrameworkElement WithUnit(FrameworkElement editor, string? unit)
-    {
-        if (unit is null)
-            return editor;
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var label = new TextBlock
-        {
-            Text = unit,
-            Foreground = _theme.Label,
-            FontSize = SmallFont,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 0, 0, 0),
-        };
-
-        Grid.SetColumn(label, 1);
-        grid.Children.Add(editor);
-        grid.Children.Add(label);
-        return grid;
-    }
-
     /// <summary>
     /// One box per section, rather than one box holding a map.
     ///
@@ -457,6 +509,8 @@ public partial class SettingsWindow : PanelWindow
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(EditorColumn / 2) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(EditorColumn / 2) });
+        // Empty, as wide as SideBySide's unit column, so the ticks start where every other row's control does.
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(UnitColumn) });
 
         void Place(UIElement element, int row, int column)
         {
@@ -603,12 +657,8 @@ public partial class SettingsWindow : PanelWindow
     /// it is what the picker writes into, so both routes share one path to
     /// the setting.
     /// </summary>
-    private FrameworkElement Colour(SettingsCatalogue.Setting setting, PropertyInfo property)
+    private (TextBox Box, Button Swatch) Colour(SettingsCatalogue.Setting setting, PropertyInfo property)
     {
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
         var swatch = new Border
         {
             Width = 22,
@@ -623,7 +673,6 @@ public partial class SettingsWindow : PanelWindow
             Style = (Style)FindResource("PanelButton"),
             Width = 30,
             Height = 24,
-            Margin = new Thickness(0, 0, 6, 0),
             Content = swatch,
             ToolTip = "Pick a colour",
         };
@@ -648,10 +697,7 @@ public partial class SettingsWindow : PanelWindow
             Commit(setting, property, box.Text);
         };
 
-        Grid.SetColumn(box, 1);
-        grid.Children.Add(pick);
-        grid.Children.Add(box);
-        return grid;
+        return (box, pick);
     }
 
     // --- Start with Windows -------------------------------------------------
@@ -923,6 +969,12 @@ public partial class SettingsWindow : PanelWindow
         public required PropertyInfo Property { get; init; }
         public required List<string> Programs { get; init; }
         public WrapPanel Tags { get; } = new();
+
+        /// <summary>Narrows the tags to the names containing its text - see ShowProgramTags.</summary>
+        public required TextBox Filter { get; init; }
+
+        /// <summary>The filter box with its "Filter…" hint, hidden while the list is empty.</summary>
+        public required FrameworkElement FilterRow { get; init; }
     }
 
     /// <summary>
@@ -936,11 +988,58 @@ public partial class SettingsWindow : PanelWindow
 
     private FrameworkElement ProgramTags(SettingsCatalogue.Setting setting, PropertyInfo property)
     {
+        // A filter above the tags: past a few dozen names, the one to remove
+        // is somewhere in a box three rows tall, and scrolling for it by eye
+        // is slow. Its hint is a label laid over the empty box, as in the
+        // notes' search - there is no room for a label beside it. The hint is
+        // a see-through box in the same style rather than a TextBlock: a
+        // TextBox insets its text a little past its padding, so a TextBlock
+        // with a guessed margin sat a few pixels off from where typing starts.
+        var filter = NewBox(string.Empty, "Show only the programs whose name contains this");
+        var hint = new TextBox
+        {
+            Style = (Style)FindResource("DarkTextBox"),
+            Text = "Filter…",
+            Foreground = _theme.Label,
+            Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            IsReadOnly = true,
+            Focusable = false,
+            IsTabStop = false,
+            IsHitTestVisible = false,
+        };
+        var filterRow = new Grid
+        {
+            Width = EditorColumn,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 0, 0, 6),
+            Children = { filter, hint },
+        };
+
         var list = new ProgramTagList
         {
             Setting = setting,
             Property = property,
             Programs = new List<string>(property.GetValue(_settings) as IEnumerable<string> ?? Array.Empty<string>()),
+            Filter = filter,
+            FilterRow = filterRow,
+        };
+
+        filter.TextChanged += (_, _) =>
+        {
+            hint.Visibility = filter.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            ShowProgramTags(list);
+        };
+
+        // Escape empties it, so the whole list is one key away.
+        filter.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && filter.Text.Length > 0)
+            {
+                filter.Text = string.Empty;
+                e.Handled = true;
+            }
         };
 
         var add = new Button
@@ -966,6 +1065,8 @@ public partial class SettingsWindow : PanelWindow
         {
             Children =
             {
+                filterRow,
+
                 // Capped at about three rows of tags, then it scrolls - the
                 // list can grow without pushing the rest of the form away.
                 new ScrollViewer
@@ -985,7 +1086,27 @@ public partial class SettingsWindow : PanelWindow
     {
         list.Tags.Children.Clear();
 
-        foreach (string name in list.Programs.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+        // Nothing to filter in an empty list, and an empty box over no tags
+        // would only look like somewhere to type a new name.
+        list.FilterRow.Visibility = list.Programs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        string filter = list.Filter.Text.Trim();
+        var shown = list.Programs
+            .Where(n => filter.Length == 0 || n.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Said, rather than an empty box that looks like the list was lost.
+        if (shown.Count == 0 && filter.Length > 0)
+            list.Tags.Children.Add(new TextBlock
+            {
+                Text = "No program matches.",
+                Foreground = _theme.Label,
+                FontSize = SmallFont,
+                Margin = new Thickness(0, 2, 0, 6),
+            });
+
+        foreach (string name in shown)
         {
             var remove = new Button
             {
@@ -1187,18 +1308,31 @@ public partial class SettingsWindow : PanelWindow
             Foreground = _theme.NotesText,
         };
 
+        // Shown capitalised, stored as the code reads it: settings.json and
+        // the code that reads it use "vertical" and "nvidia", but a list of
+        // lower-case words looked unfinished next to every other label.
+        combo.SelectedValuePath = nameof(ComboBoxItem.Tag);
         foreach (string choice in choices)
-            combo.Items.Add(choice);
+            combo.Items.Add(new ComboBoxItem { Content = ChoiceName(choice), Tag = choice });
 
-        combo.SelectedItem = property.GetValue(_settings) as string;
+        combo.SelectedValue = property.GetValue(_settings) as string;
         combo.SelectionChanged += (_, _) =>
         {
-            if (combo.SelectedItem is string chosen)
+            if (combo.SelectedValue is string chosen)
                 Commit(setting, property, chosen);
         };
 
         return combo;
     }
+
+    /// <summary>A choice as the dropdown shows it: "Vertical", "Auto" - and the card makers as they write themselves.</summary>
+    private static string ChoiceName(string value) => value switch
+    {
+        "nvidia" => "NVIDIA",
+        "amd" => "AMD",
+        "" => value,
+        _ => char.ToUpperInvariant(value[0]) + value[1..],
+    };
 
     /// <summary>
     /// The help is under the label now, so boxes carry a tooltip only where
@@ -1378,8 +1512,9 @@ public partial class SettingsWindow : PanelWindow
     {
         if (_themeDescription is not null)
             _themeDescription.Text = ThemeCatalogue.Describe(_settings.Theme);
-        if (_themeCombo is not null && !Equals(_themeCombo.SelectedItem, _settings.Theme))
-            _themeCombo.SelectedItem = _settings.Theme;   // Commit sees the same value and does nothing
+        // By value: the items are ComboBoxItems carrying the name - see Choice.
+        if (_themeCombo is not null && !Equals(_themeCombo.SelectedValue, _settings.Theme))
+            _themeCombo.SelectedValue = _settings.Theme;   // Commit sees the same value and does nothing
     }
 
     /// <summary>Every row made again from the settings, the scroll position kept.</summary>
@@ -1522,6 +1657,7 @@ public partial class SettingsWindow : PanelWindow
         _theme.Dress(Panel);
         HeaderRule.Background = _theme.Separator;
         FooterRule.Background = _theme.Separator;
+        SidebarRule.Background = _theme.Separator;
 
         TitleText.Foreground = _theme.Section;
         TitleText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);

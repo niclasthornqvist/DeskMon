@@ -3,14 +3,50 @@
                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                 xmlns:ui="clr-namespace:DeskMon.Ui"
                 Title="Settings"
-                Width="600" Height="620"
-                MinWidth="380" MinHeight="260"
+                Width="720" Height="620"
+                MinWidth="560" MinHeight="260"
                 ShowInTaskbar="False"
                 TextOptions.TextFormattingMode="Display"
                 FontFamily="Consolas">
 
     <ui:PanelWindow.Resources>
-        <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- A group in the sidebar. ToolToggle's look - hover grey, the
+                 accent when lit - but full width with the text on the left,
+                 since a column of centred names reads as ragged. Here rather
+                 than in PanelStyles: no other window has a list like it. -->
+            <Style x:Key="GroupTab" TargetType="ToggleButton">
+                <Setter Property="Foreground" Value="{DynamicResource Theme.TextDim}" />
+                <Setter Property="Focusable" Value="False" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Padding" Value="10,5" />
+                <Setter Property="Margin" Value="0,0,0,2" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Border x:Name="Back" Background="Transparent" CornerRadius="{DynamicResource Theme.CornerSmall}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.26}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Accent.40}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
     </ui:PanelWindow.Resources>
 
     <!-- The rows themselves are built in code from SettingsCatalogue, not laid
@@ -141,9 +177,27 @@
                 </Border>
             </Popup>
 
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12,2,4,0" Focusable="False">
-                <StackPanel x:Name="Rows" Margin="0,0,8,10" />
-            </ScrollViewer>
+            <!-- The groups down the left, one shown at a time on the right: as
+                 one long page the form had grown past seventy rows, and finding
+                 a setting meant scrolling through all of them. See ShowGroup. -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="7,2,0,8" Focusable="False">
+                    <StackPanel x:Name="Groups" MinWidth="140" />
+                </ScrollViewer>
+
+                <Border x:Name="SidebarRule" Grid.Column="1" Width="1" Margin="8,2,0,10" />
+
+                <ScrollViewer x:Name="RowsScroller" Grid.Column="2" VerticalScrollBarVisibility="Auto"
+                              Margin="12,2,4,0" Focusable="False">
+                    <StackPanel x:Name="Rows" Margin="0,0,8,10" />
+                </ScrollViewer>
+            </Grid>
         </DockPanel>
     </Border>
 </ui:PanelWindow>

@@ -28,6 +28,12 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.67.0", "2026-10-25",
+            "Widget: the clock is bigger - the time large in the section colour, with the day and date stacked beside it behind an accent bar",
+            "Settings: the groups are listed down the left and one is shown at a time, instead of one page of over seventy rows",
+            "Settings: regrouped (Bars and columns, Games, FPS, Notes, Sessions, Windows) with every explanation cut to one short line",
+            "Settings: every box, slider and dropdown is the same width, and the dropdowns' choices are capitalised - Vertical, Segmented, NVIDIA",
+            "Settings: a filter box above the Never / Always treat as a game lists, for finding a program in a long list (Esc clears it)"),
         new("1.66.0", "2026-10-25",
             "Widget: the day, date and time at the bottom right - \"Sunday - 2026-10-25 - 04:01\" - turning over on the minute",
             "Faster: about 45 MB less memory - .NET kept a 50 MB nursery sized from the CPU's cache, now emptied every 30 s in about 0.1 ms",
