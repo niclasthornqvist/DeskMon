@@ -28,6 +28,17 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.68.0", "2026-10-25",
+            "A frozen widget is noticed: after 10 s without answering, error.log says so and a memory dump (freeze.dmp in %LOCALAPPDATA%\\DeskMon, up to 3 per run) shows where it was stuck. Watched only once the widget is on screen, so it never slows the start",
+            "Fix: the freeze dump is written from an instant snapshot of DeskMon - dumping DeskMon itself paused the whole widget for half a minute and could hang it for good",
+            "Fix: no more freezes while the disk is busy - settings and the in-game session save are written in the background instead of making the widget wait for the disk",
+            "Fix: coming back to a game with Alt+Tab no longer stalls DeskMon's windows while the game's name is looked up again",
+            "Fix: dragging a colour in Settings no longer lags from the history and versions windows redrawing while hidden",
+            "Fix: a stuck dotnet build or schtasks is now stopped after its time limit instead of waiting for ever",
+            "Fix: game icons are checked like the banners before they are decoded, and the same game's Steam or GOG id is no longer kept twice in different spellings",
+            "Fix: errors in the hardware and versions windows now reach error.log, and the freeze log says how long a freeze really lasted",
+            "Fix: DeskMon should no longer freeze while WinRAR unpacks or a program installs - it stopped pushing its own memory out to disk, which it then had to read back from a disk busy with their work",
+            "When the widget freezes, error.log now says what DeskMon was in the middle of - which sensor read, driver call or UI step - and any step taking over 2 s is logged too"),
         new("1.67.1", "2026-10-25",
             "Fix: Settings' Bar thickness no longer reads as if only 1 or 2 were allowed - any value from 1 to 20 px works"),
         new("1.67.0", "2026-10-25",

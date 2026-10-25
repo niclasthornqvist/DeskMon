@@ -525,6 +525,10 @@ public partial class MainWindow : Window
         if (!IsLoaded)
             return;
 
+        // Named for the freeze log - see Activity. The 1.67.1 freeze came as a
+        // section was unfolded, and this is the layout pass that follows it.
+        using var step = Activity.Begin("re-fitting the widget");
+
         SizeToContent = SizeToContent.Manual;
         UpdateLayout();
         SizeToContent = _widthLocked ? SizeToContent.Height : SizeToContent.WidthAndHeight;
@@ -759,20 +763,29 @@ public partial class MainWindow : Window
         if (_paused || _hub is null)
             return;
 
-        // A second line of defence behind the guard's own watching: should the
-        // flag ever go without a message saying so, it is back within a tick.
-        _topmost?.Check();
+        // Named for the freeze log - see Activity. These talk to other
+        // programs' windows and processes, and a freeze on the UI thread
+        // would be in one of them or in drawing the readings below.
+        using (Activity.Begin("UI tick: keeping the windows on top"))
+        {
+            // A second line of defence behind the guard's own watching: should the
+            // flag ever go without a message saying so, it is back within a tick.
+            _topmost?.Check();
 
-        // And the flag kept is not the whole of it: another program's topmost
-        // window - a borderless game, Task Manager - covers this one as soon as
-        // it is clicked. Put back above it, here and for the other windows.
-        _topmost?.KeepAbove();
-        foreach (var window in PanelWindows())
-            window.KeepAbove();
+            // And the flag kept is not the whole of it: another program's topmost
+            // window - a borderless game, Task Manager - covers this one as soon as
+            // it is clicked. Put back above it, here and for the other windows.
+            _topmost?.KeepAbove();
+            foreach (var window in PanelWindows())
+                window.KeepAbove();
+        }
 
-        UpdateGameState();
-        UpdateGameTitle();   // the playtime moves on while the game runs
-        CheckpointSession();
+        using (Activity.Begin("UI tick: looking for a game"))
+        {
+            UpdateGameState();
+            UpdateGameTitle();   // the playtime moves on while the game runs
+            CheckpointSession();
+        }
 
         // Pinging only while there is a game to be lagging; Run is a no-op
         // while nothing changes, so this can be said every tick.
@@ -851,37 +864,43 @@ public partial class MainWindow : Window
                 && _rows.Exists(row => row.IsExpanded && row.Key is "Usage/RAM" or "Usage/SWAP");
 
             var snapshot = await Task.Run(hub.Read);
-            AddSessionEnergy(snapshot);
 
-            // FPS is measured by a separate process, not by SensorHub. One read
-            // for all three figures, so the average and the lows describe the
-            // same frames.
-            if (_inGame)
+            // Named for the freeze log - see Activity. Everything from here to
+            // the end of the tick runs on the UI thread.
+            using (Activity.Begin("UI tick: drawing the readings"))
             {
-                var frames = _fps.Current;
-                snapshot.Fps = frames.Fps;
-                snapshot.FpsOnePercentLow = frames.OnePercentLow;
-                snapshot.FpsPointOnePercentLow = frames.PointOnePercentLow;
-                snapshot.Latency = frames.Latency;
+                AddSessionEnergy(snapshot);
 
-                // Read like the rest of the card, but shown only now - see
-                // SensorSnapshot.GameGpuLoad.
-                snapshot.GameGpuLoad = snapshot.GpuLoad;
-                snapshot.Ping = _ping.Latest;
+                // FPS is measured by a separate process, not by SensorHub. One read
+                // for all three figures, so the average and the lows describe the
+                // same frames.
+                if (_inGame)
+                {
+                    var frames = _fps.Current;
+                    snapshot.Fps = frames.Fps;
+                    snapshot.FpsOnePercentLow = frames.OnePercentLow;
+                    snapshot.FpsPointOnePercentLow = frames.PointOnePercentLow;
+                    snapshot.Latency = frames.Latency;
+
+                    // Read like the rest of the card, but shown only now - see
+                    // SensorSnapshot.GameGpuLoad.
+                    snapshot.GameGpuLoad = snapshot.GpuLoad;
+                    snapshot.Ping = _ping.Latest;
+                }
+
+                if (!_detailsBuilt)
+                    BuildDetailRows(snapshot);
+
+                foreach (var row in _rows)
+                    row.Apply(snapshot);
+
+                if (_detailsBuilt && _rows.Exists(row => row.DetailsChanged))
+                    RebuildDetailRows(snapshot);
+
+                if (_alerts is not null)
+                    foreach (string alert in _alerts.Check(snapshot))
+                        Alert(alert);
             }
-
-            if (!_detailsBuilt)
-                BuildDetailRows(snapshot);
-
-            foreach (var row in _rows)
-                row.Apply(snapshot);
-
-            if (_detailsBuilt && _rows.Exists(row => row.DetailsChanged))
-                RebuildDetailRows(snapshot);
-
-            if (_alerts is not null)
-                foreach (string alert in _alerts.Check(snapshot))
-                    Alert(alert);
 
             if (!_trimmed)
             {
@@ -900,7 +919,8 @@ public partial class MainWindow : Window
             if (DateTime.UtcNow - _lastYoungCollect >= YoungCollectEvery)
             {
                 _lastYoungCollect = DateTime.UtcNow;
-                GC.Collect(0, GCCollectionMode.Forced, blocking: true);
+                using (Activity.Begin("UI tick: young-object collection"))
+                    GC.Collect(0, GCCollectionMode.Forced, blocking: true);
             }
         }
         finally
@@ -996,19 +1016,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Collects and releases the working set. Startup (JIT, XAML parsing,
-    /// hardware enumeration) leaves well over 100 MB resident that this process
-    /// will never touch again; a widget has no business holding onto it.
-    /// Deliberately only done at startup and when a game takes over, never on
-    /// the polling path, since the pages have to fault back in afterwards.
+    /// Collects what startup (JIT, XAML parsing, hardware enumeration) left
+    /// behind and gives the freed heap back. Deliberately only done at startup
+    /// and when a game takes over, never on the polling path.
+    ///
+    /// The working set is no longer emptied as well (EmptyWorkingSet). That
+    /// pushed every page DeskMon had - its own code included - out to Windows'
+    /// spare list, and while WinRAR unpacked or an installer ran, their file
+    /// cache took that memory over. The next time DeskMon ran a piece of
+    /// itself - painting the tray menu - it had to read it back from a disk
+    /// buried in their work and antivirus scans, and froze for tens of seconds,
+    /// so stuck that even a memory dump couldn't pause it. Windows trims an
+    /// idle process's pages by itself when memory is actually short; doing it
+    /// ahead of time only made the widget the first thing to go.
     /// </summary>
     private static void TrimMemory()
     {
+        // Named for the freeze log - see Activity: a full blocking collection
+        // on the UI thread.
+        using var step = Activity.Begin("trimming memory");
         try
         {
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
-            EmptyWorkingSet(GetCurrentProcess());
         }
         catch { /* purely an optimisation */ }
     }
@@ -1239,7 +1269,7 @@ public partial class MainWindow : Window
         try
         {
             _gameProcess = Process.GetProcessById(pid);
-            _gameName = FriendlyName(_gameProcess);
+            _gameName = CachedFriendlyName(_gameProcess);
         }
         catch
         {
@@ -1286,10 +1316,9 @@ public partial class MainWindow : Window
             foreach (var row in _rows)
                 row.ResetPeak();
 
-            // Hand memory back right when the game wants it - once per game,
+            // Free the heap right when the game wants memory - once per game,
             // not on every return from Alt+Tab: it is a full blocking,
-            // compacting collection, and repeating it each time just has the
-            // pages fault straight back in.
+            // compacting collection, too costly to repeat each time.
             TrimMemory();
         }
         RefreshVisibleItems();
@@ -1302,6 +1331,40 @@ public partial class MainWindow : Window
             Notes().ShowFor(_gameName);
         else
             _notes?.ShowFor(_gameName);   // already open: at least switch it over
+    }
+
+    /// <summary>The process whose friendly name was last worked out - by pid and start time, as pids are reused - and the name.</summary>
+    private int _friendlyPid;
+    private DateTime _friendlyStart;
+    private string? _friendlyName;
+
+    /// <summary>
+    /// <see cref="FriendlyName"/>, worked out once per process. It reads the
+    /// executable's version info through MainModule, which lists every module
+    /// in the game - hundreds - on the UI thread, and throws for a process an
+    /// anti-cheat protects. Tracking starts again on every return from
+    /// Alt+Tab, so that happened each time the game came back to the front.
+    /// </summary>
+    private string? CachedFriendlyName(Process process)
+    {
+        DateTime started;
+        try
+        {
+            started = process.StartTime;
+        }
+        catch
+        {
+            return FriendlyName(process);   // can't tell it apart from a reused pid; not kept
+        }
+
+        if (process.Id != _friendlyPid || started != _friendlyStart)
+        {
+            _friendlyName = FriendlyName(process);
+            _friendlyPid = process.Id;
+            _friendlyStart = started;
+        }
+
+        return _friendlyName;
     }
 
     /// <summary>
@@ -3139,13 +3202,23 @@ public partial class MainWindow : Window
         // ask nvidia.com again each time.
         bool opening = _hardware is not { IsVisible: true };
 
-        _hardware ??= Track(new HardwareWindow(_settings, _theme));
-        _hardware.ShowAndFocus();
+        // Caught here: every caller discards this task (the tray, the menu,
+        // the toolbar), so an error making or showing the window otherwise
+        // went nowhere until a garbage collection reported it, if ever.
+        try
+        {
+            _hardware ??= Track(new HardwareWindow(_settings, _theme));
+            _hardware.ShowAndFocus();
 
-        // Names come from the sensor library so the card listed is the one the
-        // temperatures are actually read from.
-        if (opening)
-            await _hardware.LoadAsync(_hub?.CpuName, _hub?.GpuName);
+            // Names come from the sensor library so the card listed is the one the
+            // temperatures are actually read from.
+            if (opening)
+                await _hardware.LoadAsync(_hub?.CpuName, _hub?.GpuName);
+        }
+        catch (Exception ex)
+        {
+            App.Log("opening the hardware window", ex);
+        }
     }
 
     private void MenuVersions_Click(object sender, RoutedEventArgs e) => ShowVersions();
@@ -3265,8 +3338,12 @@ public partial class MainWindow : Window
 
     private void OpenSettingsFile()
     {
+        // Waited for: Notepad opening before the queued write lands would
+        // find no file, or one a change behind.
         if (!System.IO.File.Exists(AppSettings.FilePath))
-            _settings.Save();   // write the file so there is something to open
+            _settings.SaveAndWait();   // write the file so there is something to open
+        else
+            AtomicFile.Flush(TimeSpan.FromSeconds(5));
 
         // Guarded like every other Process.Start: a menu click that fails
         // should say so, not end up as an unhandled error in error.log. The
@@ -3305,6 +3382,10 @@ public partial class MainWindow : Window
         // close, it could write the same evening twice - its last checkpoint,
         // then this copy's line. Ended here, there is nothing left to recover.
         FinishSession("cut short, settings reloaded");
+
+        // The session's clean-up and any queued save on disk before the new
+        // copy reads them - it recovers an open session it finds.
+        AtomicFile.Flush(TimeSpan.FromSeconds(5));
 
         // Let go of the single-instance lock first, or the replacement sees
         // this process still holding it and exits immediately.
@@ -3449,8 +3530,11 @@ public partial class MainWindow : Window
         using var process = Process.Start(start) ?? throw new InvalidOperationException("dotnet could not be started.");
 
         // Both streams read at once, or a full stderr pipe could stall the build.
+        // Both in the background, too: read to the end here first, the wait
+        // below only began once dotnet had exited, so a hung build held the
+        // BUILD button on "BUILDING…" for good and the limit never fired.
         var error = process.StandardError.ReadToEndAsync();
-        string output = process.StandardOutput.ReadToEnd();
+        var output = process.StandardOutput.ReadToEndAsync();
 
         if (!process.WaitForExit(5 * 60 * 1000))
         {
@@ -3458,7 +3542,7 @@ public partial class MainWindow : Window
             return (false, "dotnet build took more than five minutes and was stopped.");
         }
 
-        return (process.ExitCode == 0, output + error.Result);
+        return (process.ExitCode == 0, output.Result + error.Result);
     }
 
     /// <summary>The first compiler error in the output, short enough for a notification.</summary>
@@ -3653,10 +3737,6 @@ public partial class MainWindow : Window
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
     private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
-    [DllImport("psapi.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool EmptyWorkingSet(IntPtr hProcess);
-
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 
@@ -3674,12 +3754,4 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    /// <summary>
-    /// The pseudo-handle for this process. Process.GetCurrentProcess().Handle
-    /// opens a real handle instead, and that one was never disposed - a handle
-    /// leaked per trim, for nothing. This needs no closing at all.
-    /// </summary>
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetCurrentProcess();
 }

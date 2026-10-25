@@ -768,8 +768,12 @@ public sealed class AppSettings
         // case-sensitive one, and the game names in the logs vary in case.
         GameTargetFps = new Dictionary<string, double>(GameTargetFps ?? new(), StringComparer.OrdinalIgnoreCase);
         PlaytimeFromSaves ??= DefaultPlaytimeFromSaves();
-        SteamAppIds ??= new Dictionary<string, string>();
-        GogGames ??= new Dictionary<string, string>();
+        // Case-insensitive like GameTargetFps, and for the same reason: the
+        // lookups ignore case, the deserialiser's dictionary didn't, so
+        // "Witcher 3" and "witcher 3" were kept as two entries and a lookup
+        // could hand back the stale one. Rebuilt with the last spelling winning.
+        SteamAppIds = IgnoringCase(SteamAppIds);
+        GogGames = IgnoringCase(GogGames);
         SessionsChart ??= "avg";
         PicturesSort ??= "newest";
 
@@ -807,6 +811,19 @@ public sealed class AppSettings
             ValueWidth = 64;
 
         return this;
+    }
+
+    /// <summary>
+    /// A copy that ignores case. Not the copying constructor: it throws on two
+    /// keys differing only in case, which is what an older file can hold.
+    /// </summary>
+    private static Dictionary<string, string> IgnoringCase(Dictionary<string, string>? source)
+    {
+        var copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (source is not null)
+            foreach (var (key, value) in source)
+                copy[key] = value;
+        return copy;
     }
 
     /// <summary>
@@ -861,7 +878,48 @@ public sealed class AppSettings
     /// wrote the startup values straight back over the new ones. Only the keys
     /// this program changes at runtime are merged in now.
     /// </summary>
+    /// <remarks>
+    /// Only the snapshot of the values is taken here, on the caller's thread;
+    /// reading the file, merging and the write - which waits for the disk -
+    /// happen on AtomicFile's writer. Saved from the UI thread at the end of
+    /// every drag and fold, that wait froze the widget whenever the disk was
+    /// busy. Use <see cref="SaveAndWait"/> when the file must be there at once.
+    /// </remarks>
     public void Save()
+    {
+        JsonObject? mine;
+        string[] edited;
+        try
+        {
+            // Taken now: the values may change again before the writer gets
+            // to this, and those belong to the next save.
+            mine = JsonSerializer.SerializeToNode(this, Options)?.AsObject();
+            edited = new string[_edited.Count];
+            _edited.CopyTo(edited);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (mine is null)
+            return;
+
+        AtomicFile.Later(() => WriteMerged(mine, edited));
+    }
+
+    /// <summary>
+    /// <see cref="Save"/>, waiting until it is on disk - for opening the file in
+    /// Notepad, which must not find it missing or a save behind.
+    /// </summary>
+    public void SaveAndWait()
+    {
+        Save();
+        AtomicFile.Flush(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>The file part of <see cref="Save"/>, on the writer thread.</summary>
+    private static void WriteMerged(JsonObject mine, string[] edited)
     {
         try
         {
@@ -875,13 +933,9 @@ public sealed class AppSettings
                 // won't parse - broken by a hand edit while DeskMon runs - is
                 // copied aside first, rather than written over and lost.
                 KeepUnreadableCopy();
-                AtomicFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, Options));
+                AtomicFile.WriteAllText(FilePath, mine.ToJsonString(Options));
                 return;
             }
-
-            var mine = JsonSerializer.SerializeToNode(this, Options)?.AsObject();
-            if (mine is null)
-                return;
 
             // A key the file doesn't have yet is added with its default, so a
             // file written by an older build gains new settings rather than
@@ -893,7 +947,7 @@ public sealed class AppSettings
             foreach (string key in OwnedAtRuntime)
                 target[key] = mine[key]?.DeepClone();
 
-            foreach (string key in _edited)
+            foreach (string key in edited)
                 target[key] = mine[key]?.DeepClone();
 
             AtomicFile.WriteAllText(FilePath, target.ToJsonString(Options));

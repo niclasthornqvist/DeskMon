@@ -465,6 +465,9 @@ public sealed class FpsMonitor : IDisposable
     /// </summary>
     private void Launch(int pid, string? presentMonPathOverride, int generation)
     {
+        // Named for the freeze log - see Activity. The signature checks hash
+        // the file and ask Windows' trust provider, which can take a while.
+        using var step = Activity.Begin("starting PresentMon", TimeSpan.FromSeconds(10));
         try
         {
             if (!IsCurrent(generation))
@@ -616,6 +619,9 @@ public sealed class FpsMonitor : IDisposable
         // this already; for a run overtaken while it started, this is the one.
         process.OutputDataReceived -= OnOutputLine;
 
+        // Named for the freeze log - see Activity. Allowed its five seconds
+        // of clean shutdown before it counts as slow.
+        using var step = Activity.Begin("stopping PresentMon", TimeSpan.FromSeconds(10));
         try
         {
             // Usually already gone: --terminate_on_proc_exit makes PresentMon

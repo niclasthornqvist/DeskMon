@@ -94,7 +94,15 @@ public partial class App : Application
             args.SetObserved();   // logged, so don't let it tear the process down
         };
 
-        new MainWindow().Show();
+        // A freeze throws nothing, so none of the hooks above ever see one -
+        // the watchdog leaves a dump behind instead. See FreezeWatchdog.
+        // Only once the widget is on screen: started before it, the window
+        // being built counted as a freeze, and the dump written then paused
+        // the whole start - the hardware loading too - for half a minute.
+        Activity.SetUiThread();   // so the freeze log can say "the UI thread"
+        var main = new MainWindow();
+        main.ContentRendered += (_, _) => FreezeWatchdog.Start(Dispatcher);
+        main.Show();
     }
 
     private static bool HasFlag(string[] args, string flag)
@@ -249,6 +257,11 @@ public partial class App : Application
                 return;
 
             File.WriteAllText(CrashStampPath, DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+
+            // The new copy reads settings.json and the open session as it
+            // starts; whatever this one still has queued goes down first.
+            // Short: the process is already failing.
+            AtomicFile.Flush(TimeSpan.FromSeconds(2));
             ReleaseSingleInstanceLock();
             // With this copy's id, so the new one can wait until it has gone - see WaitForExit.
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, $"{AfterCrashFlag} {Environment.ProcessId}")
@@ -328,6 +341,11 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // The writes queued off the UI thread - the position saved as the
+        // widget closed, the last settings change - die with the process if
+        // they haven't run. Bounded, so a dead drive can't hold the exit.
+        AtomicFile.Flush(TimeSpan.FromSeconds(5));
+
         ReleaseSingleInstanceLock();
         base.OnExit(e);
     }

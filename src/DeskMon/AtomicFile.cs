@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 
 namespace DeskMon;
 
@@ -28,8 +31,11 @@ internal static class AtomicFile
     private static void Write(string path, byte[] contents)
     {
         // Beside the target on purpose: a rename across volumes is a copy, and
-        // a copy is not atomic.
-        string temp = path + ".tmp";
+        // a copy is not atomic. A name of its own per write, not path + ".tmp":
+        // two writes to one file at once - one queued, one direct on the way
+        // out - would otherwise fight over the same temporary file, and the
+        // loser's save was dropped without a word.
+        string temp = $"{path}.{Guid.NewGuid():N}.tmp";
 
         // The folder too, if it isn't there: a Windows user starting DeskMon
         // for the first time has no %APPDATA%\DeskMon yet, and the first thing
@@ -57,6 +63,90 @@ internal static class AtomicFile
             // Don't leave a stray .tmp next to the real file.
             try { File.Delete(temp); } catch { }
             throw;
+        }
+    }
+
+    // --- Off the UI thread ----------------------------------------------------
+    //
+    // The flush above waits until the disk has the data, which on a busy disk -
+    // a game loading, Windows Update, a Defender scan - can take seconds. Done
+    // on the UI thread at the end of every drag, every fold and every in-game
+    // checkpoint, that froze every DeskMon window for as long. Work that has to
+    // reach the disk but nobody waits on goes to one writer thread instead: one
+    // thread, so the writes land in the order they were asked for.
+
+    private static readonly Queue<Action> Pending = new();
+    private static readonly object PendingLock = new();
+    private static Thread? _writer;
+
+    /// <summary>A job is being run, not only queued - <see cref="Flush"/> waits for both.</summary>
+    private static bool _busy;
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on the writer thread, after everything
+    /// queued before it. For file work only; its errors are logged, not thrown,
+    /// since whoever asked has moved on.
+    /// </summary>
+    public static void Later(Action work)
+    {
+        lock (PendingLock)
+        {
+            Pending.Enqueue(work);
+            if (_writer is null)
+            {
+                // Background, so a hang on a dead network drive can't keep
+                // the process alive after exit - Flush bounds the wait instead.
+                _writer = new Thread(Drain) { IsBackground = true, Name = "DeskMon file writer" };
+                _writer.Start();
+            }
+            Monitor.PulseAll(PendingLock);
+        }
+    }
+
+    private static void Drain()
+    {
+        while (true)
+        {
+            Action work;
+            lock (PendingLock)
+            {
+                _busy = false;
+                Monitor.PulseAll(PendingLock);   // a Flush may be waiting on the queue going quiet
+                while (Pending.Count == 0)
+                    Monitor.Wait(PendingLock);
+                work = Pending.Dequeue();
+                _busy = true;
+            }
+
+            try
+            {
+                // Named for the freeze log - see Activity.
+                using (Activity.Begin("writing a file in the background"))
+                    work();
+            }
+            catch (Exception ex)
+            {
+                App.Log("writing a file", ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Waits until every queued write is done, up to <paramref name="timeout"/>.
+    /// For the way out: the last position and settings must reach the disk
+    /// before the process ends, and a writer thread is gone with it.
+    /// </summary>
+    public static void Flush(TimeSpan timeout)
+    {
+        var until = DateTime.UtcNow + timeout;
+        lock (PendingLock)
+        {
+            while (Pending.Count > 0 || _busy)
+            {
+                var left = until - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero || !Monitor.Wait(PendingLock, left))
+                    return;
+            }
         }
     }
 }

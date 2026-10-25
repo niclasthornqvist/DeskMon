@@ -48,6 +48,9 @@ internal sealed class PingMonitor : IDisposable
         if (_host is not { } host || Interlocked.Exchange(ref _busy, 1) == 1)
             return;
 
+        // Named for the freeze log - see Activity: the name lookup before the
+        // ping isn't covered by its timeout. Ended in finally, below.
+        var step = Activity.Begin("ping to " + host);
         try
         {
             var reply = await _ping.SendPingAsync(host, TimeoutMs);
@@ -60,6 +63,7 @@ internal sealed class PingMonitor : IDisposable
         }
         finally
         {
+            step.Dispose();
             Interlocked.Exchange(ref _busy, 0);
         }
     }

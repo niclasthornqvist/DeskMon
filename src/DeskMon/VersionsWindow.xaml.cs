@@ -44,11 +44,21 @@ public partial class VersionsWindow : PanelWindow
         InitializeComponent();
         new Banner(Panel, height: 210).Show(Notes.GameArt.Motif.Timeline);
         ApplyTheme();
+        // Hidden, only noted, and redrawn on the next showing: the theme changes
+        // on every step of a colour being dragged in the settings window, and
+        // rebuilding the whole history each time made that drag lag - for a
+        // window nobody could see.
         _theme.Changed += () =>
         {
-            ApplyTheme();
-            BuildHistory();   // its version names are in the accent
-            ShowCards();      // the cards keep the colours they were made with
+            if (IsVisible)
+                Retheme();
+            else
+                _themeStale = true;
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible && _themeStale)
+                Retheme();
         };
         RestorePlacement(_settings.VersionsLeft, _settings.VersionsTop,
                          _settings.VersionsWidth, _settings.VersionsHeight);
@@ -64,6 +74,17 @@ public partial class VersionsWindow : PanelWindow
         Closing += OnClosing;
         LocationChanged += (_, _) => QueuePlacementSave();
         SizeChanged += (_, _) => QueuePlacementSave();
+    }
+
+    /// <summary>The theme changed while the window was hidden - see the constructor.</summary>
+    private bool _themeStale;
+
+    private void Retheme()
+    {
+        _themeStale = false;
+        ApplyTheme();
+        BuildHistory();   // its version names are in the accent
+        ShowCards();      // the cards keep the colours they were made with
     }
 
     // --- History ----------------------------------------------------------
@@ -320,7 +341,24 @@ public partial class VersionsWindow : PanelWindow
     /// The cards go up at once with "…" and are filled in after: the
     /// PresentMon search walks folders, which has no business on the UI thread.
     /// </summary>
+    /// <summary>
+    /// <see cref="ShowRequirementsCoreAsync"/> with nothing let out: the
+    /// constructor starts it and moves on, so an error in it went nowhere
+    /// until a garbage collection reported it as an "unobserved task".
+    /// </summary>
     private async Task ShowRequirementsAsync()
+    {
+        try
+        {
+            await ShowRequirementsCoreAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log("checking what DeskMon needs", ex);
+        }
+    }
+
+    private async Task ShowRequirementsCoreAsync()
     {
         _missing = null;
         ShowCards();

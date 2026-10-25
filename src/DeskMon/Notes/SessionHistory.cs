@@ -282,28 +282,47 @@ public sealed class SessionHistory
 
     private sealed record OpenSession(string Game, string Line);
 
-    /// <summary>Replaces the saved open session. Atomic, so a power cut mid-write leaves the previous one.</summary>
+    /// <summary>
+    /// Replaces the saved open session. Atomic, so a power cut mid-write leaves
+    /// the previous one. On AtomicFile's writer: this runs once a minute inside
+    /// the polling tick, mid-game, and waiting there for the disk froze the
+    /// widget whenever the game was loading something.
+    /// </summary>
     public void SaveOpenSession(string game, string line)
     {
-        try
+        string path = OpenSessionPath;
+        string json = JsonSerializer.Serialize(new OpenSession(game, line));
+
+        AtomicFile.Later(() =>
         {
-            Directory.CreateDirectory(_folder);
-            AtomicFile.WriteAllText(OpenSessionPath, JsonSerializer.Serialize(new OpenSession(game, line)));
-        }
-        catch
-        {
-            // Insurance only: the session is still written normally when it ends.
-        }
+            try
+            {
+                AtomicFile.WriteAllText(path, json);
+            }
+            catch
+            {
+                // Insurance only: the session is still written normally when it ends.
+            }
+        });
     }
 
-    /// <summary>The session ended properly and has its line; nothing to recover.</summary>
+    /// <summary>
+    /// The session ended properly and has its line; nothing to recover. On the
+    /// same writer as the saves, behind any still queued: deleted at once, a
+    /// checkpoint waiting in the queue would write the file back afterwards,
+    /// and the next start would log the session a second time.
+    /// </summary>
     public void ClearOpenSession()
     {
-        try
+        string path = OpenSessionPath;
+        AtomicFile.Later(() =>
         {
-            File.Delete(OpenSessionPath);   // no error when there is none
-        }
-        catch { }
+            try
+            {
+                File.Delete(path);   // no error when there is none
+            }
+            catch { }
+        });
     }
 
     /// <summary>

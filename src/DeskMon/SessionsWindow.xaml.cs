@@ -325,6 +325,23 @@ public partial class SessionsWindow : PanelWindow
 
     private static readonly AllGamesEntry AllGames = new();
 
+    /// <summary>The theme changed while the window was hidden - see the constructor.</summary>
+    private bool _themeStale;
+
+    private void Retheme()
+    {
+        _themeStale = false;
+        ApplyTheme();
+        if (!IsLoaded)
+            return;
+        if (_allGames)
+            ShowAllGamesSummary();
+        else
+            ShowSummary(GamePicker.SelectedItem as string);
+        ShowRows();
+        DrawChart();
+    }
+
     public SessionsWindow(AppSettings settings, UiTheme theme, SessionHistory history,
                           Func<string, string> screenshotFolder)
     {
@@ -338,17 +355,21 @@ public partial class SessionsWindow : PanelWindow
 
         // The cards, the table and the chart are drawn in the theme's colours,
         // so they are drawn again - from what is already read, not the files.
+        // Hidden, only noted, and redrawn on the next showing: the theme
+        // changes on every step of a colour being dragged in the settings
+        // window, and redrawing the cards, table and chart each time made that
+        // drag lag - for a window nobody could see.
         _theme.Changed += () =>
         {
-            ApplyTheme();
-            if (!IsLoaded)
-                return;
-            if (_allGames)
-                ShowAllGamesSummary();
+            if (IsVisible)
+                Retheme();
             else
-                ShowSummary(GamePicker.SelectedItem as string);
-            ShowRows();
-            DrawChart();
+                _themeStale = true;
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible && _themeStale)
+                Retheme();
         };
         RestorePlacement(_settings.SessionsLeft, _settings.SessionsTop,
                          _settings.SessionsWidth, _settings.SessionsHeight);

@@ -137,23 +137,46 @@ public static class GameIcons
         if (!File.Exists(file))
             return null;
 
+        // Checked before decoding, as GameArt checks its pictures: the game's
+        // folder is anyone's to write in, and this runs as administrator. An
+        // icon file is small and starts 00 00 01 00; anything else is not
+        // handed to a decoder.
+        byte[] data = File.ReadAllBytes(file);
+        if (data.Length > MaxIconBytes || data.Length < 6 || data[0] != 0 || data[1] != 0 || data[2] != 1 || data[3] != 0)
+            return null;
+
         // An .ico holds several sizes; the picker draws it at 18 px, sharp at
         // any DPI from the largest.
-        using var stream = new MemoryStream(File.ReadAllBytes(file));
+        using var stream = new MemoryStream(data);
         var decoder = new IconBitmapDecoder(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
         var largest = decoder.Frames.MaxBy(frame => frame.PixelWidth);
         largest?.Freeze();
         return largest;
     }
 
-    /// <summary>A picture file read in full and closed - not held open, as Steam replaces these.</summary>
-    private static ImageSource Load(string file)
+    /// <summary>Far above any icon; an .ico with every size in it is well under this.</summary>
+    private const int MaxIconBytes = 1024 * 1024;
+
+    /// <summary>
+    /// A picture file read in full and closed - not held open, as Steam
+    /// replaces these. Read into memory and checked the way GameArt checks its
+    /// banners before anything decodes it: Steam's folders and the cache can
+    /// be written by anyone signed in, this runs as administrator, and WPF
+    /// picks its decoder by what the file holds, not by its name. Decoded
+    /// small, as it is only ever drawn as an icon. Null for anything else.
+    /// </summary>
+    private static ImageSource? Load(string file)
     {
+        byte[] data = File.ReadAllBytes(file);
+        if (data.Length > GameArt.MaxDownload || !GameArt.IsPlainPicture(data))
+            return null;
+
         var image = new BitmapImage();
         image.BeginInit();
-        image.UriSource = new Uri(file);
+        image.StreamSource = new MemoryStream(data);
         image.CacheOption = BitmapCacheOption.OnLoad;
         image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+        image.DecodePixelWidth = 64;
         image.EndInit();
         image.Freeze();
         return image;

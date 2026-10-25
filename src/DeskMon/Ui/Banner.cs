@@ -258,6 +258,11 @@ public sealed class Banner
         };
         Timeline.SetDesiredFrameRate(loop, 10);
 
+        // The last picture's clock stopped first: a running clock stays in
+        // WPF's timing tree whether or not its brush is still drawn, so each
+        // new picture would have left one more ticking ten times a second.
+        _driftClock?.Controller?.Stop();
+
         // Through a clock rather than BeginAnimation, so it can be paused in
         // place during a game and carry on from the same spot afterwards.
         _driftClock = loop.CreateClock();

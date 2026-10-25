@@ -434,7 +434,7 @@ public static class GameArt
     }
 
     /// <summary>Far above any banner or logo Steam serves, far below what could hurt.</summary>
-    private const int MaxDownload = 8 * 1024 * 1024;
+    internal const int MaxDownload = 8 * 1024 * 1024;
 
     /// <summary>
     /// Larger than any Steam art, and than a screenshot of an 8K screen - the
@@ -449,7 +449,7 @@ public static class GameArt
     /// by what the file holds, so a ".jpg" that is really a TIFF or an icon
     /// would go to those decoders instead.
     /// </summary>
-    private static bool IsPlainPicture(ReadOnlySpan<byte> data)
+    internal static bool IsPlainPicture(ReadOnlySpan<byte> data)
     {
         ReadOnlySpan<byte> png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         if (data.Length >= 24 && data[..8].SequenceEqual(png))

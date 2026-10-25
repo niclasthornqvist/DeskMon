@@ -29,6 +29,9 @@ public sealed class SensorHub : IDisposable
     private readonly Computer _computer;
     private readonly List<IHardware> _polled = new();
 
+    /// <summary>What each of <see cref="_polled"/> is called in the freeze log - see Activity.</summary>
+    private readonly List<string> _polledNames = new();
+
     /// <summary>
     /// Held while the hardware is being touched. Reads run on a worker thread
     /// and Dispose runs on the UI thread as the app exits, so without this
@@ -120,9 +123,14 @@ public sealed class SensorHub : IDisposable
 
         try
         {
-            _computer.Open();
-            _opened = true;
-            ResolveSensors(preferredGpu);
+            // Loads the sensor driver and walks the hardware - the first call
+            // of all into a driver, so named for the freeze log like the reads.
+            using (Activity.Begin("opening the sensor library"))
+            {
+                _computer.Open();
+                _opened = true;
+                ResolveSensors(preferredGpu);
+            }
 
             // Not for --list-sensors, which is there to show every sensor.
             if (!allHardware)
@@ -221,6 +229,10 @@ public sealed class SensorHub : IDisposable
         if (cpu is not null) _polled.Add(cpu);
         if (gpu is not null) _polled.Add(gpu);
 
+        // Made once here, not on every refresh: the read runs every few seconds all day.
+        foreach (var device in _polled)
+            _polledNames.Add($"{device.HardwareType} sensor update ({device.Name})");
+
         // A device's sensor list is only populated after its first update.
         foreach (var hardware in _polled)
             hardware.Update();
@@ -282,12 +294,19 @@ public sealed class SensorHub : IDisposable
     {
         var snapshot = new SensorSnapshot();
 
-        snapshot.CpuLoad = _native.ReadCpuLoad();
-        _native.ReadMemory(snapshot);
+        // Each step that calls into Windows or a driver is named for the
+        // freeze log - see Activity. A freeze that stopped the whole process
+        // pointed at a driver call, and this is where they all are.
+        using (Activity.Begin("CPU load and memory read"))
+        {
+            snapshot.CpuLoad = _native.ReadCpuLoad();
+            _native.ReadMemory(snapshot);
+        }
 
         // Windows' own counters, like the two above - none of them touches the
         // hardware library. The lists refresh every few seconds on their own.
-        _memoryUsers.Refresh(MemoryListsShown);
+        using (Activity.Begin("program list for RAM and SWAP"))
+            _memoryUsers.Refresh(MemoryListsShown);
         snapshot.TopRamUsers = _memoryUsers.ByRam;
         snapshot.TopCommitUsers = _memoryUsers.ByCommit;
 
@@ -299,14 +318,17 @@ public sealed class SensorHub : IDisposable
         {
             if (!_diskClosed)
             {
-                (snapshot.DiskRead, snapshot.DiskWrite) = _disk.Throughput();
-                _disk.RefreshSpace();
+                using (Activity.Begin("disk throughput read"))
+                    (snapshot.DiskRead, snapshot.DiskWrite) = _disk.Throughput();
+                using (Activity.Begin("disk space read"))
+                    _disk.RefreshSpace();
                 snapshot.DiskFullest = _disk.Fullest;
                 snapshot.Drives = _disk.Drives;
             }
         }
 
-        (snapshot.NetDown, snapshot.NetUp) = _network.Read();
+        using (Activity.Begin("network read"))
+            (snapshot.NetDown, snapshot.NetUp) = _network.Read();
 
         if (!_opened)
             return snapshot;
@@ -360,9 +382,14 @@ public sealed class SensorHub : IDisposable
                 if (!_opened)
                     return;
 
-                foreach (var device in _polled)
-                    device.Update();
-                ReadNvidiaPower();
+                // One step per device, by name: the CPU's read goes through
+                // the sensor driver, the graphics card's through its own
+                // driver, and the freeze log has to tell the two apart.
+                for (int i = 0; i < _polled.Count; i++)
+                    using (Activity.Begin(_polledNames[i]))
+                        _polled[i].Update();
+                using (Activity.Begin("NVIDIA power read"))
+                    ReadNvidiaPower();
 
                 _hardware = new HardwareValues
                 {

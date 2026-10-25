@@ -131,7 +131,25 @@ public partial class HardwareWindow : PanelWindow
     /// than looked up again. The rest is collected off the UI thread, because
     /// the memory query goes through WMI.
     /// </summary>
+    /// <summary>
+    /// <see cref="LoadCoreAsync"/> with nothing let out. Its callers start it
+    /// and move on (the stability line's menu, the widget's toggle), so an
+    /// error in drawing the rows went nowhere until a garbage collection
+    /// happened to report it as an "unobserved task" - long after, if at all.
+    /// </summary>
     public async Task LoadAsync(string? cpuName, string? gpuName)
+    {
+        try
+        {
+            await LoadCoreAsync(cpuName, gpuName);
+        }
+        catch (Exception ex)
+        {
+            App.Log("showing the hardware", ex);
+        }
+    }
+
+    private async Task LoadCoreAsync(string? cpuName, string? gpuName)
     {
         int generation = ++_loadGeneration;
 

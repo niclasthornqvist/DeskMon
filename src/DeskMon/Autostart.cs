@@ -79,8 +79,10 @@ internal static class Autostart
         {
             using var process = Process.Start(info)!;
             var error = process.StandardError.ReadToEndAsync();   // drained too - see SchTasks
-            string xml = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(10_000);
+            var output = process.StandardOutput.ReadToEndAsync();
+            if (!Exited(process))
+                return null;
+            string xml = output.Result;
             _ = error.Result;
             if (process.ExitCode != 0)
                 return null;
@@ -166,6 +168,21 @@ internal static class Autostart
             : string.IsNullOrWhiteSpace(error) ? "Windows refused the change." : error.Trim();
 
     /// <summary>
+    /// Waits up to 10 s for schtasks, and stops it past that. The streams are
+    /// read in the background by the callers: read to the end first, the wait
+    /// only began once schtasks had exited, so a hung one held its caller -
+    /// at startup, the UI thread - for good and the limit never fired.
+    /// </summary>
+    private static bool Exited(Process process)
+    {
+        if (process.WaitForExit(10_000))
+            return true;
+
+        try { process.Kill(); } catch { /* exited just now */ }
+        return false;
+    }
+
+    /// <summary>
     /// schtasks.exe rather than the Task Scheduler COM API: it ships with
     /// every Windows, takes the same task XML the scheduler itself exports,
     /// and needs no interop assembly for three calls made once in a while.
@@ -188,8 +205,9 @@ internal static class Autostart
             // Both drained at once: read one to the end first and a full pipe
             // on the other would leave schtasks and DeskMon waiting on each other.
             var error = process.StandardError.ReadToEndAsync();
-            process.StandardOutput.ReadToEnd();
-            process.WaitForExit(10_000);
+            _ = process.StandardOutput.ReadToEndAsync();
+            if (!Exited(process))
+                return (-1, "schtasks didn't answer within 10 seconds.");
             return (process.ExitCode, error.Result);
         }
         catch (Exception ex)
