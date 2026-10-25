@@ -496,7 +496,7 @@ public sealed class AppSettings
     /// </summary>
     public double NotesOpacity { get; set; } = 1;
 
-    /// <summary>Where the .txt files live. Empty means app\notes.</summary>
+    /// <summary>Where the notes live. Empty means %APPDATA%\DeskMon\notes - see DataFolder.</summary>
     public string NotesFolder { get; set; } = string.Empty;
 
     /// <summary>
@@ -559,13 +559,30 @@ public sealed class AppSettings
     public bool LogSessionToFile { get; set; } = true;
 
     /// <summary>
-    /// Where the history files go. Empty means app\sessions.
+    /// Where the history files go. Empty means %APPDATA%\DeskMon\sessions - see DataFolder.
     ///
     /// Separate from <see cref="NotesFolder"/> on purpose: the notes are worth
     /// syncing between machines, while one machine's frame rates filed under
     /// the same game as another's are just confusing.
     /// </summary>
     public string SessionFolder { get; set; } = string.Empty;
+
+    /// <summary>
+    /// A while into each game, one notification if something heavy is running
+    /// beside it - a browser holding gigabytes, Windows Update or a Defender
+    /// scan busy on the CPU. Silent when nothing stands out. See GameStartCheck.
+    /// </summary>
+    public bool GameStartCheck { get; set; } = true;
+
+    /// <summary>
+    /// What a kWh costs, for the LOG window's Cost column. 0 hides the column.
+    /// Worked out when shown, not stored with the session, so a new price
+    /// applies to every session at once.
+    /// </summary>
+    public double EnergyPrice { get; set; }
+
+    /// <summary>Written after the cost, e.g. "kr" or "€". Empty for a bare number.</summary>
+    public string EnergyCurrency { get; set; } = string.Empty;
 
     // --- Hardware window (shares the notes window's colours and font) ---
     /// <summary>Width of the label column, e.g. "Motherboard".</summary>
@@ -660,9 +677,9 @@ public sealed class AppSettings
 
     // ---------------------------------------------------------------
 
+    /// <summary>In the user's own data folder, not beside the exe - see DataFolder.</summary>
     [JsonIgnore]
-    public static string FilePath { get; } = Path.Combine(
-        AppContext.BaseDirectory, "settings.json");
+    public static string FilePath => Path.Combine(DataFolder.Root, "settings.json");
 
     private static readonly JsonSerializerOptions Options = new()
     {

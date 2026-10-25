@@ -246,8 +246,12 @@ public static class GameArt
 
     // --- From the Steam store ----------------------------------------------------
 
-    /// <summary>Downloaded banners and logos, one each per game: app\cache\gameart\Factorio.jpg, Factorio.logo.png.</summary>
-    private static readonly string CacheFolder = Path.Combine(AppContext.BaseDirectory, "cache", "gameart");
+    /// <summary>
+    /// Downloaded banners and logos, one each per game: %LOCALAPPDATA%\DeskMon\cache\gameart\Factorio.jpg,
+    /// Factorio.logo.png. Asked each time rather than kept, since DataFolder
+    /// can fall back to app\ for a run; a path join is nothing beside a download.
+    /// </summary>
+    private static string CacheFolder => Path.Combine(DataFolder.Cache, "gameart");
 
     /// <summary>
     /// How long "the store has no such game" is believed before asking again

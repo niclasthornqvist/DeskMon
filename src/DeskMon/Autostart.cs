@@ -57,6 +57,43 @@ internal static class Autostart
         }
     }
 
+    /// <summary>
+    /// The account the logon task starts DeskMon for, as Windows names it
+    /// ("PC\name") - or null with no task, or none that says. For moving the
+    /// old data out of app\ only into the %APPDATA% of the person it belongs
+    /// to: see DataFolder.
+    /// </summary>
+    public static string? TaskUser()
+    {
+        var info = new ProcessStartInfo("schtasks.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in new[] { "/Query", "/TN", TaskName, "/XML" })
+            info.ArgumentList.Add(argument);
+
+        try
+        {
+            using var process = Process.Start(info)!;
+            var error = process.StandardError.ReadToEndAsync();   // drained too - see SchTasks
+            string xml = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(10_000);
+            _ = error.Result;
+            if (process.ExitCode != 0)
+                return null;
+
+            var match = System.Text.RegularExpressions.Regex.Match(xml, @"<UserId>([^<]+)</UserId>");
+            return match.Success ? System.Net.WebUtility.HtmlDecode(match.Groups[1].Value.Trim()) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>Removes the task. Null on success - including when there was none to remove.</summary>
     public static string? Disable()
     {

@@ -647,8 +647,11 @@ public partial class NotesWindow : PanelWindow
     /// holds it - otherwise the last second of typing would be the one thing
     /// a restore could not be undone back to. If that save fails, nothing is
     /// restored.
+    ///
+    /// async void as the click handler it is: the Recycle Bin look runs on a
+    /// worker, and everything that can throw is caught inside.
     /// </summary>
-    private void RestoreCopy(NotesStore.BackupCopy copy)
+    private async void RestoreCopy(NotesStore.BackupCopy copy)
     {
         HistoryPopup.IsOpen = false;
 
@@ -669,9 +672,19 @@ public partial class NotesWindow : PanelWindow
         LoadGame(game);
 
         // The copy can show pictures deleted since; their files are put back
-        // from the Recycle Bin, so the pictures window lists them again at full size.
-        var shown = NotesPictures.FileNamesIn(Editor.Document);
-        var back = RecycleBin.Restore(PictureFolder, shown);
+        // from the Recycle Bin, so the pictures window lists them again at full
+        // size. Each from the folder its link names - usually this game's, but
+        // one copied in from another game's notes lives in that one's. On a
+        // worker: every entry in the bin is read, and a full bin is thousands.
+        var shown = NotesPictures.FilePathsIn(Editor.Document);
+        var byFolder = shown.Where(path => !File.Exists(path))
+                            .GroupBy(path => Path.GetDirectoryName(path) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                            .Where(group => group.Key.Length > 0)
+                            .Select(group => (Folder: group.Key, Names: group.Select(p => Path.GetFileName(p)).ToList()))
+                            .ToList();
+        var back = byFolder.Count == 0
+            ? new List<string>()
+            : await Task.Run(() => byFolder.SelectMany(group => RecycleBin.Restore(group.Folder, group.Names)).ToList());
         if (back.Count > 0)
             PicturesChanged?.Invoke();
 
@@ -685,7 +698,7 @@ public partial class NotesWindow : PanelWindow
         // Said rather than left to be noticed: a picture whose file is gone
         // from the Recycle Bin too shows in the notes, from their preview,
         // yet never in the pictures window - which read as the restore failing.
-        int gone = shown.Count(name => !File.Exists(Path.Combine(PictureFolder, name)));
+        int gone = shown.Count(path => !File.Exists(path));
         if (gone > 0)
         {
             string which = gone == 1 ? "1 picture's file is" : $"{gone} pictures' files are";
@@ -717,8 +730,8 @@ public partial class NotesWindow : PanelWindow
     /// </summary>
     public int PictureCountInNotes() => NotesPictures.FileNamesIn(Editor.Document).Count;
 
-    /// <summary>The file names of the screenshots these notes show, as on screen - for telling which have no file left.</summary>
-    public HashSet<string> PictureNamesInNotes() => NotesPictures.FileNamesIn(Editor.Document);
+    /// <summary>Where the screenshots these notes show have their files, as on screen - for telling which have none left.</summary>
+    public HashSet<string> PicturePathsInNotes() => NotesPictures.FilePathsIn(Editor.Document);
 
     /// <summary>
     /// Deletes a picture: its file to the Recycle Bin, then out of these notes

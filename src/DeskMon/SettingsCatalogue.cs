@@ -191,7 +191,7 @@ public static class SettingsCatalogue
             new Setting("SteamPlaytime", "Playtime from Steam", "For Steam games, the playtime after the game's name is Steam's total, read from Steam's files on this PC. Off, or for other games, it is the time DeskMon has logged."),
             new Setting("GogPlaytime", "Playtime from GOG Galaxy", "For GOG games, the playtime is GOG Galaxy's total, read from Galaxy's database on this PC. Off, or without Galaxy, it is the time DeskMon has logged."),
             // No reload: read each time the sessions window looks for a picture.
-            new Setting("OnlineGameArt", "Game pictures from the Steam store", "When a game has no picture or logo on this PC, the sessions window looks it up on the Steam store by name, and asks Steam's servers anonymously for a newer game's logo. Copies are kept in app\\cache. Off sends nothing and shows a drawn picture instead."),
+            new Setting("OnlineGameArt", "Game pictures from the Steam store", "When a game has no picture or logo on this PC, the sessions window looks it up on the Steam store by name, and asks Steam's servers anonymously for a newer game's logo. Copies are kept in %LOCALAPPDATA%\\DeskMon\\cache. Off sends nothing and shows a drawn picture instead."),
             new Setting("PauseWhenFullscreen", "Hide during games", "Hide the widget completely while a game is in front, instead of showing it over the game."),
             new Setting("GameLayout", "Separate layout for games", "Sections you fold while a game runs are remembered apart from the desktop's, and the widget switches by itself. Starts with DISK and NETWORK folded in games."),
             // No reload: PerformanceScore reads it every time a score is shown.
@@ -209,14 +209,18 @@ public static class SettingsCatalogue
             new Setting("AutoOpenNotesWithGame", "Open notes with a game", "Show the notepad when a game starts."),
             new Setting("NotesAlwaysOnTop", "Windows on top", "Keep the notepad, hardware, versions and settings windows above the game."),
             new Setting("LogSessionToFile", "Log sessions", "Write a line about each session to the session history when you quit a game."),
+            new Setting("GameStartCheck", "Check what runs beside a game", "20 seconds into a game, say so if a heavy program is running beside it - a browser using gigabytes, Windows Update or a virus scan busy on the CPU."),
+            // Min 0: a negative price would only turn the column into nonsense.
+            new Setting("EnergyPrice", "Energy price", "What a kWh costs, for the LOG window's Cost column. 0 hides it. The energy is the CPU's and GPU's own, so the whole PC draws more.", Unit: "per kWh", Min: 0),
+            new Setting("EnergyCurrency", "Currency", "Written after the cost - kr, €, $. Empty for just the number."),
             new Setting("ScreenshotHotkey", "Screenshot hotkey", "Puts a screenshot of the game into its notes, from inside the game. Empty turns it off."),
             // Floor 10: Screenshot.Save clamps there, below it is only smear.
             new Setting("ScreenshotQuality", "Screenshot quality", "The full-size file. 100 saves a lossless PNG; lower saves a much smaller JPEG - 90 is hard to tell from the original.", Slider: new(10, 100, 5)),
             // No reload any more: every window repaints on UiTheme.Changed.
             new Setting("NotesBackgroundColor", "Window background", "Background of the notepad and the other windows."),
             new Setting("NotesTextColor", "Notes text colour", "Normal text colour in the notepad and the other windows."),
-            new Setting("NotesFolder", "Notes folder", "Where notes are saved. Empty means app\\notes.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder),
-            new Setting("SessionFolder", "Session history folder", "Empty means app\\sessions.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder)),
+            new Setting("NotesFolder", "Notes folder", "Where notes are saved. Empty means %APPDATA%\\DeskMon\\notes, your own for this Windows user.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder),
+            new Setting("SessionFolder", "Session history folder", "Empty means %APPDATA%\\DeskMon\\sessions, your own for this Windows user.", NeedsReload: true, Wide: true, Kind: EditorKind.Folder)),
 
         new("Alerts and updates", null,
             new Setting("Alerts", "Alerts", "A notification when a reading stays red - CPU or GPU too hot, memory or a drive nearly full. During a game it also shows under the FPS overlay."),

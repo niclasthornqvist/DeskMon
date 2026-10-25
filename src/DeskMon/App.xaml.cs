@@ -26,6 +26,10 @@ public partial class App : Application
             Source = new Uri("/DeskMon;component/Ui/PanelStyles.xaml", UriKind.Relative),
         });
 
+        // Before anything reads a setting or a note, the dumps below included:
+        // the data moves out of app\ on the first start of 1.65 - see DataFolder.
+        DataFolder.Prepare();
+
         // The sensor dumps are checked before the single-instance lock on
         // purpose. They are diagnostics, not a second widget: taking the mutex
         // first meant that asking for a dump while the widget was running -
@@ -46,6 +50,17 @@ public partial class App : Application
             return;
         }
 
+        // Started by a copy that was going down - see RestartAfterCrash. It
+        // is waited for until it has really gone, not a fixed moment: Windows
+        // Error Reporting can hold a crashed process for seconds while it
+        // writes a dump, and one shutting down cleanly is still ending its
+        // session. Started over it, this copy put up a second tray icon and
+        // PresentMon, and could recover that session a second time.
+        int afterCrash = Array.IndexOf(e.Args, AfterCrashFlag);
+        StartedAfterCrash = afterCrash >= 0;
+        if (StartedAfterCrash)
+            WaitForExit(afterCrash + 1 < e.Args.Length ? e.Args[afterCrash + 1] : null);
+
         // The scheduled task and a manual double-click can easily both fire;
         // a second copy would just draw on top of the first.
         _singleInstance = new Mutex(initiallyOwned: true, SingleInstanceName, out bool isFirst);
@@ -64,8 +79,14 @@ public partial class App : Application
         // nothing behind at all - no dialog, no log, just a process that went
         // away or a feature that stopped - while the troubleshooting guide sent
         // you to error.log. Now they land there too.
-        AppDomain.CurrentDomain.UnhandledException +=
-            (_, args) => Log("background thread", args.ExceptionObject);
+        // Such an error ends the process - .NET leaves no way to carry on -
+        // so a fresh copy is started on the way out, unless that would be a loop.
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            Log("background thread", args.ExceptionObject);
+            if (args.IsTerminating)
+                RestartAfterCrash();
+        };
 
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
@@ -85,7 +106,8 @@ public partial class App : Application
     /// </summary>
     private void DumpSensorsAndExit(bool openInNotepad)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "sensors.txt");
+        // Beside settings.json in the user's folder: app\ may be locked (see DataFolder).
+        string path = Path.Combine(DataFolder.Root, "sensors.txt");
         try
         {
             var settings = AppSettings.Load();
@@ -113,6 +135,7 @@ public partial class App : Application
             report.AppendLine("=== Every sensor on this machine ===");
             report.AppendLine(hub.DumpSensors());
 
+            Directory.CreateDirectory(DataFolder.Root);   // a first run may not have it yet
             File.WriteAllText(path, report.ToString());
 
             if (openInNotepad)
@@ -160,7 +183,84 @@ public partial class App : Application
         if (_recentErrors.Count >= ErrorsBeforeGivingUp)
         {
             Log("ui thread", $"{ErrorsBeforeGivingUp} errors within a minute - shutting down.");
+            RestartAfterCrash();   // a fresh start often clears the broken state; the guard stops a loop
             Shutdown();
+        }
+    }
+
+    private const string AfterCrashFlag = "--after-crash";
+
+    /// <summary>
+    /// Up to 15 s for the copy that started this one to be gone - by its
+    /// process id, passed after --after-crash. Two seconds, as before, when
+    /// there is no id to go by (a copy started by hand with the flag).
+    /// </summary>
+    private static void WaitForExit(string? pid)
+    {
+        if (!int.TryParse(pid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int id))
+        {
+            Thread.Sleep(2000);
+            return;
+        }
+
+        try
+        {
+            using var old = System.Diagnostics.Process.GetProcessById(id);
+            old.WaitForExit(15_000);
+        }
+        catch
+        {
+            // Already gone - nothing to wait for.
+        }
+    }
+
+    /// <summary>This copy was started by one that crashed - MainWindow says so once the tray icon is up.</summary>
+    public static bool StartedAfterCrash { get; private set; }
+
+    /// <summary>When the last crash restart happened - kept outside app\, which may be what is broken.</summary>
+    private static string CrashStampPath => Path.Combine(Path.GetTempPath(), "DeskMon-crash-restart.txt");
+
+    private static readonly TimeSpan CrashRestartGap = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Starts a fresh copy of DeskMon as this one goes down from an error, so
+    /// a crash mid-game brings the widget back within seconds rather than
+    /// leaving nothing until the next logon. The open session is not lost:
+    /// the new copy recovers it from its checkpoint, marked "cut short".
+    ///
+    /// At most once every 10 minutes: something broken at startup would
+    /// otherwise crash and restart for ever. The single-instance lock is let
+    /// go first, as Reload settings does, or the new copy would see this one
+    /// and leave. Silent on failure - this runs while already failing.
+    /// Can't help with DeskMon being killed or a native crash, which never
+    /// reach .NET's handlers.
+    /// </summary>
+    private void RestartAfterCrash()
+    {
+        try
+        {
+            if (File.Exists(CrashStampPath) && DateTime.UtcNow - File.GetLastWriteTimeUtc(CrashStampPath) < CrashRestartGap)
+            {
+                Log("restart after a crash", "Not restarting: DeskMon already restarted after a crash less than 10 minutes ago.");
+                return;
+            }
+
+            if (Environment.ProcessPath is not { } exe)
+                return;
+
+            File.WriteAllText(CrashStampPath, DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+            ReleaseSingleInstanceLock();
+            // With this copy's id, so the new one can wait until it has gone - see WaitForExit.
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, $"{AfterCrashFlag} {Environment.ProcessId}")
+            {
+                UseShellExecute = false,
+                WorkingDirectory = AppContext.BaseDirectory,
+            });
+            Log("restart after a crash", "Started a fresh copy of DeskMon.");
+        }
+        catch (Exception ex)
+        {
+            Log("restart after a crash", ex);
         }
     }
 
@@ -168,7 +268,7 @@ public partial class App : Application
     private const long MaxLogBytes = 256 * 1024;
 
     /// <summary>
-    /// Appends to app\error.log. Best-effort and silent by design - this runs
+    /// Appends to error.log in the user's DeskMon folder. Best-effort and silent by design - this runs
     /// when something has already gone wrong, so it must not throw on top.
     ///
     /// The file is rotated rather than left to grow, because a fault that
@@ -184,7 +284,10 @@ public partial class App : Application
         {
             try
             {
-                string path = Path.Combine(AppContext.BaseDirectory, "error.log");
+                // With the rest of the user's data - see DataFolder - made if
+                // need be, since this can be the first thing ever written there.
+                Directory.CreateDirectory(DataFolder.Root);
+                string path = Path.Combine(DataFolder.Root, "error.log");
 
                 var existing = new FileInfo(path);
                 if (existing.Exists && existing.Length > MaxLogBytes)

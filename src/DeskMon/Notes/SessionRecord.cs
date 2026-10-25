@@ -45,6 +45,28 @@ public sealed class SessionRecord
     public double? PointOnePercentLow { get; private init; }
     public double? JitterMs { get; private init; }
 
+    /// <summary>How many frames were stutters - see FrameStats.Stutters. Null before 1.65.</summary>
+    public long? Stutters { get; private init; }
+
+    /// <summary>
+    /// What the CPU and GPU drew over the session, in watt-hours - their own
+    /// power sensors only, not the whole PC from the wall. Null before 1.65,
+    /// or when neither reports its power.
+    /// </summary>
+    public double? EnergyWh { get; private init; }
+
+    /// <summary>
+    /// The GPU driver and Windows build the session was played on, for
+    /// marking a session where either changed since the one before. Null
+    /// before 1.65, or when they couldn't be read.
+    /// </summary>
+    public string? Driver { get; private init; }
+    public string? WindowsBuild { get; private init; }
+
+    /// <summary>Stutters per hour played, so long and short sessions compare fairly.</summary>
+    public double? StuttersPerHour
+        => Stutters is long count && Length.TotalHours > 0 ? count / Length.TotalHours : null;
+
     /// <summary>The worst each row reached, in the order the line lists them.</summary>
     public IReadOnlyList<Peak> Peaks { get; private init; } = Array.Empty<Peak>();
 
@@ -103,7 +125,17 @@ public sealed class SessionRecord
 
     private static readonly Regex Jitter = new(@"^jitter (?<ms>[\d.]+) ms$");
 
-    private static readonly Regex PeakPart = new(@"^(?<label>\S+) (?<dir>[↑↓])(?<value>[\d.]+)(?: (?<unit>\S+))?$");
+    private static readonly Regex StutterPart = new(@"^stutters (?<n>\d+)$");
+
+    private static readonly Regex EnergyPart = new(@"^energy (?<wh>[\d.]+) Wh$");
+
+    // Before PeakPart, which "driver 581.57" doesn't match anyway (no arrow) -
+    // but checked first all the same, so a version can never end up a note.
+    private static readonly Regex DriverPart = new(@"^driver (?<v>\S+)$");
+
+    private static readonly Regex WindowsPart = new(@"^windows (?<v>\S+)$");
+
+    private static readonly Regex PeakPart =new(@"^(?<label>\S+) (?<dir>[↑↓])(?<value>[\d.]+)(?: (?<unit>\S+))?$");
 
     /// <summary>
     /// Reads a line as MainWindow.DescribeSession writes it. Null for a line
@@ -130,7 +162,9 @@ public sealed class SessionRecord
         if (end < start)
             end = end.AddDays(1);
 
-        double? average = null, onePercent = null, pointOnePercent = null, jitter = null;
+        double? average = null, onePercent = null, pointOnePercent = null, jitter = null, energy = null;
+        long? stutters = null;
+        string? driver = null, windows = null;
         TimeSpan? length = null;
         var peaks = new List<Peak>();
         var notes = new List<string>();
@@ -169,6 +203,32 @@ public sealed class SessionRecord
                 continue;
             }
 
+            if (StutterPart.Match(part) is { Success: true } stutter
+                && long.TryParse(stutter.Groups["n"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long count))
+            {
+                stutters = count;
+                continue;
+            }
+
+            if (EnergyPart.Match(part) is { Success: true } drawn
+                && double.TryParse(drawn.Groups["wh"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double wh))
+            {
+                energy = wh;
+                continue;
+            }
+
+            if (DriverPart.Match(part) is { Success: true } gpuDriver)
+            {
+                driver = gpuDriver.Groups["v"].Value;
+                continue;
+            }
+
+            if (WindowsPart.Match(part) is { Success: true } build)
+            {
+                windows = build.Groups["v"].Value;
+                continue;
+            }
+
             if (PeakPart.Match(part) is { Success: true } peak)
             {
                 peaks.Add(new Peak(peak.Groups["label"].Value,
@@ -190,6 +250,10 @@ public sealed class SessionRecord
             OnePercentLow = onePercent,
             PointOnePercentLow = pointOnePercent,
             JitterMs = jitter,
+            Stutters = stutters,
+            EnergyWh = energy,
+            Driver = driver,
+            WindowsBuild = windows,
             Peaks = peaks,
             Note = notes.Count > 0 ? string.Join(" · ", notes) : null,
             Raw = line,

@@ -76,7 +76,13 @@ public partial class HardwareWindow : PanelWindow
         // The rows put out before it hides: Windows shows the last frame again
         // the instant it reopens, which would flash the old rows up before
         // the loading screen. Blank instead, and the dots come in from there.
-        Hiding += () => RowsScroller.Visibility = Visibility.Hidden;
+        // The dots stopped too: closed mid-load, they would pulse on behind a
+        // hidden window until the load ended - 15 s, or for good if WMI hangs.
+        Hiding += () =>
+        {
+            StopDots();
+            RowsScroller.Visibility = Visibility.Hidden;
+        };
 
         // Reopened within the hide's short wait, it was never hidden, so no
         // fresh load comes (see MainWindow.ShowHardwareAsync): the rows back as they
@@ -138,8 +144,27 @@ public partial class HardwareWindow : PanelWindow
         _gpuName = gpuName;
 
         LoadingText.Text = "Reading hardware…";
-        var info = await Task.Run(() => SystemInfo.Collect(cpuName, gpuName, _settings.StabilityCountedFrom));
-        var missing = await Task.Run(() => Prerequisites.Check(_settings));
+        SystemInfo info;
+        IReadOnlyList<Prerequisites.Missing> missing;
+        try
+        {
+            info = await Task.Run(() => SystemInfo.Collect(cpuName, gpuName, _settings.StabilityCountedFrom));
+            missing = await Task.Run(() => Prerequisites.Check(_settings));
+        }
+        catch (Exception ex)
+        {
+            // A WMI fault or the like: said in place of the rows. Left to
+            // throw, the loading screen stayed up for good with nothing to
+            // say why - the only way out was closing the window.
+            App.Log("reading the hardware", ex);
+            if (generation != _loadGeneration)
+                return;
+            _rows.Clear();
+            _rows.Add(new InfoRow("Couldn't read", ex.Message, _theme, _settings, known: true, warning: true));
+            Rows.Items.Refresh();
+            ShowLoading(false);
+            return;
+        }
         if (generation != _loadGeneration)
             return;
 
@@ -524,6 +549,13 @@ public partial class HardwareWindow : PanelWindow
         if (!on)
             RowsScroller.BeginAnimation(OpacityProperty,
                 new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(250)));
+    }
+
+    /// <summary>The dots still, the loading screen left as it is - for a window going away mid-load.</summary>
+    private void StopDots()
+    {
+        foreach (var dot in new[] { LoadingDot1, LoadingDot2, LoadingDot3 })
+            dot.BeginAnimation(OpacityProperty, null);
     }
 
     // --- Chrome -----------------------------------------------------------

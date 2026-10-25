@@ -38,7 +38,7 @@ public sealed class SessionHistory
     public SessionHistory(string? folderOverride)
     {
         _folder = string.IsNullOrWhiteSpace(folderOverride)
-            ? Path.Combine(AppContext.BaseDirectory, "sessions")
+            ? Path.Combine(DataFolder.Root, "sessions")   // the user's own - see DataFolder
             : folderOverride!;
     }
 

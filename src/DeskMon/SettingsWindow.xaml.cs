@@ -879,15 +879,15 @@ public partial class SettingsWindow : PanelWindow
     }
 
     /// <summary>
-    /// Opens in the current folder if it exists, else beside DeskMon, where
-    /// the default folders live.
+    /// Opens in the current folder if it exists, else in the user's DeskMon
+    /// folder, where the default notes and sessions folders live now - see DataFolder.
     /// </summary>
     private string? PickFolder(string label, string current)
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
             Title = $"Choose the {label.ToLowerInvariant()}",
-            InitialDirectory = Directory.Exists(current) ? current : AppContext.BaseDirectory,
+            InitialDirectory = Directory.Exists(current) ? current : DataFolder.Root,
         };
 
         return dialog.ShowDialog(this) == true ? dialog.FolderName : null;

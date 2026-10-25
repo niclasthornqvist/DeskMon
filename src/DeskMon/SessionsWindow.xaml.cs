@@ -191,6 +191,13 @@ public partial class SessionsWindow : PanelWindow
             new("avg", "Avg FPS", 62, true, s => Whole(s.AverageFps), s => s.AverageFps),
             new("score", "Score", 52, true, s => Whole(PerformanceScore.For(s)?.Score), s => PerformanceScore.For(s)?.Score,
                 DescendingFirst: false, Score: s => PerformanceScore.For(s)?.Score),
+            // The hitches the average and the lows can hide - see FrameStats.Stutters.
+            new("stutters", "Stutters", 62, true, s => s.Stutters?.ToString(CultureInfo.InvariantCulture) ?? "–", s => s.Stutters),
+            // "CPU+GPU" in the heading itself: it is their own power sensors,
+            // not the PC from the wall, and a bare "kWh" would claim the latter.
+            new("energy", "CPU+GPU kWh", 84, true, s => Kwh(s.EnergyWh), s => s.EnergyWh),
+            // Only offered with a price set - see VisibleSessionColumns.
+            new("cost", "Cost", 64, true, s => Cost(s.EnergyWh), s => s.EnergyWh),
         };
 
         foreach (var metric in MetricRegistry.Sections.SelectMany(s => s.Metrics))
@@ -217,6 +224,10 @@ public partial class SessionsWindow : PanelWindow
             new("avg", "Average FPS", s => s.AverageFps),
             new("length", "Minutes played", s => s.Length.TotalMinutes),
             new("score", "Performance score", s => PerformanceScore.For(s)?.Score),
+            // Per hour, not the count: a four-hour evening would otherwise
+            // always look worse than a twenty-minute one.
+            new("stutters", "Stutters per hour", s => s.StuttersPerHour),
+            new("energy", "CPU+GPU energy (Wh)", s => s.EnergyWh),
         };
 
         foreach (var metric in MetricRegistry.Sections.SelectMany(s => s.Metrics))
@@ -253,6 +264,32 @@ public partial class SessionsWindow : PanelWindow
 
     private static string Whole(double? value)
         => value is double v ? v.ToString("0", CultureInfo.InvariantCulture) : "–";
+
+    /// <summary>"0.31" - watt-hours as kWh, to two places, since a session is rarely a whole one.</summary>
+    /// <summary>"3 min", "40 s" - how often a stutter came, for the tooltip.</summary>
+    private static string Every(TimeSpan gap)
+        => gap.TotalMinutes >= 1 ? $"{gap.TotalMinutes:0} min" : $"{Math.Max(1, gap.TotalSeconds):0} s";
+
+    private static string Kwh(double? wh)
+        => wh is double v ? (v / 1000).ToString("0.00", CultureInfo.InvariantCulture) : "–";
+
+    /// <summary>
+    /// The price per kWh and currency the Cost column works with - the
+    /// settings', copied in by ShowRows. Static because the columns are built
+    /// once for every window; worked out when shown rather than stored with
+    /// the session, so a new price applies to every session at once.
+    /// </summary>
+    private static double _energyPrice;
+    private static string _energyCurrency = string.Empty;
+
+    /// <summary>"1.25 kr" - what the session's energy cost at the price in Settings.</summary>
+    private static string Cost(double? wh)
+    {
+        if (wh is not double v || _energyPrice <= 0)
+            return "–";
+        string cost = (v / 1000 * _energyPrice).ToString("0.00", CultureInfo.InvariantCulture);
+        return _energyCurrency.Length > 0 ? $"{cost} {_energyCurrency}" : cost;
+    }
 
     /// <summary>
     /// "2h 05m" - a session's length for the Length column. Shorter than
@@ -499,6 +536,7 @@ public partial class SessionsWindow : PanelWindow
             string? game = item as string;
             _games = Array.Empty<GameTotal>();
             _sessions = game is null ? Array.Empty<SessionRecord>() : _history.Sessions(game);
+            _changes = ChangesIn(_sessions);
             ShowSummary(game);
         }
 
@@ -1187,6 +1225,21 @@ public partial class SessionsWindow : PanelWindow
                 hover.MouseLeave += (_, _) => bar.Background = normal;
             }
 
+            // A new driver or Windows build: a small accent triangle under the
+            // bar, in the room the 0 label leaves below the baseline - clear of
+            // the value labels above. Whether or not the session has a bar, so
+            // the change still shows on a reading it didn't record.
+            if (_changes.ContainsKey(session))
+            {
+                double middle = plotLeft + i * slot + slot / 2;
+                Chart.Children.Add(new System.Windows.Shapes.Polygon
+                {
+                    Points = new PointCollection { new(middle - 3.5, baseline + 7), new(middle + 3.5, baseline + 7), new(middle, baseline + 2) },
+                    Fill = _theme.Accent,
+                    IsHitTestVisible = false,
+                });
+            }
+
             Chart.Children.Add(hover);
         }
 
@@ -1246,6 +1299,14 @@ public partial class SessionsWindow : PanelWindow
         }
         else
             DrawChart();
+
+        // A new energy price or currency: the Cost column comes, goes or
+        // changes - only then, for the same every-keystroke reason.
+        if (_energyPrice != _settings.EnergyPrice || _energyCurrency != (_settings.EnergyCurrency?.Trim() ?? string.Empty))
+        {
+            FitColumns();
+            ShowRows();
+        }
     }
 
     /// <summary>A bar's value as its label says it: whole, with a decimal only under 10 where it matters.</summary>
@@ -1281,12 +1342,73 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private static bool AlwaysShown(string key) => key is "id" or "date" or "score";
 
+    /// <summary>What changed since the session before, per session that had a change - see ChangesIn.</summary>
+    private Dictionary<SessionRecord, List<Change>> _changes = new();
+
+    /// <param name="Mark">The word in the table and on the chart: "new driver", "Windows update".</param>
+    /// <param name="Detail">What it was and is now, for the tooltip: "driver 576.80 → 581.57".</param>
+    private sealed record Change(string Mark, string Detail);
+
+    /// <summary>
+    /// The sessions played on a different GPU driver or Windows build than
+    /// the one before them, in this game - for "did that update change
+    /// anything?", which an FPS drop usually raises. Compared with the last
+    /// session that recorded one, so a session logged before 1.65 (with
+    /// neither) is skipped rather than read as a change from "unknown".
+    /// </summary>
+    private static Dictionary<SessionRecord, List<Change>> ChangesIn(IReadOnlyList<SessionRecord> sessions)
+    {
+        var changes = new Dictionary<SessionRecord, List<Change>>();
+        string? driver = null, build = null;
+
+        foreach (var session in sessions)   // oldest first, as the log has them
+        {
+            var found = new List<Change>();
+            if (session.Driver is { } newDriver)
+            {
+                if (driver is not null && driver != newDriver)
+                    found.Add(new Change("new driver", $"GPU driver {driver} → {newDriver}"));
+                driver = newDriver;
+            }
+            if (session.WindowsBuild is { } newBuild)
+            {
+                if (build is not null && build != newBuild)
+                    found.Add(new Change("Windows update", $"Windows build {build} → {newBuild}"));
+                build = newBuild;
+            }
+            if (found.Count > 0)
+                changes[session] = found;
+        }
+
+        return changes;
+    }
+
+    /// <summary>
+    /// The words after a session's row: "cut short" in the warning colour,
+    /// since it changes what the numbers mean, and a driver or Windows change
+    /// in the accent - news, not a fault.
+    /// </summary>
+    private IReadOnlyList<(string Text, Brush Brush)>? SessionMarks(SessionRecord session)
+    {
+        var marks = new List<(string, Brush)>();
+        if (session.CutShort)
+            marks.Add(("cut short", _theme.Warn));
+        if (_changes.TryGetValue(session, out var changes))
+            foreach (var change in changes)
+                marks.Add((change.Mark, _theme.Accent));
+        return marks.Count > 0 ? marks : null;
+    }
+
+    /// <summary>Cost only with a price set: without one it would be a column of dashes.</summary>
     private IReadOnlyList<Column<SessionRecord>> VisibleSessionColumns()
-        => AllSessionColumns.Where(c => AlwaysShown(c.Key) || _settings.SessionColumns.Contains(c.Key)).ToList();
+        => AllSessionColumns.Where(c => (AlwaysShown(c.Key) || _settings.SessionColumns.Contains(c.Key))
+                                        && (c.Key != "cost" || _settings.EnergyPrice > 0)).ToList();
 
     private void ShowRows()
     {
         DeleteButton.IsEnabled = !_allGames && _selected is not null;
+        _energyPrice = _settings.EnergyPrice;
+        _energyCurrency = _settings.EnergyCurrency?.Trim() ?? string.Empty;
 
         if (_allGames)
             ShowTable(GameColumns, _games, _gameSort,
@@ -1298,7 +1420,7 @@ public partial class SessionsWindow : PanelWindow
             // session with no latency, say - still come newest first.
             ShowTable(VisibleSessionColumns(), _sessions.Reverse().ToList(), _sessionSort,
                       sort => _sessionSort = sort,
-                      s => SessionTip(s), mark: s => s.CutShort ? "cut short" : null,
+                      s => SessionTip(s), mark: SessionMarks,
                       open: Select, selected: s => ReferenceEquals(s, _selected));
     }
 
@@ -1321,7 +1443,7 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private void ShowTable<T>(IReadOnlyList<Column<T>> columns, IReadOnlyList<T> items,
                               (string Key, bool Descending) sort, Action<(string, bool)> setSort,
-                              Func<T, object> tooltip, Func<T, string?>? mark, Action<T>? open,
+                              Func<T, object> tooltip, Func<T, IReadOnlyList<(string Text, Brush Brush)>?>? mark, Action<T>? open,
                               Func<T, bool>? selected)
     {
         // A sort by a column just hidden falls back to the first one,
@@ -1403,15 +1525,21 @@ public partial class SessionsWindow : PanelWindow
                 row.Children.Add(cell);
             }
 
-            if (mark?.Invoke(item) is { } note)
+            if (mark?.Invoke(item) is { } marks)
             {
+                // Each in its own colour - see SessionMarks - one line however many.
                 var text = new TextBlock
                 {
-                    Text = note,
-                    Foreground = _theme.Warn,
                     FontSize = SmallFont,
                     VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
                 };
+                for (int m = 0; m < marks.Count; m++)
+                {
+                    if (m > 0)
+                        text.Inlines.Add(new System.Windows.Documents.Run("  ·  ") { Foreground = _theme.Header });
+                    text.Inlines.Add(new System.Windows.Documents.Run(marks[m].Text) { Foreground = marks[m].Brush });
+                }
                 Grid.SetColumn(text, columns.Count);
                 row.Children.Add(text);
             }
@@ -1511,7 +1639,8 @@ public partial class SessionsWindow : PanelWindow
             Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
         };
 
-        foreach (var column in AllSessionColumns.Where(c => !AlwaysShown(c.Key)))
+        // Cost only once a price is set, as in the table - ticking it would show nothing.
+        foreach (var column in AllSessionColumns.Where(c => !AlwaysShown(c.Key) && (c.Key != "cost" || _settings.EnergyPrice > 0)))
         {
             var item = new MenuItem
             {
@@ -1630,6 +1759,29 @@ public partial class SessionsWindow : PanelWindow
         if (session.OnePercentLow is double low)
             when += $"  ·  1% low {low:0}";
         card.Children.Add(new TextBlock { Text = when, Foreground = _theme.Label, Margin = new Thickness(0, 1, 0, 0) });
+
+        // The stutters as a rate as well as a count - "37" alone says little
+        // without the length beside it - and the energy with what it covers.
+        var extra = new List<string>();
+        if (session.Stutters is long stutters)
+        {
+            string rate = stutters > 0 && session.Length.TotalMinutes > 0
+                ? $" - about 1 every {Every(session.Length / stutters)}"
+                : string.Empty;
+            extra.Add(stutters == 1 ? $"1 stutter{rate}" : $"{stutters} stutters{rate}");
+        }
+        if (session.EnergyWh is double wh)
+        {
+            string cost = _energyPrice > 0 ? $" ({Cost(wh)})" : string.Empty;
+            extra.Add($"CPU+GPU {Kwh(wh)} kWh{cost} - the whole PC draws more");
+        }
+        if (extra.Count > 0)
+            card.Children.Add(new TextBlock { Text = string.Join("  ·  ", extra), Foreground = _theme.Label, Margin = new Thickness(0, 1, 0, 0) });
+
+        // In the accent, as in the table: the update to line an FPS change up with.
+        if (_changes.TryGetValue(session, out var changes))
+            foreach (var change in changes)
+                card.Children.Add(new TextBlock { Text = change.Detail, Foreground = _theme.Accent, Margin = new Thickness(0, 3, 0, 0) });
 
         var sections = session.PeaksBySection().ToList();
         if (sections.Count > 0)
@@ -1874,8 +2026,18 @@ public partial class SessionsWindow : PanelWindow
             .ToList();
 
         var csv = new System.Text.StringBuilder();
-        var header = new List<string> { "ID", "Date", "Start", "End", "Length (min)", "Avg FPS", "1% low", "0.1% low", "Jitter (ms)" };
+        // Cost only with a price set, as in the table - and worked out at that
+        // price, since the log keeps the energy rather than what it cost.
+        bool costed = _energyPrice > 0;
+        string costHeader = _energyCurrency.Length > 0 ? $"Cost ({_energyCurrency})" : "Cost";
+
+        var header = new List<string> { "ID", "Date", "Start", "End", "Length (min)", "Avg FPS", "1% low", "0.1% low", "Jitter (ms)",
+                                        "Stutters", "CPU+GPU energy (Wh)" };
+        if (costed)
+            header.Add(costHeader);
         header.AddRange(peaks.Select(p => p.Unit.Length > 0 ? $"{p.Label} {p.Unit}" : p.Label));
+        header.Add("GPU driver");
+        header.Add("Windows build");
         header.Add("Note");
         csv.AppendLine(string.Join(",", header.Select(Cell)));
 
@@ -1893,12 +2055,18 @@ public partial class SessionsWindow : PanelWindow
                 s.OnePercentLow?.ToString("0.0", inv) ?? string.Empty,
                 s.PointOnePercentLow?.ToString("0.0", inv) ?? string.Empty,
                 s.JitterMs?.ToString("0.00", inv) ?? string.Empty,
+                s.Stutters?.ToString(inv) ?? string.Empty,
+                s.EnergyWh?.ToString("0", inv) ?? string.Empty,
             };
+            if (costed)
+                row.Add(s.EnergyWh is double wh ? (wh / 1000 * _energyPrice).ToString("0.00", inv) : string.Empty);
 
             // A session logged before a row existed leaves its cell empty.
             foreach (var (label, unit) in peaks)
                 row.Add(s.Peaks.FirstOrDefault(p => p.Label == label && p.Unit == unit)?.Value ?? string.Empty);
 
+            row.Add(s.Driver ?? string.Empty);
+            row.Add(s.WindowsBuild ?? string.Empty);
             row.Add(s.Note ?? string.Empty);
             csv.AppendLine(string.Join(",", row.Select(Cell)));
         }

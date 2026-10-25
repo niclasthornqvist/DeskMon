@@ -27,7 +27,7 @@ public sealed class NotesStore
     public NotesStore(string? folderOverride)
     {
         _folder = string.IsNullOrWhiteSpace(folderOverride)
-            ? Path.Combine(AppContext.BaseDirectory, "notes")
+            ? Path.Combine(DataFolder.Root, "notes")   // the user's own - see DataFolder
             : folderOverride!;
 
         try

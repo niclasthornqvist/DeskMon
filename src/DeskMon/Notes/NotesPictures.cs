@@ -1312,6 +1312,21 @@ internal sealed class NotesPictures
     }
 
     /// <summary>
+    /// The full path each screenshot in the document links to - where its
+    /// file is, which needn't be this game's folder: a picture copied over
+    /// from another game's notes still links there. For telling a picture
+    /// whose file is gone from one that only lives elsewhere.
+    /// </summary>
+    public static HashSet<string> FilePathsIn(FlowDocument document)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (image, link) in Images(document))
+            if ((FullSizeFile(link) ?? FullSizeFileInCaption(image)) is { } path)
+                paths.Add(path);
+        return paths;
+    }
+
+    /// <summary>
     /// Whether the document holds any picture at all - screenshot or pasted.
     /// A picture adds nothing to the document's text, so notes that are only
     /// pictures read as empty to a text check; see NotesWindow.SaveNow.

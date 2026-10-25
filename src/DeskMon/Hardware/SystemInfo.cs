@@ -360,6 +360,62 @@ public sealed class SystemInfo
         return true;
     }
 
+    /// <summary>
+    /// The GPU driver (as the vendor's app shows it) and the Windows build
+    /// ("26300.6899"), for the session log - so a session played on a new
+    /// driver or after a Windows update can be marked. From the registry
+    /// only, the same keys the hardware window reads but without its WMI
+    /// queries: about a millisecond. Either is null when it can't be read.
+    /// </summary>
+    public static (string? Driver, string? WindowsBuild) QuickVersions(string? gpuName)
+    {
+        string? driver = null, build = null;
+
+        try
+        {
+            using var adapters = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}");
+            if (adapters is not null && gpuName is not null)
+            {
+                foreach (string sub in adapters.GetSubKeyNames())
+                {
+                    if (sub.Length != 4 || !char.IsDigit(sub[0]))
+                        continue;   // "Properties" and the like - see ReadGpuDetail
+                    try
+                    {
+                        using var key = adapters.OpenSubKey(sub);
+                        if (key is not null && Clean(key.GetValue("DriverDesc") as string) is { } desc && SameCard(desc, gpuName))
+                        {
+                            driver = DriverVersionForPeople(desc, key);
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // A locked adapter key; try the next.
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // No driver version.
+        }
+
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+            if (key is not null && Clean(key.GetValue("CurrentBuildNumber") as string) is { } number)
+                build = key.GetValue("UBR") is int patch ? $"{number}.{patch}" : number;
+        }
+        catch
+        {
+            // No build.
+        }
+
+        return (driver, build);
+    }
+
     /// <summary>Equal, or one inside the other: the sensor library and the
     /// driver can disagree on a "(TM)" or a trailing word.</summary>
     private static bool SameCard(string driverDesc, string gpuName)

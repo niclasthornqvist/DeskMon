@@ -99,7 +99,7 @@ function Start-DeskMon {
     if (Get-Process DeskMon -ErrorAction SilentlyContinue) {
         Write-Host "DeskMon is running." -ForegroundColor Green
     } else {
-        Write-Host "DeskMon did not start - check app\error.log" -ForegroundColor Red
+        Write-Host "DeskMon did not start - check error.log in $env:APPDATA\DeskMon" -ForegroundColor Red
     }
 }
 
@@ -185,8 +185,9 @@ if (Test-Path $extracted) {
 
 # publish never deletes from the output folder, so the loose DLLs from the
 # multi-file layout would sit next to the single-file exe forever. Only build
-# output is removed here: settings.json, sensors.txt, notes\ and sessions\ are
-# the user's data.
+# output is removed here. The user's data lives in %APPDATA%\DeskMon since
+# 1.65; on a machine not yet moved, app\ still holds settings.json, notes\ and
+# sessions\, and DeskMon moves them itself on its next start.
 Get-ChildItem $output -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -eq '.dll' -or $_.Name -in 'DeskMon.deps.json', 'DeskMon.runtimeconfig.json' } |
     Remove-Item -Force
@@ -237,5 +238,26 @@ for ($attempt = 1; $attempt -le 3; $attempt++) {
 Write-Host ""
 Write-Host "Built: $builtExe" -ForegroundColor Green
 Remove-Item $previousExe -Force -ErrorAction SilentlyContinue
+
+# app\ writable only by Administrators and SYSTEM, readable by everyone else.
+# DeskMon.exe is started elevated at logon by its scheduled task, so a folder
+# any program could write to let any program put its own exe there and have it
+# run as admin with no prompt - S1 in the security review. Its data moved out
+# to %APPDATA% in 1.65, so nothing ordinary needs to write here any more; this
+# script and DeskMon itself both run elevated. By SID, not by name: the names
+# are translated on a Windows in another language. Every build, so a
+# folder recreated or reset is locked again. A failure is said, not fatal.
+# The folder only, then everything in it reset to inherit from it. Not /T on
+# the grant: that put the folder's inheritable entries on DeskMon.exe too,
+# where (OI)(CI) mean nothing - the exe was left with no usable permissions
+# and Windows refused to start it for anyone.
+& icacls $output /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /C /Q | Out-Null
+$locked = $LASTEXITCODE -eq 0
+& icacls (Join-Path $output '*') /reset /T /C /Q | Out-Null
+if ($locked -and $LASTEXITCODE -eq 0) {
+    Write-Host "Locked $output - only administrators can change it." -ForegroundColor DarkGray
+} else {
+    Write-Host "Couldn't lock $output (icacls exit code $LASTEXITCODE) - it stays writable by every user." -ForegroundColor Yellow
+}
 
 Start-DeskMon

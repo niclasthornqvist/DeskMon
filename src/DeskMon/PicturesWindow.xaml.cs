@@ -542,11 +542,13 @@ public partial class PicturesWindow : PanelWindow
 
         // Pictures the notes show with no file behind them - deleted, and gone
         // from the Recycle Bin too. They can't be tiles, having no file, so
-        // they are counted on a card instead of passing unnoticed.
-        var namesInNotes = _notes.PictureNamesInNotes();
-        int inNotes = namesInNotes.Count;
-        var files = pictures.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        int missing = namesInNotes.Count(name => !files.Contains(name));
+        // they are counted on a card instead of passing unnoticed. By the
+        // file each one links to, not by name in this folder: one copied in
+        // from another game's notes lives in that game's folder, and isn't
+        // missing at all.
+        var pathsInNotes = _notes.PicturePathsInNotes();
+        int inNotes = pathsInNotes.Select(Path.GetFileName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        int missing = pathsInNotes.Count(path => !File.Exists(path));
 
         string shown = $"{_notes.CurrentGame}|{inNotes}|{missing}|" + string.Join("|", pictures.Select(p => $"{p.Name}:{p.Bytes}:{p.InNotes}:{p.Favourite}"));
         if (shown == _shown)

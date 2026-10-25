@@ -31,6 +31,12 @@ internal static class AtomicFile
         // a copy is not atomic.
         string temp = path + ".tmp";
 
+        // The folder too, if it isn't there: a Windows user starting DeskMon
+        // for the first time has no %APPDATA%\DeskMon yet, and the first thing
+        // written - settings.json, on the first drag - would fail without it.
+        if (Path.GetDirectoryName(path) is { Length: > 0 } folder)
+            Directory.CreateDirectory(folder);
+
         // Flushed through to the disk before the rename. Without it the rename
         // is atomic but the data may not be: Windows can commit the rename
         // before it writes the file's contents out, and a power cut in that

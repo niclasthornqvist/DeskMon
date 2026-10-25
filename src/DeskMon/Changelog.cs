@@ -28,6 +28,21 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.65.0", "2026-10-25",
+            "Sessions: a stutter count per session - frames 2.5 times slower than usual (and at least 8 ms) - as a Stutters column and a Stutters per hour chart",
+            "Sessions: CPU+GPU energy per session in kWh, and with an energy price set in Settings a Cost column - both in the CSV export too",
+            "Sessions: a session played on a new GPU driver or after a Windows update is marked in the table and with a triangle under its bar, with the versions in its tooltip",
+            "Games: 20 seconds into a game, one notification if something heavy runs beside it - a browser using gigabytes, Windows Update or a virus scan busy on the CPU (can be turned off in Settings)",
+            "Your settings, notes, sessions and pictures move from app\\ to %APPDATA%\\DeskMon (the art cache to %LOCALAPPDATA%), so each Windows user has their own - moved once, by itself, with the notes' picture links rewritten",
+            "Security: Build.ps1 locks app\\ so only administrators can change DeskMon.exe, which starts elevated at logon",
+            "The data move only takes data that belongs to you - another account on the PC starting DeskMon first starts fresh instead of taking your notes - and checks every picture link through the notepad's own reader before anything old is deleted",
+            "Hardware: a failed read says what went wrong instead of leaving the loading screen up for good, and the dots stop when the window is closed",
+            "Fix: a crash restart waits for the old copy to be gone - no second tray icon, and the session no longer logged twice",
+            "Fix: the game-start check sees protected processes too, such as a Defender scan, and reads every process at once instead of opening each one",
+            "Fix: MISSING and HISTORY's restore go by the file each picture links to, so one copied in from another game's notes isn't counted as missing, and the Recycle Bin is searched without freezing the windows",
+            "Fix: a session's energy is recorded with a slow in-game interval too",
+            "DeskMon restarts itself after a crash - at most once every 10 minutes - and says so, so the widget doesn't stay gone mid-game",
+            "DeskMon.exe is about 6 MB smaller (23 to 17 MB): the libraries only the LOG and hardware windows use are no longer precompiled - startup is unchanged"),
         new("1.64.1", "2026-10-25",
             "Pictures: \"No pictures yet\" waits a moment, then fades in and rises smoothly, instead of popping in half-way when the window opens",
             "Fixed: reopening the pictures window flashed \"No pictures yet\" up for a moment before its fade began",

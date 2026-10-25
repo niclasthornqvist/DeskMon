@@ -120,6 +120,18 @@ public partial class MainWindow : Window
     private DateTime _sessionStartedAt;
 
     /// <summary>
+    /// What the CPU and GPU have drawn this session, in watt-hours, added up
+    /// from their power readings each tick - see AddSessionEnergy. Null until
+    /// either has reported a figure, so a PC without power sensors logs no
+    /// "energy 0 Wh" that would read as a measurement.
+    /// </summary>
+    private double? _sessionEnergyWh;
+    private DateTime _lastEnergyAt;
+
+    /// <summary>The GPU driver and Windows build the session is played on - see SystemInfo.QuickVersions.</summary>
+    private string? _sessionDriver, _sessionBuild;
+
+    /// <summary>
     /// The session's game's time from its history, read once when the session
     /// opens. The heading adds the running session to it every tick, which
     /// would otherwise mean reading the whole log every tick.
@@ -312,6 +324,18 @@ public partial class MainWindow : Window
         _tray = new TrayIcon("DeskMon");
         _tray.ApplyTheme();
         _theme.Changed += _tray.ApplyTheme;
+
+        // Said, so a widget that vanished for a moment mid-game isn't a mystery
+        // - see App.RestartAfterCrash.
+        if (App.StartedAfterCrash)
+            _tray.Notify("DeskMon", "DeskMon restarted after a crash - the details are in error.log.", warning: true);
+
+        // The data stayed in app\ this run - see DataFolder.Prepare. Said, so
+        // it isn't a silent mystery why it still lives there.
+        if (DataFolder.MoveProblem is { } problem)
+            _tray.Notify("DeskMon", DataFolder.UsingOldFolder
+                ? $"Couldn't move your data to %APPDATA%\\DeskMon: {problem} It stays in app\\ for now; the next start tries again."
+                : problem, warning: true);
 
         _tray.ToggleWidget += show =>
         {
@@ -819,6 +843,7 @@ public partial class MainWindow : Window
                 && _rows.Exists(row => row.IsExpanded && row.Key is "Usage/RAM" or "Usage/SWAP");
 
             var snapshot = await Task.Run(hub.Read);
+            AddSessionEnergy(snapshot);
 
             // FPS is measured by a separate process, not by SensorHub. One read
             // for all three figures, so the average and the lows describe the
@@ -1412,6 +1437,16 @@ public partial class MainWindow : Window
         _sessionGame = game;
         _sessionStartedAt = DateTime.Now;
         _sessionStats = new FrameStats();
+        _sessionEnergyWh = null;
+        _lastEnergyAt = default;
+        _sessionDriver = _sessionBuild = null;
+
+        // Off the tick: the registry read is quick, but the tick is what the
+        // game's first seconds are measured on. And the look at what else is
+        // running, a while in - see CheckAlongsideAsync.
+        _ = ReadSessionVersionsAsync(_sessionStartedAt);
+        if (game is not null && _settings.GameStartCheck)
+            _ = CheckAlongsideAsync(game, pid, _sessionStartedAt);
 
         // Read once per session: the log can't gain a line for this game while
         // its own session is still the one open, and Steam only adds this
@@ -1467,6 +1502,92 @@ public partial class MainWindow : Window
             // Only the heading's figure is lost; the session itself is logged regardless.
             App.Log("looking up playtime", ex);
         }
+    }
+
+    /// <summary>
+    /// The driver and Windows build for the session's line, read on a worker
+    /// thread. <paramref name="session"/> is the session's start, so a read
+    /// that finishes after its session has been replaced is dropped rather
+    /// than put on the next one.
+    /// </summary>
+    private async Task ReadSessionVersionsAsync(DateTime session)
+    {
+        try
+        {
+            string? gpu = _hub?.GpuName;
+            var (driver, build) = await Task.Run(() => Hardware.SystemInfo.QuickVersions(gpu));
+            if (session != _sessionStartedAt || _sessionPid == 0)
+                return;
+
+            // Spaces out: a part of the line is split at " · ", and read back
+            // as one word after "driver" - see SessionRecord.
+            _sessionDriver = driver?.Replace(" ", string.Empty);
+            _sessionBuild = build?.Replace(" ", string.Empty);
+        }
+        catch (Exception ex)
+        {
+            App.Log("reading the driver for a session", ex);   // the line goes without them
+        }
+    }
+
+    /// <summary>How long into a session before looking at what else is running: past the game's own loading.</summary>
+    private static readonly TimeSpan AlongsideCheckAfter = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Once per session, a while in: one quiet notification if something heavy
+    /// is running beside the game - a browser holding gigabytes, Windows Update
+    /// or a Defender scan eating CPU - since that is the usual answer to "why
+    /// does it stutter tonight". Nothing at all when nothing stands out.
+    /// See GameStartCheck for what counts.
+    /// </summary>
+    private async Task CheckAlongsideAsync(string game, int pid, DateTime session)
+    {
+        try
+        {
+            await Task.Delay(AlongsideCheckAfter);
+            if (session != _sessionStartedAt || _sessionPid == 0)
+                return;   // the game has gone, or another took its place
+
+            var found = await Task.Run(() => Sensors.GameStartCheck.Run(_sessionPid));
+            if (session != _sessionStartedAt || found.Count == 0)
+                return;
+
+            _tray?.Notify("DeskMon", $"Running alongside {game}: {string.Join("  ·  ", found)}", warning: false);
+        }
+        catch (Exception ex)
+        {
+            App.Log("checking what runs beside the game", ex);
+        }
+    }
+
+    /// <summary>
+    /// Adds this tick's CPU and GPU power to the session's energy: watts times
+    /// the real time since the last reading, so the slower in-game interval
+    /// counts as much as it should. Only while the game is running - not the
+    /// minute an exited game is waited on - and a gap of three missed readings
+    /// (the PC locked or asleep) is not filled in with a guess.
+    /// </summary>
+    private void AddSessionEnergy(SensorSnapshot snapshot)
+    {
+        if (_sessionPid == 0 || _sessionExitedAt is not null)
+            return;
+
+        var now = DateTime.Now;
+        var since = now - _lastEnergyAt;
+        _lastEnergyAt = now;
+
+        if (snapshot.CpuPower is null && snapshot.GpuPower is null)
+            return;
+
+        // A gap is three readings missed, and never under 10 s: a fixed 10 s
+        // skipped every reading for anyone with the game interval set that
+        // slow, and the session logged no energy at all.
+        var gap = TimeSpan.FromTicks(Math.Max(TimeSpan.FromSeconds(10).Ticks, _timer.Interval.Ticks * 3));
+        if (since <= TimeSpan.Zero || since > gap)
+            return;   // the first reading, or after a gap: only a start point
+
+        double watts = (snapshot.CpuPower ?? 0) + (snapshot.GpuPower ?? 0);
+        _sessionEnergyWh = (_sessionEnergyWh ?? 0) + watts * since.TotalHours;
     }
 
     /// <summary>
@@ -1532,12 +1653,15 @@ public partial class MainWindow : Window
         _sessionExitedAt = null;
 
         var frames = _sessionStats;
+        var extras = SessionExtras();
 
         _sessionProcess?.Dispose();
         _sessionProcess = null;
         _sessionGame = null;
         _sessionPid = 0;
         _sessionStats = new FrameStats();
+        _sessionEnergyWh = null;
+        _sessionDriver = _sessionBuild = null;
 
         if (!_settings.LogSessionToFile || game is null)
             return;   // nothing to file it under, or switched off
@@ -1545,7 +1669,7 @@ public partial class MainWindow : Window
         if (ended - started < ShortestLoggedSession)
             return;
 
-        _sessions.Append(game, DescribeSession(started, ended, frames, note));
+        _sessions.Append(game, DescribeSession(started, ended, frames, extras, note));
 
         // The notepad shows the last session under the notes, and the one that
         // just ended is now it; the history window lists it too.
@@ -1600,8 +1724,13 @@ public partial class MainWindow : Window
         // A game that had already quit wasn't cut short by anything.
         string? note = _sessionExitedAt is null ? "cut short, DeskMon stopped unexpectedly" : null;
 
-        _sessions.SaveOpenSession(_sessionGame, DescribeSession(_sessionStartedAt, ended, frames, note));
+        _sessions.SaveOpenSession(_sessionGame, DescribeSession(_sessionStartedAt, ended, frames, SessionExtras(), note));
     }
+
+    /// <summary>What the line carries besides the frames and peaks: the energy, the driver and the build.</summary>
+    private sealed record SessionExtrasInfo(double? EnergyWh, string? Driver, string? WindowsBuild);
+
+    private SessionExtrasInfo SessionExtras() => new(_sessionEnergyWh, _sessionDriver, _sessionBuild);
 
     /// <summary>
     /// Adds what PresentMon has counted so far to the session's running totals,
@@ -1665,7 +1794,7 @@ public partial class MainWindow : Window
     /// Every row is included rather than a chosen few, so a metric added to
     /// MetricRegistry turns up here too without this method knowing about it.
     /// </summary>
-    private string DescribeSession(DateTime started, DateTime ended, FrameStats frames, string? note)
+    private string DescribeSession(DateTime started, DateTime ended, FrameStats frames, SessionExtrasInfo extras, string? note)
     {
         var line = new StringBuilder();
         // Invariant like the figures below: in a format string ':' means the
@@ -1688,6 +1817,21 @@ public partial class MainWindow : Window
             line.Append(FormattableString.Invariant($" · 0.1% low {lowest:0} fps"));
         if (frames.JitterMs is double jitter)
             line.Append(FormattableString.Invariant($" · jitter {jitter:0.0} ms"));
+
+        // The hitches the average and the lows can hide - see FrameStats.Stutters.
+        if (frames.Stutters is long stutters)
+            line.Append(FormattableString.Invariant($" · stutters {stutters}"));
+
+        // CPU and GPU only, not the PC from the wall - the LOG window says so.
+        if (extras.EnergyWh is double energy)
+            line.Append(FormattableString.Invariant($" · energy {energy:0} Wh"));
+
+        // So a session played on a new driver or after a Windows update can be
+        // marked against the one before - see SessionsWindow's change marks.
+        if (extras.Driver is { } driver)
+            line.Append($" · driver {driver}");
+        if (extras.WindowsBuild is { } build)
+            line.Append($" · windows {build}");
 
         foreach (var row in _rows)
         {

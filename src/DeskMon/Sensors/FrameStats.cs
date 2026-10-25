@@ -113,6 +113,52 @@ public sealed class FrameStats
     }
 
     /// <summary>
+    /// How many frames were stutters: at least 2.5 times the session's median
+    /// frame time, and at least 8 ms more than it - so at 120 fps a frame of
+    /// 21 ms or more, at 60 fps one of 42 ms or more. The average and the lows
+    /// can look fine while a game hitches every few seconds; this counts the
+    /// hitches. The 8 ms floor is for high frame rates, where 2.5 times a
+    /// 4 ms frame is a dip nobody feels.
+    ///
+    /// Frames past the histogram's last bin (100 ms and up) are left out:
+    /// those are loading screens and hangs, which the 0.1% low already shows.
+    /// From the histogram alone, so it is exact across merged runs and costs
+    /// nothing per frame. Null below the 1% low's floor, like the lows.
+    /// </summary>
+    public long? Stutters
+    {
+        get
+        {
+            if (Frames < OnePercentFloor)
+                return null;
+
+            // The median: the bin the middle frame falls in, by its frames'
+            // own average - within a quarter millisecond either way.
+            long half = (Frames + 1) / 2, seen = 0;
+            double median = 0;
+            for (int i = 0; i <= Bins; i++)
+            {
+                seen += _counts[i];
+                if (seen >= half)
+                {
+                    median = _counts[i] > 0 ? _sums[i] / _counts[i] : (i + 0.5) * BinMs;
+                    break;
+                }
+            }
+
+            double threshold = Math.Max(2.5 * median, median + 8);
+
+            // Whole bins from the one the threshold starts in, short of the
+            // last; the bin it cuts through counts if its frames average above it.
+            long stutters = 0;
+            for (int i = (int)(threshold / BinMs); i < Bins; i++)
+                if (_counts[i] > 0 && _sums[i] / _counts[i] >= threshold)
+                    stutters += _counts[i];
+            return stutters;
+        }
+    }
+
+    /// <summary>
     /// The slowest <paramref name="fraction"/> of frames, averaged as the
     /// widget's lows are (see FpsMonitor.LowAverage): their total time, taken
     /// from the slowest bins down, the last bin only in part.
