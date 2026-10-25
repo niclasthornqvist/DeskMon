@@ -166,7 +166,7 @@ public static class SettingsCatalogue
             new Setting("BarStyle", "Bar style", "Segmented cuts the bar into blocks, like an LED meter.",
                         Choices: new[] { "rounded", "segmented" }),
             new Setting("BarTrackWidth", "Bar length", "", Unit: "px", Slider: new(10, 250, 1), Min: 1),
-            new Setting("BarTrackHeight", "Bar thickness", "1 or 2 makes it a thin line.", Unit: "px", Slider: new(1, 20, 1)),
+            new Setting("BarTrackHeight", "Bar thickness", "Thin as a line at the low end, a thick block at the high end.", Unit: "px", Slider: new(1, 20, 1)),
             new Setting("ShowPeaks", "Show peaks", "The highest reading so far (lowest for FPS), after the bar."),
             new Setting("ShowPeakMarker", "Peak marker on the bar", "A thin tick where the peak reached."),
             new Setting("LabelWidth", "Label column", "Widen it if labels are cut off.", Unit: "px", Slider: new(20, 200, 1), Min: 0),

@@ -28,6 +28,8 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.67.1", "2026-10-25",
+            "Fix: Settings' Bar thickness no longer reads as if only 1 or 2 were allowed - any value from 1 to 20 px works"),
         new("1.67.0", "2026-10-25",
             "Widget: the clock is bigger - the time large in the section colour, with the day and date stacked beside it behind an accent bar",
             "Settings: the groups are listed down the left and one is shown at a time, instead of one page of over seventy rows",
