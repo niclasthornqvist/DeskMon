@@ -163,8 +163,9 @@ public static class SettingsCatalogue
         // for the bar's thickness.
         new("Bars and columns", "Wider columns make a wider widget.",
             new Setting("ShowBars", "Show bars", "A bar beside each reading."),
-            new Setting("BarStyle", "Bar style", "Segmented cuts the bar into blocks, like an LED meter.",
-                        Choices: new[] { "rounded", "segmented" }),
+            new Setting("BarStyle", "Bar style", "Pill, square, blocks, dots, stripes, 10% ticks, outline, outline with stripes, or a line with a knob.",
+                        Choices: new[] { "rounded", "flat", "segmented", "dots", "striped", "ticks", "outlined", "outlined-striped", "line" }),
+            new Setting("ValueInBar", "Value inside the bar", "The number on the bar, which then fills the row between label and peak."),
             new Setting("BarTrackWidth", "Bar length", "", Unit: "px", Slider: new(10, 250, 1), Min: 1),
             new Setting("BarTrackHeight", "Bar thickness", "Thin as a line at the low end, a thick block at the high end.", Unit: "px", Slider: new(1, 20, 1)),
             new Setting("ShowPeaks", "Show peaks", "The highest reading so far (lowest for FPS), after the bar."),

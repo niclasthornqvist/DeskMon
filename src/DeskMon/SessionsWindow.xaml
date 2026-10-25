@@ -126,15 +126,11 @@
                 </Button>
             </StackPanel>
 
-            <!-- Under the actions, as the notes' picker is. -->
+            <!-- Under the actions, as the notes' picker is. No "Game" label
+                 before it: the list of games, with their icons, says what it
+                 picks, and the label only took width from it. -->
             <Grid DockPanel.Dock="Top" Margin="12,0,12,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="PickerLabel" Grid.Column="0" Text="Game"
-                           VerticalAlignment="Center" Margin="0,0,8,0" />
-                <ComboBox x:Name="GamePicker" Grid.Column="1"
+                <ComboBox x:Name="GamePicker"
                           Style="{StaticResource DarkCombo}"
                           ItemTemplate="{StaticResource GamePickerItem}"
                           ItemContainerStyle="{StaticResource GamePickerRow}"
@@ -149,34 +145,42 @@
                  bright type. They used to be one sentence of bright and dim
                  words, which had to be read through to find a number. Filled
                  in code; wraps onto a second row in a narrow window. -->
+            <!-- Two columns and no rows: everything on the left in one stack,
+                 the date chips and the game's logo in one on the right. Rows
+                 shared between the two sides let the logo's height leak into
+                 the left side as a gap under the cards that no margin could
+                 close, so each side now stacks on its own and only the
+                 margins set here space it. -->
             <Grid DockPanel.Dock="Top">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
 
-            <WrapPanel x:Name="Stats" Grid.ColumnSpan="2" Margin="12,10,4,0" />
+            <!-- The right side: dates at the top, logo at the bottom. A
+                 DockPanel, so the two add up rather than overlap when the
+                 left side is short - under All games, with no chart. -->
+            <DockPanel Grid.Column="1" LastChildFill="True">
 
-            <!-- Under the cards, quietly: when it was first and last played,
-                 or why there is nothing to show. -->
-            <TextBlock x:Name="SummaryText" Grid.Row="1"
-                       Margin="12,0,12,0" TextWrapping="Wrap" />
+            <!-- In the top right corner, opposite the cards: first and last
+                 played for a game, most and last played for All games, as
+                 chips stacked right-aligned (filled in ShowSummary and
+                 ShowAllGamesSummary). Under the cards they pushed the chart
+                 down and sat between two rows of figures they have nothing to
+                 do with; here they use the room the cards leave free. The
+                 cards don't reach into this column, so the two never overlap -
+                 the cards wrap sooner instead. -->
+            <StackPanel x:Name="Dates" DockPanel.Dock="Top" Margin="8,10,16,0"
+                        VerticalAlignment="Top" HorizontalAlignment="Right" />
 
             <!-- Which game, at the bottom right of its banner: the game's own
                  logo where Steam has one, else its name in large type over a
-                 short accent bar. Beside the summary and the chart's picker
-                 rather than the cards, which keep the full width. Set in code
-                 with the banner. As tall as the tallest logo whatever it
-                 holds, so the chart below stays where it is when one game has
-                 a logo and the next only its name. The logo or name opens the
-                 game's Steam page; the grid itself has no background, so only
-                 they take the click. -->
-            <Grid x:Name="GameTitle" Grid.Row="1" Grid.RowSpan="2" Grid.Column="1"
+                 short accent bar. Set in code with the banner. As tall as the
+                 tallest logo whatever it holds, so the chart below stays
+                 where it is when one game has a logo and the next only its
+                 name. The logo or name opens the game's Steam page; the grid
+                 itself has no background, so only they take the click. -->
+            <Grid x:Name="GameTitle"
                   VerticalAlignment="Bottom" HorizontalAlignment="Right"
                   Height="76" Margin="8,6,16,4" Opacity="0">
                 <Grid.Effect>
@@ -200,40 +204,112 @@
                                LineHeight="22" LineStackingStrategy="BlockLineHeight" />
                 </StackPanel>
             </Grid>
+            </DockPanel>
+
+            <!-- The left side, top to bottom. -->
+            <StackPanel Grid.Column="0">
+
+            <WrapPanel x:Name="Stats" Margin="12,10,4,0" />
+
+            <!-- Under the cards, a line of text - why there is nothing to
+                 show, or an error. -->
+            <TextBlock x:Name="SummaryText" Margin="12,0,12,0" TextWrapping="Wrap"
+                       Visibility="Collapsed" />
 
             <!-- One bar per session, oldest on the left. Drawn in code, and
                  redrawn when the window is resized. The picker is the title, so
                  what the bars measure is said where the choice is made. -->
-            <StackPanel x:Name="ChartTitle" Grid.Row="2" Orientation="Horizontal"
-                        Margin="12,10,12,4">
+            <!-- Stacked, not in a row: PER SESSION and its chips first, right
+                 under LAST SESSION's so the two blocks of figures line up on
+                 the left as a pair, then the picker on a line of its own
+                 just over the chart it picks for. -->
+            <!-- 6 on top plus the cards' own 8 under them, and 14 over the
+                 picker: the two blocks sit centred between the cards and the
+                 picker. -->
+            <StackPanel x:Name="ChartTitle"
+                        Margin="12,6,12,4">
+                <!-- The latest session at a glance - when, how long, its
+                     frame rate and score - with a heading like PER SESSION's
+                     (filled in ShowSummary). In the same panel as PER SESSION,
+                     so the two read as a pair. -->
+                <StackPanel x:Name="LastSessionPanel" Visibility="Collapsed">
+                    <TextBlock x:Name="LastSessionTitle" Text="LAST SESSION" Margin="2,0,0,3" />
+                    <WrapPanel x:Name="LastSession" />
+                </StackPanel>
+                <!-- "Per session" as the heading over the chips it describes,
+                     not a loose phrase between the picker and them: beside
+                     the picker it read as part of the reading's name. -->
+                <StackPanel x:Name="ChipsPanel" HorizontalAlignment="Left" Margin="0,4,0,0">
+                    <TextBlock x:Name="ChartTitleText" Text="PER SESSION" Margin="2,0,0,3" />
+                    <StackPanel Orientation="Horizontal">
+                        <!-- Each figure in a chip of its own colour: the key, a small
+                             caption and the figure itself, larger. Three loose lines
+                             of small text in a row read as one sentence and were hard
+                             to pick a number out of. Colours and fonts in ApplyTheme,
+                             the figures in DrawChart.
+
+                             The average over the bars drawn, so the chart can be read
+                             as one figure without adding the bars up by eye. Its key
+                             is a short line, not a square: it is drawn as a line
+                             across the chart, not as a bar. -->
+                        <Border x:Name="AverageChip" Margin="0,0,0,0" Padding="9,3,10,3"
+                                CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="AverageSwatch" Width="12" Height="2" CornerRadius="1"
+                                        Margin="0,0,7,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="AverageText" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <!-- The key for the one bar drawn in another colour, so the
+                             colour is explained where it is seen, not in a tooltip. -->
+                        <Border x:Name="HighestChip" Margin="8,0,0,0" Padding="9,3,10,3"
+                                CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="HighestSwatch" Width="9" Height="9" CornerRadius="2.5"
+                                        Margin="0,0,7,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="HighestText" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <!-- And the lowest, in a third colour. Only when it differs
+                             from the highest: with one session, or every bar level,
+                             there is no lowest to point out. -->
+                        <Border x:Name="LowestChip" Margin="8,0,0,0" Padding="9,3,10,3"
+                                CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="LowestSwatch" Width="9" Height="9" CornerRadius="2.5"
+                                        Margin="0,0,7,0" VerticalAlignment="Center" />
+                                <TextBlock x:Name="LowestText" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
                 <ComboBox x:Name="ChartPicker" Style="{StaticResource DarkCombo}"
-                          MinWidth="150" VerticalAlignment="Center" />
-                <TextBlock x:Name="ChartTitleText" Text="per session"
-                           Margin="8,0,0,0" VerticalAlignment="Center" />
-                <!-- The average over the bars drawn, so the chart can be read
-                     as one figure without adding the bars up by eye. Its key
-                     is a short line, not a square: it is drawn as a line
-                     across the chart, not as a bar. -->
-                <Border x:Name="AverageSwatch" Width="10" Height="2" CornerRadius="1"
-                        Margin="14,0,5,0" VerticalAlignment="Center" />
-                <TextBlock x:Name="AverageText" Text="average" VerticalAlignment="Center" />
-                <!-- The key for the one bar drawn in another colour, so the
-                     colour is explained where it is seen, not in a tooltip. -->
-                <Border x:Name="HighestSwatch" Width="8" Height="8" CornerRadius="2"
-                        Margin="14,0,5,0" VerticalAlignment="Center" />
-                <TextBlock x:Name="HighestText" Text="highest" VerticalAlignment="Center" />
-                <!-- And the lowest, in a third colour. Only when it differs
-                     from the highest: with one session, or every bar level,
-                     there is no lowest to point out. -->
-                <Border x:Name="LowestSwatch" Width="8" Height="8" CornerRadius="2"
-                        Margin="12,0,5,0" VerticalAlignment="Center" />
-                <TextBlock x:Name="LowestText" Text="lowest" VerticalAlignment="Center" />
+                          MinWidth="150" HorizontalAlignment="Left" Margin="0,14,0,0" />
+            </StackPanel>
             </StackPanel>
             </Grid>
-            <Canvas x:Name="Chart" DockPanel.Dock="Top" Height="110"
+            <!-- 160, up from 110: with the session IDs under the bars the plot
+                 itself had grown too flat to tell sessions apart by height. -->
+            <Canvas x:Name="Chart" DockPanel.Dock="Top" Height="160"
                     Margin="12,0,12,0" ClipToBounds="True"
                     Background="Transparent"
                     SizeChanged="Chart_SizeChanged" />
+
+            <!-- Between the chart and the table: a thin line in the accent,
+                 strongest in the middle and fading out at both ends, so the
+                 two read as separate parts without a hard box edge. The
+                 table's first heading row sat right under the session IDs
+                 before, and the two lines of small numbers ran together.
+                 Shown and hidden with the chart - see DrawChart. -->
+            <Border x:Name="ChartRule" DockPanel.Dock="Top" Height="1" Margin="24,14,24,0">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="{DynamicResource Theme.AccentColor.14}" Offset="0" />
+                        <GradientStop Color="{DynamicResource Theme.AccentColor.80}" Offset="0.5" />
+                        <GradientStop Color="{DynamicResource Theme.AccentColor.14}" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
 
             <!-- Column headings, outside the scroller so they stay put. -->
             <Grid x:Name="TableHeader" DockPanel.Dock="Top" Margin="12,12,12,2" />
@@ -241,7 +317,15 @@
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           Margin="12,2,4,10" Focusable="False">
-                <StackPanel x:Name="Rows" Margin="0,0,8,0" />
+                <!-- The rows, and over them the column groups' dividing
+                     lines, drawn once down the whole table rather than once
+                     per row - see ShowTable. Over, not under: a picked row's
+                     background would hide them. Never hit, so clicks reach
+                     the rows. -->
+                <Grid Margin="0,0,8,0">
+                    <StackPanel x:Name="Rows" />
+                    <Grid x:Name="GroupLines" IsHitTestVisible="False" />
+                </Grid>
             </ScrollViewer>
         </DockPanel>
         </Grid>

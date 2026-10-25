@@ -290,7 +290,7 @@ public partial class MainWindow : Window
         // button - which runs the source tree as administrator - is never
         // mistaken for a normal install.
         VersionText.Text = "v" + Changelog.Current + (_settings.DeveloperRebuild ? " (Developer mode)" : "");
-        VersionText.ToolTip = $"DeskMon {Changelog.Current}\nClick to see what changed.";
+        VersionChip.ToolTip = $"DeskMon {Changelog.Current}\nClick to see what changed.";
         ApplyVersionStyle();
 
         _clockTimer.Tick += (_, _) => UpdateClock();
@@ -357,11 +357,13 @@ public partial class MainWindow : Window
         _tray.IsAlwaysOnTop = () => _settings.AlwaysOnTop;
         _tray.IsLocked = () => _settings.Locked;
         _tray.OpenHardware += () => _ = ShowHardwareAsync();
-        _tray.OpenVersions += ShowVersions;
-        _tray.OpenSessions += () => ShowSessions(null);
-        _tray.OpenNotes += () => Notes().ShowAndFocus(_gameName);
+        // Through Open, like the toolbar and menu, so a window that can't be
+        // made says so rather than counting towards a crash.
+        _tray.OpenVersions += () => Open("versions window", ShowVersions);
+        _tray.OpenSessions += () => Open("sessions window", () => ShowSessions(null));
+        _tray.OpenNotes += () => Open("notes window", () => Notes().ShowAndFocus(_gameName));
         _tray.OpenNotesFolder += OpenNotesFolder;
-        _tray.OpenSettingsWindow += () => SettingsPanel().ShowAndFocus();
+        _tray.OpenSettingsWindow += () => Open("settings window", () => SettingsPanel().ShowAndFocus());
         _tray.OpenSettings += OpenSettingsFile;
         _tray.ReloadSettings += RestartForSettings;
         _tray.ExitRequested += () =>
@@ -1327,8 +1329,10 @@ public partial class MainWindow : Window
         // Bring up this game's notepad. ShowFor deliberately does not activate
         // the window: taking focus here would tab the player out of the game
         // they just launched.
+        // Through Open: this runs in the tick, where a notes window that can't
+        // be made would otherwise fail on every game start.
         if (_settings.AutoOpenNotesWithGame)
-            Notes().ShowFor(_gameName);
+            Open("notes window", () => Notes().ShowFor(_gameName));
         else
             _notes?.ShowFor(_gameName);   // already open: at least switch it over
     }
@@ -2029,9 +2033,14 @@ public partial class MainWindow : Window
     {
         // Lit, like the toolbar toggles, while its window is open or the mouse
         // is on it - so it reads as something to click, not only a label.
-        bool lit = VersionText.IsMouseOver || _versions is { IsVisible: true };
+        // The chip's own hover, not the text's: the padding round the number
+        // is part of the button.
+        bool lit = VersionChip.IsMouseOver || _versions is { IsVisible: true };
         VersionText.Foreground = lit ? _theme.Section : _theme.Header;
         VersionText.FontSize = Math.Max(8, _settings.FontSize - 2.5);
+        // An outline at rest so it looks like a button, the accent when lit.
+        VersionChip.BorderBrush = lit ? _theme.Accent : _theme.Separator;
+        VersionChip.Background = lit ? _theme.AccentAt(0x40) : Brushes.Transparent;
 
         // The clock: the time well above the rows' size so it is readable at a
         // glance from across the desk, in the section colour, and the day and
@@ -2062,7 +2071,11 @@ public partial class MainWindow : Window
         var culture = System.Globalization.CultureInfo.InvariantCulture;
         ClockTime.Text = now.ToString("HH:mm", culture);
         ClockDay.Text = now.ToString("dddd", culture).ToUpperInvariant();
-        ClockDate.Text = now.ToString("yyyy-MM-dd", culture);
+        // The ISO week, as Sweden and most of Europe count them - weeks start
+        // on Monday and week 1 holds the year's first Thursday. Not
+        // Calendar.GetWeekOfYear, which gives the US count and is a week off
+        // in some years, around New Year especially.
+        ClockDate.Text = $"{now.ToString("yyyy-MM-dd", culture)}  ·  Week {System.Globalization.ISOWeek.GetWeekOfYear(now)}";
 
         // A few milliseconds past the minute, so a timer that fires a hair
         // early still lands on the new one rather than showing the old again.
@@ -2077,7 +2090,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void VersionText_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        ToggleWindow(_versions, ShowVersions);
+        ToggleWindow(_versions, "versions window", ShowVersions);
         e.Handled = true;
     }
 
@@ -2776,7 +2789,7 @@ public partial class MainWindow : Window
     /// nothing is. Asked for explicitly, so this one does take focus.
     /// </summary>
     private void MenuNotes_Click(object sender, RoutedEventArgs e)
-        => Notes().ShowAndFocus(_gameName);
+        => Open("notes window", () => Notes().ShowAndFocus(_gameName));
 
     // --- Toolbar ----------------------------------------------------------
     //
@@ -2786,16 +2799,16 @@ public partial class MainWindow : Window
     // be a surprise rather than a convenience.
 
     private void ToolHardware_Click(object sender, RoutedEventArgs e)
-        => ToggleWindow(_hardware, () => _ = ShowHardwareAsync());
+        => ToggleWindow(_hardware, "hardware window", () => _ = ShowHardwareAsync());
 
     private void ToolSessions_Click(object sender, RoutedEventArgs e)
-        => ToggleWindow(_sessionsWindow, () => ShowSessions(null));
+        => ToggleWindow(_sessionsWindow, "sessions window", () => ShowSessions(null));
 
     private void ToolNotes_Click(object sender, RoutedEventArgs e)
-        => ToggleWindow(_notes, () => Notes().ShowAndFocus(_gameName));
+        => ToggleWindow(_notes, "notes window", () => Notes().ShowAndFocus(_gameName));
 
     private void ToolSettings_Click(object sender, RoutedEventArgs e)
-        => ToggleWindow(_settingsWindow, () => SettingsPanel().ShowAndFocus());
+        => ToggleWindow(_settingsWindow, "settings window", () => SettingsPanel().ShowAndFocus());
 
     /// <summary>
     /// The settings window, created on first use like the others. Its two
@@ -3141,17 +3154,40 @@ public partial class MainWindow : Window
     /// Hiding directly would skip that, so the button would quietly behave
     /// differently from the window's own ✕.
     /// </summary>
-    private void ToggleWindow(Window? window, Action show)
+    private void ToggleWindow(Window? window, string what, Action show)
     {
         if (window is { IsVisible: true })
             window.Close();
         else
-            show();
+            Open(what, show);
 
         // Normally redundant - the visibility change has already called this -
         // but it also puts the toggle back when a click changed nothing, which
         // is what a failed show would otherwise leave lit.
         RefreshToolButtons();
+    }
+
+    /// <summary>
+    /// Shows a window, and if making or showing it fails, says so instead of
+    /// crashing. Unguarded, the error reached the UI thread's handler: a
+    /// window whose setup fails once fails on every click - the sessions
+    /// window's broken static setup did - and five clicks in a minute shut
+    /// DeskMon down and restarted it into the same state. The window's field
+    /// is only set once its constructor has finished, so the next click tries
+    /// again from scratch.
+    /// </summary>
+    /// <param name="what">The window as the message names it: "sessions window".</param>
+    private void Open(string what, Action show)
+    {
+        try
+        {
+            show();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"opening the {what}", ex);
+            _tray?.Notify("DeskMon", $"The {what} couldn't open - the details are in error.log.", warning: true);
+        }
     }
 
     /// <summary>
@@ -3221,9 +3257,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MenuVersions_Click(object sender, RoutedEventArgs e) => ShowVersions();
+    private void MenuVersions_Click(object sender, RoutedEventArgs e) => Open("versions window", ShowVersions);
 
-    private void MenuSettings_Click(object sender, RoutedEventArgs e) => SettingsPanel().ShowAndFocus();
+    private void MenuSettings_Click(object sender, RoutedEventArgs e) => Open("settings window", () => SettingsPanel().ShowAndFocus());
 
     /// <summary>
     /// What has changed, version by version. Created on first use and then kept
@@ -3235,7 +3271,7 @@ public partial class MainWindow : Window
         _versions.ShowAndFocus();
     }
 
-    private void MenuSessions_Click(object sender, RoutedEventArgs e) => ShowSessions(null);
+    private void MenuSessions_Click(object sender, RoutedEventArgs e) => Open("sessions window", () => ShowSessions(null));
 
     /// <summary>
     /// The session history, opened on <paramref name="game"/> - or, with none
@@ -3284,14 +3320,14 @@ public partial class MainWindow : Window
             _notes.ScreenshotRequested += () => _ = TakeScreenshotAsync();
             // A toggle, like LOG: open on this game's sessions, or put away.
             // ToggleWindow ends by relighting the toolbar, ALL SESSIONS with it.
-            _notes.SessionsRequested += game => ToggleWindow(_sessionsWindow, () => ShowSessions(game));
+            _notes.SessionsRequested += game => ToggleWindow(_sessionsWindow, "sessions window", () => ShowSessions(game));
             // A toggle, like the widget's own window buttons - see ToggleWindow.
             // The button is put right afterwards whatever happened: clicking a
             // toggle flips it before anything is asked, so a show that failed
             // would otherwise leave it lit over no window.
             _notes.PicturesRequested += () =>
             {
-                ToggleWindow(_pictures, ShowPictures);
+                ToggleWindow(_pictures, "pictures window", ShowPictures);
                 _notes.SetPicturesOpen(_pictures is { IsVisible: true });
             };
 

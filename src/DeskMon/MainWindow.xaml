@@ -192,30 +192,52 @@
                      Also the way into the versions window, which used to have
                      a button of its own: the number is the obvious thing to
                      click for "what changed in this version?". -->
-                <TextBlock x:Name="VersionText" Grid.Column="1"
-                           HorizontalAlignment="Right" VerticalAlignment="Center"
-                           Margin="10,0,0,0" Cursor="Hand"
-                           MouseLeftButtonDown="VersionText_MouseLeftButtonDown"
-                           MouseEnter="VersionText_HoverChanged"
-                           MouseLeave="VersionText_HoverChanged" />
-            </Grid>
+                <!-- The clock and the version together at the right of the
+                     toolbar. The clock had a row of its own at the bottom of
+                     the widget; up here it shares the toolbar's row, and the
+                     widget is that much shorter. -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            HorizontalAlignment="Right" VerticalAlignment="Center">
 
-            <!-- The time at the bottom right, large, with the day and date
-                 stacked small beside it - a desk clock rather than a footnote,
-                 led by the same accent bar as the section headings so it reads
-                 as part of the widget. Before the rows in the markup, docked at
-                 the bottom: the rows are the DockPanel's filling last child.
-                 Ticked over on the minute - see UpdateClock; sized and
-                 coloured in ApplyVersionStyle, as both follow settings. -->
-            <StackPanel x:Name="ClockPanel" DockPanel.Dock="Bottom" Orientation="Horizontal"
-                        HorizontalAlignment="Right" Margin="0,6,0,0">
-                <Border x:Name="ClockAccent" Width="3" CornerRadius="1.5" Margin="0,2,7,2" />
-                <TextBlock x:Name="ClockTime" FontWeight="Bold" VerticalAlignment="Center" />
-                <StackPanel VerticalAlignment="Center" Margin="8,0,0,0">
-                    <TextBlock x:Name="ClockDay" FontWeight="SemiBold" />
-                    <TextBlock x:Name="ClockDate" />
+                <!-- The time, large, with the day and date stacked small beside
+                     it - a desk clock rather than a footnote, led by the same
+                     accent bar as the section headings so it reads as part of
+                     the widget. Ticked over on the minute - see UpdateClock;
+                     sized and coloured in ApplyVersionStyle, as both follow
+                     settings. -->
+                <StackPanel x:Name="ClockPanel" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="10,0,0,0">
+                    <Border x:Name="ClockAccent" Width="3" CornerRadius="1.5" Margin="0,2,7,2" />
+                    <TextBlock x:Name="ClockTime" FontWeight="Bold" VerticalAlignment="Center" />
+                    <StackPanel VerticalAlignment="Center" Margin="8,0,0,0">
+                        <!-- The version on the day's line, right after the day
+                             name: it used to be a column of its own at the far
+                             right of the toolbar, which widened the widget by
+                             its whole width. Here it sits above the date, which
+                             is the longer line, so it adds none. -->
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="ClockDay" FontWeight="SemiBold" />
+                            <!-- A small chip, not bare text, so it reads as a
+                                 button: an outline always, lit in the accent
+                                 under the mouse or while its window is open -
+                                 see ApplyVersionStyle. The chip takes the
+                                 clicks, so its padding counts too. -->
+                            <Border x:Name="VersionChip"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0,0,0" Padding="6,0,6,1"
+                                    CornerRadius="4" BorderThickness="1"
+                                    Background="Transparent" Cursor="Hand"
+                                    MouseLeftButtonDown="VersionText_MouseLeftButtonDown"
+                                    MouseEnter="VersionText_HoverChanged"
+                                    MouseLeave="VersionText_HoverChanged">
+                                <TextBlock x:Name="VersionText" VerticalAlignment="Center" />
+                            </Border>
+                        </StackPanel>
+                        <TextBlock x:Name="ClockDate" />
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
+                </StackPanel>
+            </Grid>
 
             <!-- IsSharedSizeScope: the metric rows' MetricSide columns are one
                  width across the panel - see the MetricRow template. -->
@@ -400,6 +422,194 @@
                                 <ColumnDefinition Width="*" />                                   <!-- value and bar -->
                                 <ColumnDefinition Width="Auto" SharedSizeGroup="MetricSide" />  <!-- peak and arrow -->
                             </Grid.ColumnDefinitions>
+                            <!-- The value and bar in one of two layouts, and only
+                                 the one in use is built: a template each, picked by
+                                 ValueInBar. Both used to sit here with one collapsed,
+                                 and the hidden one's dozen elements per row still
+                                 took every tick's value through their bindings. -->
+                            <Grid.Resources>
+                                <DataTemplate x:Key="BesideBar">
+                                    <!-- The value beside its bar, for ValueInBar off. -->
+                                    <StackPanel Orientation="Horizontal"
+                                                HorizontalAlignment="Center">
+                                    <!-- Tabular digits, every one the same width, so a
+                                         right-aligned value doesn't shuffle sideways as
+                                         a 1 becomes an 8. -->
+                                    <!-- MinWidth, not Width: a value wider than the
+                                         setting - "4850 MHz" under CPU - used to spill out
+                                         of its box over the bar and past the column's
+                                         edge. Now it widens the row instead. -->
+                                    <TextBlock x:Name="ValueText"
+                                               Text="{Binding Value}"
+                                               MinWidth="{Binding ValueWidth}"
+                                               TextAlignment="Right"
+                                               FontWeight="SemiBold"
+                                               Typography.NumeralAlignment="Tabular"
+                                               Foreground="{Binding ValueBrush}" />
+
+                                    <!-- The track and the peak marker share this grid; the
+                                         marker sits outside the track's mask, so on a
+                                         segmented bar it is never lost in a gap, and its
+                                         negative margins let it stand a little proud of
+                                         the bar. -->
+                                    <Grid Width="{Binding TrackWidth}"
+                                          Visibility="{Binding BarVisibility}"
+                                          Height="{Binding TrackHeight}"
+                                          Margin="10,0,0,0"
+                                          VerticalAlignment="Center">
+                                        <!-- OpacityMask is null on a whole bar and the
+                                             block, dot or tick pattern otherwise, cutting
+                                             the track and its fill alike. The outline and
+                                             its inset are the outlined style's, and
+                                             Height is the bar thickness, or a thin
+                                             line on the line style - see MetricRow and
+                                             UiTheme's ApplyBarStyle. -->
+                                        <Border CornerRadius="{Binding BarCorner}"
+                                                ClipToBounds="True"
+                                                Height="{Binding TrackLineHeight}"
+                                                VerticalAlignment="Center"
+                                                OpacityMask="{Binding BarMask}"
+                                                Background="{Binding TrackBrush}"
+                                                BorderBrush="{Binding TrackBorderBrush}"
+                                                BorderThickness="{Binding TrackBorderThickness}"
+                                                Padding="{Binding TrackPadding}">
+                                            <!-- BarWidth is how much of the track is filled,
+                                                 from the reading; BarTrackWidth in settings
+                                                 is the track it is filled against. The
+                                                 stripes, on the striped style, are on the
+                                                 fill alone. -->
+                                            <Border HorizontalAlignment="Left"
+                                                    Width="{Binding BarWidth}"
+                                                    CornerRadius="{Binding FillCorner}"
+                                                    OpacityMask="{Binding FillMask}"
+                                                    Background="{Binding BarBrush}" />
+                                        </Border>
+
+                                        <!-- The line style's knob, at the end of the fill. -->
+                                        <Ellipse HorizontalAlignment="Left"
+                                                 VerticalAlignment="Center"
+                                                 Width="{Binding KnobSize}"
+                                                 Height="{Binding KnobSize}"
+                                                 Margin="{Binding KnobMargin}"
+                                                 Fill="{Binding KnobBrush}"
+                                                 Visibility="{Binding KnobVisibility}" />
+
+                                        <!-- A 2 px core in the gradient's colour at the peak,
+                                             lightened, with a 1 px dark edge either side:
+                                             4 wide in all. See MetricRow.PeakMarkerBrush. -->
+                                        <Border HorizontalAlignment="Left"
+                                                Width="4"
+                                                CornerRadius="2"
+                                                BorderThickness="1"
+                                                BorderBrush="{Binding PeakMarkerEdgeBrush}"
+                                                Margin="{Binding PeakMarkerMargin}"
+                                                Background="{Binding PeakMarkerBrush}"
+                                                Visibility="{Binding PeakMarkerVisibility}" />
+                                    </Grid>
+
+                                    <!-- An empty twin of the value on the bar's right.
+                                         Without it the value and bar were centred as one,
+                                         which put the bar itself right of centre by half
+                                         the value's width; with the same width on both
+                                         sides the bar is the centre. Only beside a bar, so
+                                         a row without one still centres its value. Bound
+                                         to the value's actual width rather than the
+                                         setting, so a wider value is still balanced and
+                                         the bar stays in the middle on every row. -->
+                                    <Border Width="{Binding ActualWidth, ElementName=ValueText}"
+                                            Visibility="{Binding BarVisibility}"
+                                            Margin="10,0,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                                <DataTemplate x:Key="InsideBar">
+                                    <!-- The value inside its bar (ValueInBar): the bar is
+                                         the middle 90% of the room between label and
+                                         peak, 5% either side, and the number sits in its
+                                         middle. MinWidth asks for the bar length setting
+                                         plus those margins, so a widget sized to its
+                                         content still leaves them; a wider widget widens
+                                         the bar. The fill, peak tick and knob are placed
+                                         by share, two star columns each, since the bar's
+                                         pixel width is the layout's - see MetricRow. -->
+                                    <!-- MinWidth: the bar length setting, or wide enough
+                                         for the number with room each side, whichever
+                                         is more - see InBarWidth. -->
+                                    <Grid Margin="6,0,6,0">
+                                        <Grid.MinWidth>
+                                            <MultiBinding Converter="{x:Static ui:InBarWidth.Instance}">
+                                                <Binding Path="InBarMinWidth" />
+                                                <Binding Path="ActualWidth" ElementName="InBarValue" />
+                                            </MultiBinding>
+                                        </Grid.MinWidth>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="5*" />
+                                            <ColumnDefinition Width="90*" />
+                                            <ColumnDefinition Width="5*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid Grid.Column="1" Height="{Binding InBarHeight}" VerticalAlignment="Center">
+                                            <Border CornerRadius="{Binding BarCorner}"
+                                                    ClipToBounds="True"
+                                                    Height="{Binding TrackLineHeight}"
+                                                    VerticalAlignment="Center"
+                                                    OpacityMask="{Binding BarMask}"
+                                                    Background="{Binding TrackBrush}"
+                                                    BorderBrush="{Binding TrackBorderBrush}"
+                                                    BorderThickness="{Binding TrackBorderThickness}"
+                                                    Padding="{Binding TrackPadding}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="{Binding FillShare}" />
+                                                        <ColumnDefinition Width="{Binding RestShare}" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border CornerRadius="{Binding FillCorner}"
+                                                            OpacityMask="{Binding FillMask}"
+                                                            Background="{Binding InBarFillBrush}" />
+                                                </Grid>
+                                            </Border>
+
+                                            <!-- The peak tick, at the peak's share of the bar. -->
+                                            <Grid Visibility="{Binding PeakMarkerVisibility}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="{Binding PeakShare}" />
+                                                    <ColumnDefinition Width="{Binding PeakRestShare}" />
+                                                </Grid.ColumnDefinitions>
+                                                <Border HorizontalAlignment="Right" Width="4" CornerRadius="2"
+                                                        BorderThickness="1"
+                                                        BorderBrush="{Binding PeakMarkerEdgeBrush}"
+                                                        Margin="0,-2,-2,-2"
+                                                        Background="{Binding PeakMarkerBrush}" />
+                                            </Grid>
+
+                                            <!-- The line style's knob, on the end of the fill. -->
+                                            <Grid Visibility="{Binding KnobVisibility}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="{Binding FillShare}" />
+                                                    <ColumnDefinition Width="{Binding RestShare}" />
+                                                </Grid.ColumnDefinitions>
+                                                <Ellipse HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                         Width="{Binding KnobSize}" Height="{Binding KnobSize}"
+                                                         Margin="{Binding InBarKnobMargin}"
+                                                         Fill="{Binding KnobBrush}" />
+                                            </Grid>
+
+                                            <!-- The number, in the bar's middle, with a solid
+                                                 outline in the window colour - a shadow
+                                                 alone left it hard to read over the bright
+                                                 fill. See OutlinedText. Bold, so the
+                                                 letters stay thick inside the outline. -->
+                                            <ui:OutlinedText x:Name="InBarValue"
+                                                             Text="{Binding Value}"
+                                                             HorizontalAlignment="Center"
+                                                             VerticalAlignment="Center"
+                                                             FontWeight="Bold"
+                                                             Fill="{Binding InBarValueBrush}"
+                                                             Stroke="{Binding InBarOutlineBrush}"
+                                                             StrokeThickness="3" />
+                                        </Grid>
+                                    </Grid>
+                                </DataTemplate>
+                            </Grid.Resources>
+
 
                             <!-- First, so it is drawn behind the row. -->
                             <Border x:Name="Hover" Grid.ColumnSpan="3" Margin="-5,-2,-4,-2"
@@ -425,71 +635,21 @@
                                        Visibility="{Binding FlagVisibility}"
                                        ToolTip="{Binding FlagTooltip}" />
 
-                            <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                        HorizontalAlignment="Center">
-                            <!-- Tabular digits, every one the same width, so a
-                                 right-aligned value doesn't shuffle sideways as
-                                 a 1 becomes an 8. -->
-                            <!-- MinWidth, not Width: a value wider than the
-                                 setting - "4850 MHz" under CPU - used to spill out
-                                 of its box over the bar and past the column's
-                                 edge. Now it widens the row instead. -->
-                            <TextBlock x:Name="ValueText"
-                                       Text="{Binding Value}"
-                                       MinWidth="{Binding ValueWidth}"
-                                       TextAlignment="Right"
-                                       FontWeight="SemiBold"
-                                       Typography.NumeralAlignment="Tabular"
-                                       Foreground="{Binding ValueBrush}" />
-
-                            <!-- The track and the peak marker share this grid; the
-                                 marker sits outside the track's mask, so on a
-                                 segmented bar it is never lost in a gap, and its
-                                 negative margins let it stand a little proud of
-                                 the bar. -->
-                            <Grid Width="{Binding TrackWidth}"
-                                  Visibility="{Binding BarVisibility}"
-                                  Height="{Binding TrackHeight}"
-                                  Margin="10,0,0,0"
-                                  VerticalAlignment="Center">
-                                <!-- OpacityMask is null on a rounded bar and the
-                                     block pattern on a segmented one, cutting the
-                                     track and its fill alike. -->
-                                <Border CornerRadius="{Binding BarCorner}"
-                                        ClipToBounds="True"
-                                        OpacityMask="{Binding BarMask}"
-                                        Background="{Binding TrackBrush}">
-                                    <!-- BarWidth is how much of the track is filled,
-                                         from the reading; BarTrackWidth in settings
-                                         is the track it is filled against. -->
-                                    <Border HorizontalAlignment="Left"
-                                            Width="{Binding BarWidth}"
-                                            CornerRadius="{Binding BarCorner}"
-                                            Background="{Binding BarBrush}" />
-                                </Border>
-
-                                <Border HorizontalAlignment="Left"
-                                        Width="2"
-                                        CornerRadius="1"
-                                        Margin="{Binding PeakMarkerMargin}"
-                                        Background="{Binding PeakMarkerBrush}"
-                                        Visibility="{Binding PeakMarkerVisibility}" />
-                            </Grid>
-
-                            <!-- An empty twin of the value on the bar's right.
-                                 Without it the value and bar were centred as one,
-                                 which put the bar itself right of centre by half
-                                 the value's width; with the same width on both
-                                 sides the bar is the centre. Only beside a bar, so
-                                 a row without one still centres its value. Bound
-                                 to the value's actual width rather than the
-                                 setting, so a wider value is still balanced and
-                                 the bar stays in the middle on every row. -->
-                            <Border Width="{Binding ActualWidth, ElementName=ValueText}"
-                                    Visibility="{Binding BarVisibility}"
-                                    Margin="10,0,0,0" />
-                            </StackPanel>
-
+                            <ContentControl Grid.Column="1" Content="{Binding}"
+                                            Focusable="False" IsTabStop="False"
+                                            HorizontalContentAlignment="Stretch"
+                                            VerticalContentAlignment="Center">
+                                <ContentControl.Style>
+                                    <Style TargetType="ContentControl">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource BesideBar}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ValueInBar}" Value="True">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource InsideBar}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ContentControl.Style>
+                            </ContentControl>
                             <!-- The worst reading this row has seen. Dim and
                                  unitless: it is history next to a live number, and
                                  the value beside it already names the unit. -->

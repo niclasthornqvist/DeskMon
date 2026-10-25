@@ -48,7 +48,6 @@ public static class MetricRegistry
 
             // ---- Extras, ready to use: just delete the "//" --------------
             // , new Metric("GPU",  "%",  s => s.GpuLoad,       Max: 100, Warn: 90)
-            // , new Metric("VRAM", "%",  s => s.GpuMemoryLoad, Max: 100, Warn: 90)
             // , new Metric("RAM",  "GB", s => s.RamUsedGb,     Max: 32, Format: "0.0")
             // , new Metric("SWAP", "GB", s => s.SwapUsedGb,    Max: 16, Format: "0.0")
         )
@@ -151,7 +150,17 @@ public static class MetricRegistry
             new Metric("GPU", "%", s => s.GameGpuLoad, Max: 100,
                        Tooltip: "How busy the graphics card is.\n" +
                                 "Near 100%, the card is what limits the frame rate.\n" +
-                                "Well below it with a low frame rate, the CPU or the game itself is holding it back.")
+                                "Well below it with a low frame rate, the CPU or the game itself is holding it back."),
+
+            // In GAME, not Usage: graphics memory runs out before RAM does on
+            // high texture settings, and that is when it matters. Thresholds
+            // sit high and there is no alert, because many games fill the card
+            // on purpose as a cache - 90% alone is not a fault, only near 100%
+            // together with stutter is. Read with the other card sensors.
+            new Metric("VRAM", "%", s => s.GpuMemoryLoad, Max: 100, Warn: 90, Crit: 97,
+                       Tooltip: "How much of the graphics card's own memory is in use.\n" +
+                                "Many games fill it on purpose, so a high figure alone is fine.\n" +
+                                "Near 100% with stutters, lower the texture setting - the card is moving textures in and out over PCIe.")
         )
         {
             OnlyWhileGaming = true,

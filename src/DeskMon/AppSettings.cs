@@ -360,9 +360,22 @@ public sealed class AppSettings
     /// <summary>
     /// "rounded" is one smooth pill; "segmented" cuts the track into blocks
     /// like an LED meter, which reads at a glance over a busy game and fills a
-    /// block at a time. A string rather than a bool so another style can join.
+    /// block at a time. A string rather than a bool so another style can join -
+    /// and since 1.69 "flat" (square ends), "dots", "striped" (stripes on the
+    /// fill), "ticks" (a notch every 10%), "outlined" (an outline with the
+    /// fill inside), "outlined-striped" (both) and "line" (a thin line with a
+    /// knob) have. See
+    /// UiTheme.ApplyBarStyle.
     /// </summary>
     public string BarStyle { get; set; } = "rounded";
+
+    /// <summary>
+    /// The value drawn in the middle of its bar, the bar filling 90% of the
+    /// room between label and peak and at least as tall as the text - a
+    /// progress bar with its number on it. Off keeps the value beside a bar
+    /// of BarTrackWidth, which then only sets the bar's least width.
+    /// </summary>
+    public bool ValueInBar { get; set; }
 
     /// <summary>
     /// A thin tick on the bar where the peak reached, so how high it got is

@@ -118,11 +118,17 @@ public partial class SessionsWindow : PanelWindow
     /// </param>
     /// <param name="Source">For a playtime column: where each row's figure is from, shown as that source's icon before it.</param>
     /// <param name="Score">For a score column: the score, which colours the figure green, amber or red.</param>
+    /// <param name="Group">
+    /// The heading over this column and its neighbours ("Frame rate", "GPU"),
+    /// empty for none. Columns of one group sit side by side, set off from the
+    /// next group, so the figures to compare are found together.
+    /// </param>
     private sealed record Column<T>(string Key, string Header, double Width, bool Number,
                                     Func<T, string> Text, Func<T, IComparable?> Sort,
                                     bool DescendingFirst = true,
                                     Func<T, PlaytimeSource>? Source = null,
-                                    Func<T, int?>? Score = null);
+                                    Func<T, int?>? Score = null,
+                                    string Group = "");
 
     /// <summary>
     /// One game's line in the All games table. Played is what DeskMon logged;
@@ -136,6 +142,27 @@ public partial class SessionsWindow : PanelWindow
 
     /// <summary>What the chart can show. Value null means the session didn't record it.</summary>
     private sealed record ChartMeasure(string Key, string Name, Func<SessionRecord, double?> Value);
+
+    // GroupOrder and KeyOrder before AllSessionColumns, which sorts by them:
+    // static fields are set in the order they are written, so declared below
+    // it they were still null when it was built, and the window failed to open.
+
+    /// <summary>The groups left to right: when and how well, then the frame rate, then what limits it.</summary>
+    private static readonly string[] GroupOrder = { "", "Frame rate", "GPU", "CPU", "Memory", "Disk", "Network", "Energy" };
+
+    /// <summary>
+    /// Within a group, the order to read it in: the average before the lows,
+    /// load before heat. Keys not here follow in the widget's order.
+    /// </summary>
+    private static readonly string[] KeyOrder =
+    {
+        "id", "date", "time", "length", "score",
+        "avg", "FPS|", "LOW|", "WORST|", "stutters", "LAT|ms",
+        "GPU|%", "VRAM|%", "GPU|°C",
+        "CPU|%", "CPU|°C",
+        "RAM|%", "SWAP|%",
+        "energy", "cost",
+    };
 
     /// <summary>
     /// Every column the session table can have, in the order it shows them.
@@ -200,22 +227,56 @@ public partial class SessionsWindow : PanelWindow
             new("cost", "Cost", 64, true, s => Cost(s.EnergyWh), s => s.EnergyWh),
         };
 
-        foreach (var metric in MetricRegistry.Sections.SelectMany(s => s.Metrics))
-        {
-            // Copied out, so each lambda keeps its own row rather than the loop's last.
-            string label = metric.Label, unit = metric.Unit;
-            string key = PeakKey(label, unit);
-            if (columns.Any(c => c.Key == key))
-                continue;
+        // The section each peak comes from, for a row GroupOf doesn't name.
+        var sectionOf = new Dictionary<string, string>();
+        foreach (var section in MetricRegistry.Sections)
+            foreach (var metric in section.Metrics)
+            {
+                // Copied out, so each lambda keeps its own row rather than the loop's last.
+                string label = metric.Label, unit = metric.Unit;
+                string key = PeakKey(label, unit);
+                if (columns.Any(c => c.Key == key))
+                    continue;
 
-            // "CLK MHz" needs the room "CPU %" does not.
-            columns.Add(new(key, PeakHeader(label, unit), unit.Length > 2 ? 66 : 56, true,
-                            s => s.Find(label, unit)?.Value ?? "–",
-                            s => s.Find(label, unit)?.Number));
-        }
+                sectionOf[key] = section.Title;
+                // "CLK MHz" needs the room "CPU %" does not.
+                columns.Add(new(key, PeakHeader(label, unit), unit.Length > 2 ? 66 : 56, true,
+                                s => s.Find(label, unit)?.Value ?? "–",
+                                s => s.Find(label, unit)?.Number));
+            }
 
-        return columns.ToArray();
+        // Reordered by group, not left in the widget's order: there CPU load
+        // sits in Usage and CPU heat in Temperature, so the table put CPU %
+        // and CPU °C far apart and Avg FPS a dozen columns from Min FPS.
+        // OrderBy is stable, so a group keeps the order of KeyOrder, and rows
+        // it doesn't list keep the widget's order after them.
+        return columns
+            .Select(c => c with { Group = GroupOf(c.Key, sectionOf.GetValueOrDefault(c.Key, string.Empty)) })
+            .Select((c, index) => (Column: c, Index: index))
+            .OrderBy(x => GroupRank(x.Column.Group))
+            .ThenBy(x => Array.IndexOf(KeyOrder, x.Column.Key) is int at and >= 0 ? at : KeyOrder.Length + x.Index)
+            .Select(x => x.Column)
+            .ToArray();
     }
+
+    /// <summary>
+    /// Which group a column is in. A row added to the widget later that isn't
+    /// named here goes under its section's title, so it still gets a group.
+    /// </summary>
+    private static string GroupOf(string key, string section) => key switch
+    {
+        "id" or "date" or "time" or "length" or "score" => string.Empty,
+        "avg" or "stutters" or "FPS|" or "LOW|" or "WORST|" or "LAT|ms" => "Frame rate",
+        "GPU|%" or "VRAM|%" or "GPU|°C" => "GPU",
+        "CPU|%" or "CPU|°C" => "CPU",
+        "RAM|%" or "SWAP|%" => "Memory",
+        "energy" or "cost" => "Energy",
+        _ => section,
+    };
+
+    /// <summary>A group's place; one not in GroupOrder goes before Energy, which stays last.</summary>
+    private static double GroupRank(string group)
+        => Array.IndexOf(GroupOrder, group) is int at and >= 0 ? at : GroupOrder.Length - 1.5;
 
     private static ChartMeasure[] BuildChartMeasures()
     {
@@ -328,6 +389,9 @@ public partial class SessionsWindow : PanelWindow
     /// <summary>The theme changed while the window was hidden - see the constructor.</summary>
     private bool _themeStale;
 
+    /// <summary>Holds a redraw for a theme change back until the changes pause - see the constructor.</summary>
+    private readonly DispatcherTimer _rethemeTimer = new() { Interval = TimeSpan.FromMilliseconds(150) };
+
     private void Retheme()
     {
         _themeStale = false;
@@ -359,10 +423,25 @@ public partial class SessionsWindow : PanelWindow
         // changes on every step of a colour being dragged in the settings
         // window, and redrawing the cards, table and chart each time made that
         // drag lag - for a window nobody could see.
+        // Shown, it waits for the changes to pause rather than redrawing on
+        // each: a colour drag fires this on every step, and every redraw also
+        // started a new playtime lookup on a worker and rebuilt the table.
+        // 150 ms after the last step is soon enough to look immediate.
+        _rethemeTimer.Tick += (_, _) =>
+        {
+            _rethemeTimer.Stop();
+            if (IsVisible)
+                Retheme();
+            else
+                _themeStale = true;
+        };
         _theme.Changed += () =>
         {
             if (IsVisible)
-                Retheme();
+            {
+                _rethemeTimer.Stop();
+                _rethemeTimer.Start();
+            }
             else
                 _themeStale = true;
         };
@@ -927,8 +1006,10 @@ public partial class SessionsWindow : PanelWindow
         // even when it is the same game again - those are about to be redrawn.
         _playtimeTicket++;
 
-        SummaryText.Inlines.Clear();
+        ClearSummary();
         Stats.Children.Clear();
+        Dates.Children.Clear();
+        ClearLastSession();
 
         if (game is null || _sessions.Count == 0)
         {
@@ -938,18 +1019,21 @@ public partial class SessionsWindow : PanelWindow
 
         var total = TimeSpan.FromTicks(_sessions.Sum(s => s.Length.Ticks));
         var first = _sessions[0].Start;
-        var last = _sessions[^1].Start;
+        // When the last session ended, not began: with the time shown, "last
+        // played 21:19" for an evening that went on to midnight would be wrong.
+        var last = _sessions[^1].End;
 
         // The whole playtime goes first, but is looked up on a worker and put
         // in front of the other cards when it arrives - see AddPlaytimeAsync.
         _ = AddPlaytimeAsync(game, total);
 
         AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged", PlaytimeSource.Logged);
-        AddStat("SESSIONS", _sessions.Count.ToString(CultureInfo.InvariantCulture));
+        AddStat("SESSIONS", _sessions.Count.ToString(CultureInfo.InvariantCulture), iconData: SessionsCardIcon);
 
         if (WeightedFps(_sessions) is double fps)
             AddStat("AVERAGE", $"{fps:0} fps",
-                    "Weighted by how long each session ran, so a few minutes in a menu don't outweigh an evening");
+                    "Weighted by how long each session ran, so a few minutes in a menu don't outweigh an evening",
+                    iconData: AverageCardIcon);
 
         if (PerformanceScore.ForGame(_sessions) is int score)
         {
@@ -961,12 +1045,156 @@ public partial class SessionsWindow : PanelWindow
                                "weighted by how long each ran.\n" +
                                target + "\nRight-click to give this game a target of its own.\n" +
                                "Point at a session for how its score was reached.",
-                               valueBrush: ScoreBrush(score));
+                               valueBrush: ScoreBrush(score), iconData: ScoreCardIcon);
             card.ContextMenu = TargetMenu(game);
         }
 
-        AddSummary($"First played {first.ToString("d MMM yyyy", CultureInfo.InvariantCulture)}  ·  " +
-                   $"last {last.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture)}");
+        // Both in one form, date and time, without the weekday: the two read
+        // as a pair, and "Sun" made the second chip wider for nothing.
+        const string When = "d MMM yyyy  ·  HH:mm";
+        Dates.Children.Add(SummaryChip("First played", first.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, dot: false));
+        Dates.Children.Add(SummaryChip("Last played", last.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, dot: true));
+
+        ShowLastSession(_sessions[^1]);
+    }
+
+    /// <summary>
+    /// The LAST SESSION row under the cards: "how did it go last time?"
+    /// answered without scrolling the table. Icons rather than captions,
+    /// so four chips fit beside the logo in a narrow window; each says
+    /// what it is in its tooltip.
+    /// </summary>
+    private void ShowLastSession(SessionRecord session)
+    {
+        LastSessionPanel.Visibility = Visibility.Visible;
+
+        Border Chip(string value, string icon, string tip, Brush? valueBrush = null)
+        {
+            var chip = SummaryChip(string.Empty, value, icon, valueBrush: valueBrush);
+            // In a row here, not stacked down the right edge like the dates.
+            chip.HorizontalAlignment = HorizontalAlignment.Left;
+            chip.Margin = new Thickness(0, 0, 8, 4);
+            chip.ToolTip = tip;
+            LastSession.Children.Add(chip);
+            return chip;
+        }
+
+        Chip(session.Start.ToString("d MMM  ·  HH:mm", CultureInfo.InvariantCulture), CalendarIcon,
+             $"Started {session.Start.ToString("ddd d MMM yyyy HH:mm", CultureInfo.InvariantCulture)}");
+        Chip(SessionRecord.Describe(session.Length), ClockIcon, "How long it ran");
+
+        if (session.AverageFps is double fps)
+            Chip($"{fps:0} fps", PulseIcon, "Average frame rate over the session");
+
+        if (PerformanceScore.For(session)?.Score is int score)
+            Chip($"{score}  {PerformanceScore.Grade(score)}", StarIcon,
+                 "Its performance score - point at its row in the table for how it was reached",
+                 ScoreBrush(score));
+    }
+
+    /// <summary>Hidden, not just emptied, so its heading doesn't stand over nothing.</summary>
+    private void ClearLastSession()
+    {
+        LastSession.Children.Clear();
+        LastSessionPanel.Visibility = Visibility.Collapsed;
+    }
+
+    // The cards' icons, on PlaytimeIcons' 11 px grid. The chips' pulse and
+    // star are drawn bigger, so these are their own, smaller versions.
+
+    /// <summary>A stack of sessions: a card with two more behind it.</summary>
+    private const string SessionsCardIcon = "M1.5,4.5 H9.5 V9.5 H1.5 Z M2.5,3 H8.5 M3.5,1.5 H7.5";
+
+    /// <summary>The pulse line, for a frame rate.</summary>
+    private const string AverageCardIcon = "M0.5,5.5 H2.5 L4,2 L6,9 L7.5,4.5 H10.5";
+
+    /// <summary>A star, for the score.</summary>
+    private const string ScoreCardIcon = "M5.5,1 L6.8,3.9 L10,4.2 L7.6,6.3 L8.3,9.5 L5.5,7.8 L2.7,9.5 L3.4,6.3 L1,4.2 L4.2,3.9 Z";
+
+    /// <summary>The widget's GAME section gamepad, for All games' count of games.</summary>
+    private const string GamesCardIcon = "M2.5,3 H8.5 A2,2 0 0 1 10.5,5 V7 A2,2 0 0 1 8.5,9 H2.5 A2,2 0 0 1 0.5,7 V5 A2,2 0 0 1 2.5,3 Z " +
+                                         "M3,4.8 V7.2 M1.8,6 H4.2";
+
+    /// <summary>A clock face with its two hands.</summary>
+    private const string ClockIcon = "M6,1.5 A4.5,4.5 0 1 1 5.99,1.5 Z M6,3.5 V6 L7.8,7.2";
+
+    /// <summary>A pulse line, the widget's own sign for activity - here the frame rate.</summary>
+    private const string PulseIcon = "M0.5,6 H3 L4.5,2 L6.5,9.5 L8,5 H10.5";
+
+    /// <summary>A five-pointed star, for the score.</summary>
+    private const string StarIcon = "M6,1 L7.4,4.2 L11,4.6 L8.3,6.9 L9.1,10.5 L6,8.6 L2.9,10.5 L3.7,6.9 L1,4.6 L4.6,4.2 Z";
+
+    /// <summary>A calendar: the page, the line under its header and the two rings.</summary>
+    private const string CalendarIcon = "M1.5,3 H10.5 V10.5 H1.5 Z M1.5,5.5 H10.5 M4,1.5 V4 M8,1.5 V4";
+
+    /// <summary>A trophy: the cup with its two handles, the stem and the foot.</summary>
+    private const string TrophyIcon = "M3.5,1.5 H8.5 V4.5 A2.5,2.5 0 0 1 3.5,4.5 Z M3.5,2.5 H1.5 V3.5 A2,2 0 0 0 3.7,5.5 " +
+                                      "M8.5,2.5 H10.5 V3.5 A2,2 0 0 1 8.3,5.5 M6,7 V9 M3.5,10.5 H8.5 M4.5,10.5 V9.5 H7.5 V10.5";
+
+    /// <summary>
+    /// One of the chips under the cards - first and last played for a game,
+    /// most and last played for All games: an icon, a small caption and the
+    /// figure, in the theme's accent, made like the chart's average / highest
+    /// / lowest chips so the two rows match. They were one dim line of small
+    /// text that was easy to miss.
+    /// </summary>
+    /// <param name="dot">Fills in a day on the calendar, so first and last played differ at a glance.</param>
+    /// <param name="valueBrush">The figure's colour when it carries meaning - a score's green, amber or red.</param>
+    private Border SummaryChip(string caption, string value, string iconData, bool dot = false, Brush? valueBrush = null)
+    {
+        var icon = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse(iconData),
+            Stroke = _theme.Accent,
+            StrokeThickness = 1.2,
+            StrokeLineJoin = PenLineJoin.Round,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            Width = 12,
+            Height = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var art = new Grid { Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
+        art.Children.Add(icon);
+        if (dot)
+            art.Children.Add(new Border
+            {
+                Width = 2.5, Height = 2.5, Background = _theme.Accent,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(6.5, 6.8, 0, 0),
+            });
+
+        // At most 240 wide, cut short with "…": a long game's name under Most
+        // played widened the whole column of chips, which took the room from
+        // the cards beside it. The full text is in the tooltip instead.
+        var text = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            MaxWidth = 240,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(art);
+        row.Children.Add(text);
+
+        // Stacked down the right edge of the window, so right-aligned with
+        // a gap under each - see Dates in the XAML.
+        var chip = new Border
+        {
+            Margin = new Thickness(0, 0, 0, 6),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(9, 3, 10, 3),
+            CornerRadius = new CornerRadius(9),
+            BorderThickness = new Thickness(1),
+            Child = row,
+            // The whole text, for one cut short; a caller with more to say sets its own.
+            ToolTip = caption.Length > 0 ? $"{caption}: {value}" : value,
+        };
+        StyleChip(chip, text, _theme.Accent);
+        SetChip(text, caption, value);
+        if (valueBrush is not null)
+            text.Inlines.LastInline.Foreground = valueBrush;
+        return chip;
     }
 
     /// <summary>Frame rates offered for a game's own target: the common caps and refresh rates.</summary>
@@ -1081,15 +1309,31 @@ public partial class SessionsWindow : PanelWindow
     /// <param name="valueBrush">The figure's colour, when it should say good or bad - the score's; bright text otherwise.</param>
     /// <param name="at">Where among the cards; the end when left out. The playtime arrives last but goes first.</param>
     /// <returns>The card, for one that needs more - SCORE's right-click menu.</returns>
+    /// <param name="iconData">For a card that isn't a time: its own icon, drawn like the playtime ones.</param>
     private FrameworkElement AddStat(string name, string value, string? tooltip = null, PlaytimeSource? source = null,
-                                     Brush? valueBrush = null, int? at = null)
+                                     Brush? valueBrush = null, int? at = null, string? iconData = null)
     {
         FrameworkElement? icon = null;
         if (source is { } from)
-        {
             icon = PlaytimeIcons.Make(from, _theme.Label);
+        else if (iconData is not null)
+            // The playtime icons' 11 px grid, 1 px line and colour, so every
+            // card's icon reads as one set - the time cards had one and the
+            // rest stood bare beside them.
+            icon = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse(iconData),
+                Stroke = _theme.Label,
+                StrokeThickness = 1,
+                StrokeLineJoin = PenLineJoin.Round,
+                Width = 11,
+                Height = 11,
+                Stretch = Stretch.None,
+                SnapsToDevicePixels = true,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        if (icon is not null)
             icon.Margin = new Thickness(0, 0, 5, 0);
-        }
 
         // Shared with the pictures window's cards - see StatCard.
         var card = StatCard.Make(_theme, name, value, tooltip, icon, valueBrush);
@@ -1106,8 +1350,10 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private void ShowAllGamesSummary()
     {
-        SummaryText.Inlines.Clear();
+        ClearSummary();
         Stats.Children.Clear();
+        Dates.Children.Clear();
+        ClearLastSession();   // one game's; All games has no single last session to show
 
         if (_games.Count == 0)
         {
@@ -1135,21 +1381,34 @@ public partial class SessionsWindow : PanelWindow
                     mostFrom);
 
         AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged", PlaytimeSource.Logged);
-        AddStat("SESSIONS", sessions.ToString(CultureInfo.InvariantCulture));
-        AddStat("GAMES", _games.Count.ToString(CultureInfo.InvariantCulture));
+        AddStat("SESSIONS", sessions.ToString(CultureInfo.InvariantCulture), iconData: SessionsCardIcon);
+        AddStat("GAMES", _games.Count.ToString(CultureInfo.InvariantCulture), iconData: GamesCardIcon);
 
-        AddSummary("Most played ");
-        AddSummary(most.Name, bright: true);
-        AddSummary($" ({GamePlaytime.Describe(most.Playtime.Time)})  ·  last played ");
-        AddSummary(latest.Name, bright: true);
+        // As chips, like one game's first and last played in the same place.
+        Dates.Children.Add(SummaryChip("Most played", $"{most.Name}  ·  {GamePlaytime.Describe(most.Playtime.Time)}", TrophyIcon));
+        Dates.Children.Add(SummaryChip("Last played", latest.Name, CalendarIcon, dot: true));
     }
 
     private void AddSummary(string text, bool bright = false)
-        => SummaryText.Inlines.Add(new System.Windows.Documents.Run(text)
+    {
+        // Shown only with something in it - see ClearSummary.
+        SummaryText.Visibility = Visibility.Visible;
+        SummaryText.Inlines.Add(new System.Windows.Documents.Run(text)
         {
             Foreground = bright ? _theme.NotesText : _theme.Label,
             FontWeight = bright ? FontWeights.SemiBold : FontWeights.Normal,
         });
+    }
+
+    /// <summary>
+    /// Empties the line under the cards and hides it: an empty TextBlock still
+    /// takes a whole line's height, which stood as a gap over LAST SESSION.
+    /// </summary>
+    private void ClearSummary()
+    {
+        SummaryText.Inlines.Clear();
+        SummaryText.Visibility = Visibility.Collapsed;
+    }
 
     // --- Chart -----------------------------------------------------------------
 
@@ -1176,6 +1435,105 @@ public partial class SessionsWindow : PanelWindow
     /// hover area is the full height of the chart rather than the bar alone,
     /// so a short bar is as easy to point at as a tall one.
     /// </summary>
+    /// <summary>Whether the last draw showed the empty chart's picture - see ChartEmptyState.</summary>
+    private bool _chartEmptyShown;
+
+    /// <summary>
+    /// What the chart shows when no session recorded the picked reading: a
+    /// small drawn chart with empty, dashed bars, a title and what to do
+    /// about it - the same kind of picture the pictures window shows with no
+    /// pictures, where one dim line of small text was easy to take for a
+    /// broken chart. Drawn, not an image file, so it is sharp and in the
+    /// theme's colours (by reference, so it follows a theme change).
+    /// It never takes a click, so the chart's own tooltips stay reachable.
+    /// </summary>
+    private FrameworkElement ChartEmptyState(string reading, double width, double height, bool arriving)
+    {
+        var art = new Canvas { Width = 100, Height = 66, HorizontalAlignment = HorizontalAlignment.Center };
+
+        System.Windows.Shapes.Rectangle Box(double left, double top, double w, double h, double radius,
+                                            string? fill, string? stroke, double thickness = 1.2, bool dashed = false)
+        {
+            var box = new System.Windows.Shapes.Rectangle
+            {
+                Width = w, Height = h, RadiusX = radius, RadiusY = radius, StrokeThickness = thickness,
+            };
+            if (fill is not null) box.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, fill);
+            if (stroke is not null) box.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, stroke);
+            if (dashed) box.StrokeDashArray = new DoubleCollection { 2, 2 };
+            Canvas.SetLeft(box, left);
+            Canvas.SetTop(box, top);
+            art.Children.Add(box);
+            return box;
+        }
+
+        // The card, its baseline, and three bars of different heights drawn
+        // as dashed outlines: a chart whose bars are missing.
+        Box(0, 0, 88, 58, 7, "Theme.Ov.0A", "Theme.Ov.2B");
+        Box(12, 47, 64, 1.2, 0, "Theme.Ov.33", null, 0);
+        Box(18, 31, 12, 15, 2, null, "Theme.Ov.4D", dashed: true);
+        Box(36, 17, 12, 29, 2, null, "Theme.Ov.4D", dashed: true);
+        Box(54, 24, 12, 22, 2, null, "Theme.Ov.4D", dashed: true);
+
+        // A badge on the corner with a dash in it: "nothing here".
+        Box(72, 40, 26, 26, 13, "Theme.Popup", "Theme.Accent.99", 1.5);
+        var dash = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M80.5,53 H89.5"),
+            StrokeThickness = 1.8,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+        };
+        dash.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "Theme.Accent");
+        art.Children.Add(dash);
+
+        var stack = new StackPanel { Width = width, IsHitTestVisible = false };
+        stack.Children.Add(art);
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Not recorded in these sessions",
+            Foreground = _theme.Section,
+            FontSize = UiTheme.PanelFontSize + 2,
+            FontWeight = FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 10, 0, 3),
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"{reading} wasn't logged for any of them - pick another reading above.",
+            Foreground = _theme.Label,
+            FontSize = SmallFont,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            MaxWidth = 380,
+        });
+
+        // Centred in the chart by its own measured height, which depends on
+        // the font and whether the line wraps.
+        stack.Measure(new Size(width, double.PositiveInfinity));
+        Canvas.SetTop(stack, Math.Max(0, (height - stack.DesiredSize.Height) / 2));
+
+        if (arriving)
+        {
+            // The pictures window's fade and rise, shorter and with a shorter
+            // wait: the chart is part of a window already on screen. Once,
+            // and still after that, since this window can be open over a game.
+            var shift = new TranslateTransform(0, 12);
+            stack.RenderTransform = shift;
+            stack.Opacity = 0;
+            var delay = TimeSpan.FromMilliseconds(120);
+            var duration = new Duration(TimeSpan.FromMilliseconds(400));
+            var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+            stack.BeginAnimation(OpacityProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, 1, duration) { BeginTime = delay, EasingFunction = ease });
+            shift.BeginAnimation(TranslateTransform.YProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(12, 0, duration) { BeginTime = delay, EasingFunction = ease });
+        }
+
+        return stack;
+    }
+
     private void DrawChart()
     {
         Chart.Children.Clear();
@@ -1186,11 +1544,17 @@ public partial class SessionsWindow : PanelWindow
         bool any = !_allGames && _sessions.Count > 0;
         ChartTitle.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
         Chart.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        // Its line goes with it: under All games, with no chart, it would
+        // separate the cards from the table for no reason.
+        ChartRule.Visibility = Chart.Visibility;
 
         double width = Chart.ActualWidth;
         double height = Chart.ActualHeight;
         if (!any || width <= 0 || height <= 0)
+        {
+            _chartEmptyShown = false;
             return;
+        }
 
         var measure = SelectedMeasure;
         var shown = _sessions.Skip(Math.Max(0, _sessions.Count - ChartSessions)).ToList();
@@ -1206,12 +1570,11 @@ public partial class SessionsWindow : PanelWindow
         double lowest = anyBar ? values.Min() : 0;
         bool markLowest = anyBar && lowest < values.Max();
 
-        HighestSwatch.Visibility = anyBar ? Visibility.Visible : Visibility.Collapsed;
-        HighestText.Visibility = HighestSwatch.Visibility;
-        LowestSwatch.Visibility = markLowest ? Visibility.Visible : Visibility.Collapsed;
-        LowestText.Visibility = LowestSwatch.Visibility;
-        AverageSwatch.Visibility = HighestSwatch.Visibility;
-        AverageText.Visibility = HighestSwatch.Visibility;
+        HighestChip.Visibility = anyBar ? Visibility.Visible : Visibility.Collapsed;
+        LowestChip.Visibility = markLowest ? Visibility.Visible : Visibility.Collapsed;
+        AverageChip.Visibility = HighestChip.Visibility;
+        // The heading only over figures: with no bars the chart says why itself.
+        ChartTitleText.Visibility = HighestChip.Visibility;
 
         // The figures beside their keys: the colour alone only said which bar
         // was highest, and finding its value meant hovering it or reading it
@@ -1227,23 +1590,19 @@ public partial class SessionsWindow : PanelWindow
             average = measure.Key == "avg" && WeightedFps(shown) is double weighted
                 ? weighted
                 : values.Average();
-            AverageText.Text = "average " + BarValue(average);
-            HighestText.Text = "highest " + BarValue(values.Max());
-            LowestText.Text = "lowest " + BarValue(lowest);
+            SetChip(AverageText, "Average", BarValue(average));
+            SetChip(HighestText, "Highest", BarValue(values.Max()));
+            SetChip(LowestText, "Lowest", BarValue(lowest));
         }
+
+        // Fades in only when it first appears: the chart is redrawn on every
+        // resize and refresh, and arriving again each time would flicker.
+        bool arriving = !anyBar && !_chartEmptyShown;
+        _chartEmptyShown = !anyBar;
 
         if (!anyBar)
         {
-            var none = new TextBlock
-            {
-                Text = "Not recorded in these sessions",
-                Foreground = _theme.Unavailable,
-                FontSize = SmallFont,
-                Width = width,
-                TextAlignment = TextAlignment.Center,
-            };
-            Canvas.SetTop(none, height / 2 - 8);
-            Chart.Children.Add(none);
+            Chart.Children.Add(ChartEmptyState(measure.Name, width, height, arriving));
             return;
         }
 
@@ -1252,7 +1611,6 @@ public partial class SessionsWindow : PanelWindow
         const double Gap = 2;          // surface gap between bars
 
         double highest = shown.Max(s => measure.Value(s) ?? 0);
-        double top = NiceCeiling(highest);
         double plotLeft = AxisWidth;
         double plotWidth = width - AxisWidth;
         double plotTop = LabelRoom;
@@ -1266,6 +1624,13 @@ public partial class SessionsWindow : PanelWindow
         double idRoom = idSize + 4;
         double plotHeight = height - LabelRoom - ZeroRoom - idRoom;
         double baseline = plotTop + plotHeight;
+
+        // The top of the scale high enough that the tallest bar's value label
+        // fits under the top gridline, not just the bar: rounding 57 up to 60
+        // put the bar right under the line and its "57" across and above it.
+        // The bar may reach at most the plot's height less one label's room.
+        double fits = plotHeight > LabelRoom ? highest * plotHeight / (plotHeight - LabelRoom) : highest;
+        double top = NiceCeiling(fits);
 
         // Gridlines at a quarter steps of a round top value; labels on the left
         // in the muted text colour, so the axis stays out of the bars' way.
@@ -1436,8 +1801,57 @@ public partial class SessionsWindow : PanelWindow
             StrokeThickness = 1.5,
             StrokeDashArray = new DoubleCollection { 4, 3 },
             IsHitTestVisible = false,
+            // Toned down: at full strength the bright green drew the eye
+            // away from the bars, which are what the chart is about.
+            Opacity = AverageOpacity,
         });
     }
+
+    /// <summary>
+    /// One of the average / highest / lowest chips over the chart: the
+    /// window's own colour with a little of the chip's mixed in, mostly
+    /// opaque so it reads over the game's art as well as over the panel, and
+    /// an outline in the chip's colour. The figure in the theme's text colour
+    /// rather than the chip's, which would be faint on a light theme.
+    /// </summary>
+    private void StyleChip(Border chip, TextBlock text, Brush colour)
+    {
+        // The accent brush may not be a plain colour in every theme; the
+        // accent's own colour stands in for it then.
+        Color c = colour is SolidColorBrush solid ? solid.Color : _theme.AccentColor, w = _theme.WindowColor;
+        byte Mix(byte window, byte tint) => (byte)Math.Round(window * 0.82 + tint * 0.18);
+
+        var fill = new SolidColorBrush(Color.FromArgb(0xD9, Mix(w.R, c.R), Mix(w.G, c.G), Mix(w.B, c.B)));
+        fill.Freeze();
+        var edge = new SolidColorBrush(Color.FromArgb(0x70, c.R, c.G, c.B));
+        edge.Freeze();
+
+        chip.Background = fill;
+        chip.BorderBrush = edge;
+        text.Foreground = _theme.NotesText;
+        text.FontSize = UiTheme.PanelFontSize;
+    }
+
+    /// <summary>
+    /// A chip's words: the caption small and dim, the figure larger and
+    /// bold, so the number is what the eye lands on.
+    /// </summary>
+    private void SetChip(TextBlock text, string caption, string value)
+    {
+        text.Inlines.Clear();
+        // No caption run at all for an icon-only chip - see ShowLastSession -
+        // or its two spaces would pad the figure on the left.
+        if (caption.Length > 0)
+            text.Inlines.Add(new System.Windows.Documents.Run(caption + "  ")
+        {
+            Foreground = _theme.Label,
+            FontSize = SmallFont,
+        });
+        text.Inlines.Add(new System.Windows.Documents.Run(value) { FontWeight = FontWeights.SemiBold });
+    }
+
+    /// <summary>The average line's opacity, which its key in the legend shares so the two still match.</summary>
+    private const double AverageOpacity = 0.55;
 
     /// <summary>
     /// An unmarked bar's colour and its hover: the blue, or with BarGradient on
@@ -1640,6 +2054,15 @@ public partial class SessionsWindow : PanelWindow
 
         BuildHeader(columns, sort, setSort);
 
+        // The groups' dividing lines once, full height over the whole table,
+        // in the same columns as the rows. They used to be added to every row
+        // - about seven elements a row, thousands for a long-played game,
+        // rebuilt on every sort and refresh.
+        GroupLines.Children.Clear();
+        GroupLines.ColumnDefinitions.Clear();
+        AddColumns(GroupLines, columns);
+        AddGroupLines(GroupLines, columns, 1);
+
         Rows.Children.Clear();
         bool firstRow = true;
         foreach (var item in Sorted(items, sortBy, sort.Descending))
@@ -1748,7 +2171,53 @@ public partial class SessionsWindow : PanelWindow
     {
         TableHeader.Children.Clear();
         TableHeader.ColumnDefinitions.Clear();
+        TableHeader.RowDefinitions.Clear();
         AddColumns(TableHeader, columns);
+
+        // A line of group names over the headings - "Frame rate" over Avg FPS
+        // to Latency - so a group reads as one even with a single column of it
+        // shown. Only for a table that has groups: All games has none, and an
+        // empty line would only push its table down.
+        bool grouped = columns.Any(c => c.Group.Length > 0);
+        if (grouped)
+        {
+            TableHeader.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            TableHeader.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            for (int start = 0; start < columns.Count;)
+            {
+                int end = start + 1;
+                while (end < columns.Count && !StartsGroup(columns, end))
+                    end++;
+
+                if (columns[start].Group.Length > 0)
+                {
+                    // Underlined across its columns, the gap before it left
+                    // out, so each group's line stops short of the next one's.
+                    var name = new Border
+                    {
+                        BorderBrush = _theme.Separator,
+                        BorderThickness = new Thickness(0, 0, 0, 1),
+                        Margin = new Thickness(StartsGroup(columns, start) ? GroupGap : 0, 0, 4, 3),
+                        Child = new TextBlock
+                        {
+                            Text = columns[start].Group,
+                            Foreground = _theme.Header,
+                            FontSize = SmallFont,
+                            TextAlignment = TextAlignment.Center,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                            Margin = new Thickness(0, 0, 0, 1),
+                        },
+                    };
+                    Grid.SetColumn(name, start);
+                    Grid.SetColumnSpan(name, end - start);
+                    TableHeader.Children.Add(name);
+                }
+                start = end;
+            }
+        }
+
+        AddGroupLines(TableHeader, columns, grouped ? 2 : 1);
 
         for (int i = 0; i < columns.Count; i++)
         {
@@ -1779,6 +2248,8 @@ public partial class SessionsWindow : PanelWindow
             };
 
             Grid.SetColumn(heading, i);
+            if (grouped)
+                Grid.SetRow(heading, 1);
             TableHeader.Children.Add(heading);
         }
     }
@@ -1787,8 +2258,42 @@ public partial class SessionsWindow : PanelWindow
     private void AddColumns<T>(Grid grid, IReadOnlyList<Column<T>> columns)
     {
         for (int i = 0; i < columns.Count; i++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ColumnWidth(columns[i], i)) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ColumnWidth(columns[i], i) + (StartsGroup(columns, i) ? GroupGap : 0)) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+    }
+
+    /// <summary>
+    /// Extra room before the first column of a group, with the dividing line
+    /// in its middle. Only number columns start a group after the first, and
+    /// those are right-aligned, so the room shows up as space on their left.
+    /// </summary>
+    private const double GroupGap = 14;
+
+    private static bool StartsGroup<T>(IReadOnlyList<Column<T>> columns, int index)
+        => index > 0 && columns[index].Group != columns[index - 1].Group;
+
+    /// <summary>
+    /// A faint upright line where a group begins, so the eye stays inside one
+    /// group while reading along a row. Hit-test off, so clicks still reach the row.
+    /// </summary>
+    private void AddGroupLines<T>(Grid grid, IReadOnlyList<Column<T>> columns, int rowSpan)
+    {
+        for (int i = 1; i < columns.Count; i++)
+        {
+            if (!StartsGroup(columns, i))
+                continue;
+            var line = new Border
+            {
+                Width = 1,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(GroupGap / 2, 0, 0, 0),
+                Background = _theme.Separator,
+                IsHitTestVisible = false,
+            };
+            Grid.SetColumn(line, i);
+            Grid.SetRowSpan(line, rowSpan);
+            grid.Children.Add(line);
+        }
     }
 
     /// <summary>
@@ -1842,8 +2347,15 @@ public partial class SessionsWindow : PanelWindow
         };
 
         // Cost only once a price is set, as in the table - ticking it would show nothing.
+        string? group = null;
         foreach (var column in AllSessionColumns.Where(c => !AlwaysShown(c.Key) && (c.Key != "cost" || _settings.EnergyPrice > 0)))
         {
+            // A line between groups, as in the table, so a list of twenty
+            // is read as seven short ones.
+            if (group is not null && column.Group != group)
+                menu.Items.Add(new Separator());
+            group = column.Group;
+
             var item = new MenuItem
             {
                 Header = column.Header,
@@ -1890,7 +2402,11 @@ public partial class SessionsWindow : PanelWindow
         // The margins, the scroll bar, and room for "cut short".
         const double Around = 100;
 
-        double needed = VisibleSessionColumns().Select(ColumnWidth).Sum() + Around;
+        // With the group gaps, which AddColumns adds on top of each width.
+        var columns = VisibleSessionColumns();
+        double needed = columns.Select(ColumnWidth).Sum()
+                      + Enumerable.Range(0, columns.Count).Count(i => StartsGroup(columns, i)) * GroupGap
+                      + Around;
         if (Width < needed)
             Width = Math.Min(needed, SystemParameters.WorkArea.Width);
     }
@@ -2357,18 +2873,22 @@ public partial class SessionsWindow : PanelWindow
         TitleText.Foreground = _theme.Section;
         TitleText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);
 
-        PickerLabel.Foreground = _theme.Label;
-        ChartTitleText.Foreground = _theme.Label;
-        ChartTitleText.FontSize = SmallFont;
+        // A heading, so styled as the cards' captions are: the section colour,
+        // small capitals spaced a little - it has to read as over the chips.
+        ChartTitleText.Foreground = _theme.Section;
+        ChartTitleText.FontSize = Math.Max(8, SmallFont - 1);
+        ChartTitleText.FontWeight = FontWeights.SemiBold;
+        // The same heading over the last session's chips.
+        LastSessionTitle.Foreground = ChartTitleText.Foreground;
+        LastSessionTitle.FontSize = ChartTitleText.FontSize;
+        LastSessionTitle.FontWeight = FontWeights.SemiBold;
         AverageSwatch.Background = AverageBrush;
-        AverageText.Foreground = _theme.Label;
-        AverageText.FontSize = SmallFont;
+        AverageSwatch.Opacity = AverageOpacity;
         HighestSwatch.Background = HighestBrush;
-        HighestText.Foreground = _theme.Label;
-        HighestText.FontSize = SmallFont;
         LowestSwatch.Background = LowestBrush;
-        LowestText.Foreground = _theme.Label;
-        LowestText.FontSize = SmallFont;
+        StyleChip(AverageChip, AverageText, AverageBrush);
+        StyleChip(HighestChip, HighestText, HighestBrush);
+        StyleChip(LowestChip, LowestText, LowestBrush);
         GameName.Foreground = Brushes.White;   // over a picture, not the panel: as bright as it gets
         GameNameBar.Background = BarBrush;
 

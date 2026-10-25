@@ -133,16 +133,158 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// <summary>
     /// Half the thickness, so the ends stay semicircular whatever height the
     /// bar is given. A fixed radius would square the ends off as it grew.
-    /// Square on a segmented bar: there the mask rounds each block, and a pill's
-    /// round ends would cut most of the first and last block away.
+    /// Square on flat, and on segmented and dots, where the mask shapes each
+    /// block or dot itself - a pill's round ends would cut most of the first
+    /// and last away. On the line style, half the line's thickness.
     /// </summary>
-    public CornerRadius BarCorner => _theme.BarMask is null ? new(TrackHeight / 2) : default;
+    public CornerRadius BarCorner => _theme.BarRoundEnds ? new(TrackLineThickness / 2) : default;
 
-    /// <summary>The groove's colour.</summary>
-    public Brush TrackBrush => _theme.BarTrack;
+    /// <summary>
+    /// The fill's own corners: inside an outlined track, smaller by the
+    /// inset, so the fill's ends follow the outline's curve.
+    /// </summary>
+    public CornerRadius FillCorner
+        => _theme.BarRoundEnds ? new(Math.Max(0, TrackLineThickness / 2 - TrackInset)) : default;
 
-    /// <summary>Cuts the bar into blocks when BarStyle is segmented - see <see cref="UiTheme.BarMask"/>.</summary>
+    /// <summary>The groove's colour - none on an outlined bar, where the outline is the groove.</summary>
+    public Brush TrackBrush => _theme.BarOutlined ? Brushes.Transparent : _theme.BarTrack;
+
+    /// <summary>The outlined style's outline, in the groove's colour.</summary>
+    public Brush TrackBorderBrush => _theme.BarTrack;
+
+    public Thickness TrackBorderThickness => _theme.BarOutlined ? new Thickness(1) : default;
+
+    /// <summary>
+    /// The gap between an outline and the fill inside it. None on a bar under
+    /// 6 px: with the outline as well it would leave the fill a sliver.
+    /// </summary>
+    public Thickness TrackPadding => _theme.BarOutlined && BarThickness >= 6 ? new Thickness(1) : default;
+
+    /// <summary>How far the fill sits inside the track on each side: outline plus gap.</summary>
+    private double TrackInset => TrackBorderThickness.Left + TrackPadding.Left;
+
+    /// <summary>
+    /// How thick the drawn track is: the bar thickness, or on the line style a
+    /// line of at most 2 px - the thickness setting sizes the knob instead.
+    /// </summary>
+    private double TrackLineThickness => _theme.BarLine ? Math.Min(2, BarThickness) : BarThickness;
+
+    /// <summary>
+    /// The bar's thickness: the setting, or with the value inside the bar at
+    /// least the text's height - see <see cref="UiTheme.InBarHeight"/>.
+    /// </summary>
+    private double BarThickness => _theme.ValueInBar ? _theme.InBarHeight : TrackHeight;
+
+    // --- The value inside the bar --------------------------------------------
+    //
+    // With ValueInBar the bar is 90% of the room between label and peak, so
+    // its width in pixels is the layout's, not known here. Where the fill,
+    // the peak tick and the knob end is said as a share of it instead - two
+    // star columns, filled and not - which WPF turns into pixels itself.
+
+    /// <summary>
+    /// Which layout the row's template builds - beside the bar or inside it.
+    /// Read by a trigger that swaps the template, so only the one in use
+    /// exists; Refresh, on a settings change, makes it look again.
+    /// </summary>
+    public bool ValueInBar => _theme.ValueInBar;
+
+    public double InBarHeight => _theme.InBarHeight;
+
+    /// <summary>
+    /// The bar length setting as 90% of the room, so the 5% either side is
+    /// kept even in a widget sized exactly to its content.
+    /// </summary>
+    public double InBarMinWidth => Math.Ceiling(TrackWidth / 0.9);
+
+    /// <summary>The filled share of the bar, and the rest - see the section note above.</summary>
+    public GridLength FillShare => new(_fraction, GridUnitType.Star);
+    public GridLength RestShare => new(1 - _fraction, GridUnitType.Star);
+
+    /// <summary>Where the peak reached, as a share, for its tick on a bar sized by the layout.</summary>
+    public GridLength PeakShare => new(_worst is double worst ? Fraction(worst) : 0, GridUnitType.Star);
+    public GridLength PeakRestShare => new(1 - (_worst is double worst ? Fraction(worst) : 0), GridUnitType.Star);
+
+    /// <summary>
+    /// The fill's gradient, spread over the whole bar whatever its width -
+    /// see <see cref="UiTheme.InBarFill"/> - or the plain bar colour without one.
+    /// </summary>
+    public Brush InBarFillBrush
+        => _theme.InBarFill(ReferenceEquals(_valueBrush, _theme.Crit) ? 2 : ReferenceEquals(_valueBrush, _theme.Warn) ? 1 : 0,
+                            _fraction)
+           ?? BarBrush;
+
+    /// <summary>
+    /// The number on the bar: the bright heading colour while all is well,
+    /// since green text on a coloured fill was hard to read, and the amber or
+    /// red of a reading past its levels, which must still show.
+    /// </summary>
+    public Brush InBarValueBrush
+        => ReferenceEquals(_valueBrush, _theme.Normal) ? _theme.Section : _valueBrush;
+
+    /// <summary>
+    /// The outline round the number, in the window colour so it reads over the
+    /// fill as well as the empty track - dark round light text on a dark
+    /// theme, light round dark text on a light one.
+    /// </summary>
+    public Brush InBarOutlineBrush => _theme.WindowAt(0xF0);
+
+    /// <summary>The knob centred on the end of the fill, half of it past that end.</summary>
+    public Thickness InBarKnobMargin => new(0, 0, -KnobSize / 2, 0);
+
+    /// <summary>The reading's share of the bar, stepped like the fill - what the share columns are built from.</summary>
+    private double _fraction;
+
+    /// <summary>Tells the inside-the-bar layout the fill moved; nothing to do in the other layout.</summary>
+    private void NoteFraction(double fraction)
+    {
+        if (!_theme.ValueInBar || _fraction == fraction)
+        {
+            _fraction = fraction;
+            return;
+        }
+        _fraction = fraction;
+        Set(nameof(FillShare));
+        Set(nameof(RestShare));
+        Set(nameof(InBarFillBrush));
+    }
+
+    /// <summary>
+    /// The drawn track's height: the line's on the line style, the full bar
+    /// thickness otherwise. Always a real height, never NaN for "fill": the
+    /// track is centred so the line sits in the middle, and a centred element
+    /// with no height is only as tall as its content - the track has none, so
+    /// every bar shrank to nothing.
+    /// </summary>
+    public double TrackLineHeight => TrackLineThickness;
+
+    /// <summary>Cuts the bar into blocks, dots or ticks - see <see cref="UiTheme.BarMask"/>.</summary>
     public Brush? BarMask => _theme.BarMask;
+
+    /// <summary>The striped style's stripes, on the fill alone - see <see cref="UiTheme.BarFillMask"/>.</summary>
+    public Brush? FillMask => _theme.BarFillMask;
+
+    /// <summary>The line style's knob: as big as the bar thickness setting, so that setting still sizes something.</summary>
+    public double KnobSize => TrackHeight;
+
+    public Visibility KnobVisibility => _theme.BarLine ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Centred on the end of the fill, kept inside the track so an empty or full bar's knob still shows whole.</summary>
+    public Thickness KnobMargin
+        => new(Math.Clamp(BarWidth - KnobSize / 2, 0, Math.Max(0, TrackWidth - KnobSize)), 0, 0, 0);
+
+    /// <summary>
+    /// The knob's colour: what the gradient has reached at the reading - an
+    /// absolute gradient on the knob itself would paint it in the start
+    /// colour wherever it stood - or the bar's plain colour without one.
+    /// </summary>
+    public Brush KnobBrush
+    {
+        get => _knobBrush;
+        private set => Set(ref _knobBrush, value, nameof(KnobBrush));
+    }
+
+    private Brush _knobBrush = Brushes.Transparent;
 
     /// <summary>
     /// The fill: the gradient when BarGradient is on, its end turned amber or
@@ -164,8 +306,15 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// </summary>
     public Thickness PeakMarkerMargin
         => _worst is double worst
-            ? new Thickness(Math.Clamp(Fraction(worst) * TrackWidth - 1, 0, Math.Max(0, TrackWidth - 2)), -2, 0, -2)
+            ? new Thickness(Math.Clamp(Fraction(worst) * TrackWidth - 2, 0, Math.Max(0, TrackWidth - 4)), -2, 0, -2)
             : default;
+
+    /// <summary>
+    /// The tick's thin dark edge, in the window colour: 1 px either side of
+    /// its 2 px core, so it stays crisp over the bright fill and the pale track
+    /// alike instead of melting into whichever is behind it.
+    /// </summary>
+    public Brush PeakMarkerEdgeBrush => _theme.WindowAt(0xE0);
 
     /// <summary>
     /// Only once there is a peak, with the bar showing and the setting on. Also
@@ -177,8 +326,44 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-    /// <summary>The heading colour: brighter than the track and either fill, so the tick stands out on both.</summary>
-    public Brush PeakMarkerBrush => _theme.Section;
+    /// <summary>
+    /// The tick's colour: the gradient's colour at the peak, ending in amber
+    /// or red if the peak crossed those levels, lightened part of the way to
+    /// white. It reads as part of the bar rather than a stray white mark, yet
+    /// stays brighter than the fill it may sit on. The heading colour when
+    /// there is no gradient.
+    /// </summary>
+    public Brush PeakMarkerBrush
+    {
+        get
+        {
+            if (_theme.BarGradient is null || _worst is not double worst)
+                return _theme.Section;
+
+            Color start = _theme.BarGradientStart;
+            Color end = _metric.Exceeds(worst, _metric.Crit) && _theme.Crit is SolidColorBrush crit ? crit.Color
+                      : _metric.Exceeds(worst, _metric.Warn) && _theme.Warn is SolidColorBrush warn ? warn.Color
+                      : _theme.BarGradientEnd;
+            double at = Fraction(worst);
+            byte Tint(byte a, byte b) => (byte)Math.Round(Math.Min(255, (a + (b - a) * at) + (255 - (a + (b - a) * at)) * 0.45));
+            var colour = Color.FromRgb(Tint(start.R, end.R), Tint(start.G, end.G), Tint(start.B, end.B));
+
+            // The last brush again when the colour hasn't moved: this is read
+            // on every new peak, which a climbing reading sets every tick, and
+            // on every settings change - a new brush each time added up over
+            // a game for a tick that mostly looks the same.
+            if (_peakMarkerBrush is { } cached && cached.Color == colour)
+                return cached;
+
+            var brush = new SolidColorBrush(colour);
+            brush.Freeze();
+            _peakMarkerBrush = brush;
+            return brush;
+        }
+    }
+
+    /// <summary>The peak marker's last brush - see <see cref="PeakMarkerBrush"/>.</summary>
+    private SolidColorBrush? _peakMarkerBrush;
 
     /// <summary>A reading's share of the bar, 0 to 1.</summary>
     private double Fraction(double value)
@@ -252,6 +437,9 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     {
         Set(nameof(PeakMarkerMargin));
         Set(nameof(PeakMarkerVisibility));
+        Set(nameof(PeakMarkerBrush));
+        Set(nameof(PeakShare));
+        Set(nameof(PeakRestShare));
     }
 
     /// <summary>Stable id for settings.json, e.g. "Temperature/CPU".</summary>
@@ -362,7 +550,15 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     public double BarWidth
     {
         get => _barWidth;
-        private set => Set(ref _barWidth, value, nameof(BarWidth));
+        private set
+        {
+            if (_barWidth == value)
+                return;
+            Set(ref _barWidth, value, nameof(BarWidth));
+            // The knob follows the end of the fill.
+            if (_theme.BarLine)
+                Set(nameof(KnobMargin));
+        }
     }
 
     public Brush ValueBrush
@@ -380,6 +576,8 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             // so it has to be told as well - a computed property has nothing
             // else to notice the change.
             Set(nameof(BarBrush));
+            Set(nameof(InBarFillBrush));
+            Set(nameof(InBarValueBrush));
         }
     }
 
@@ -438,6 +636,7 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
         {
             Value = "n/a";
             BarWidth = 0;
+            NoteFraction(0);
             ValueBrush = _theme.Unavailable;
             return;
         }
@@ -455,17 +654,50 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             NotePeakMarker();
         }
 
-        // A segmented bar fills whole blocks: a partly lit block reads as a
-        // rendering fault rather than a reading. Rounded to the nearest, so
-        // the bar is never more than half a block off.
+        // A segmented or dotted bar fills whole blocks or dots: a partly lit
+        // one reads as a rendering fault rather than a reading. Rounded to
+        // the nearest, so the bar is never more than half a step off.
         double fraction = Fraction(value);
-        if (_theme.BarMask is not null)
-            fraction = Math.Round(fraction * UiTheme.BarSegments) / UiTheme.BarSegments;
-        BarWidth = fraction * TrackWidth;
+        if (_theme.BarSteps is int steps)
+            fraction = Math.Round(fraction * steps) / steps;
+        // Against the room inside an outline, not the whole track, so a full
+        // reading fills to the outline and no further.
+        BarWidth = fraction * Math.Max(0, TrackWidth - 2 * TrackInset);
+        NoteFraction(fraction);
 
         ValueBrush = _metric.Exceeds(value, _metric.Crit) ? _theme.Crit
                    : _metric.Exceeds(value, _metric.Warn) ? _theme.Warn
                    : _theme.Normal;
+
+        // Only told when the colour really moved: a new brush every tick
+        // would redraw the knob even with the reading standing still.
+        if (_theme.BarLine)
+        {
+            var knob = KnobColour(fraction);
+            if (!(knob is SolidColorBrush now && _knobBrush is SolidColorBrush was && now.Color == was.Color))
+                KnobBrush = knob;
+        }
+    }
+
+    /// <summary>
+    /// The gradient's colour at <paramref name="fraction"/> along it, ending
+    /// in amber or red with the value as the bar's own gradient does; the
+    /// bar's plain brush when there is no gradient.
+    /// </summary>
+    private Brush KnobColour(double fraction)
+    {
+        if (_theme.BarGradient is null)
+            return BarBrush;
+
+        Color start = _theme.BarGradientStart;
+        Color end = ReferenceEquals(_valueBrush, _theme.Crit) && _theme.Crit is SolidColorBrush crit ? crit.Color
+                  : ReferenceEquals(_valueBrush, _theme.Warn) && _theme.Warn is SolidColorBrush warn ? warn.Color
+                  : _theme.BarGradientEnd;
+        byte Mix(byte a, byte b) => (byte)Math.Round(a + (b - a) * fraction);
+
+        var brush = new SolidColorBrush(Color.FromArgb(Mix(start.A, end.A), Mix(start.R, end.R), Mix(start.G, end.G), Mix(start.B, end.B)));
+        brush.Freeze();
+        return brush;
     }
 
     /// <summary>

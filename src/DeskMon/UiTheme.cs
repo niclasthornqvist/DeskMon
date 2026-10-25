@@ -106,9 +106,7 @@ public sealed class UiTheme
         accent.Freeze();
         SectionAccent = accent;
 
-        BarMask = string.Equals(settings.BarStyle, "segmented", StringComparison.OrdinalIgnoreCase)
-            ? MakeSegments(Math.Max(1, settings.BarTrackWidth), Math.Max(1, settings.BarTrackHeight))
-            : null;
+        ApplyBarStyle(settings);
         Unavailable = Make(settings.UnavailableColor, "#FF6B7280");
 
         // The chrome and Changed only when the look really changed: Apply runs
@@ -199,7 +197,6 @@ public sealed class UiTheme
     /// patch of the art behind a word can't swallow it.
     /// </summary>
     public System.Windows.Media.Effects.Effect TextHalo { get; private set; } = null!;
-
     /// <summary>The accent at <paramref name="alpha"/>, for tints like a selected row.</summary>
     public Brush AccentAt(byte alpha)
         => Solid(Color.FromArgb(alpha, AccentColor.R, AccentColor.G, AccentColor.B));
@@ -347,21 +344,234 @@ public sealed class UiTheme
     public Brush? BarGradientCrit { get; private set; }
 
     /// <summary>
-    /// Cuts the bar into blocks when BarStyle is segmented, null for a smooth
-    /// one. A mask over the track and its fill together, so both are blocks
-    /// and the gaps line up.
+    /// Cuts the bar into blocks, dots or ticks, null for a whole one. A mask
+    /// over the track and its fill together, so both are cut alike and the
+    /// gaps line up.
     /// </summary>
     public Brush? BarMask { get; private set; }
 
+    /// <summary>The striped style's stripes, over the filled part only - the empty track stays plain.</summary>
+    public Brush? BarFillMask { get; private set; }
+
+    /// <summary>
+    /// How many steps the bar fills in - blocks or dots - or null for a smooth
+    /// fill. A partly lit block or dot reads as a drawing fault, not a reading.
+    /// </summary>
+    public int? BarSteps { get; private set; }
+
+    /// <summary>Pill-shaped ends. Not on flat, nor where the mask shapes each block or dot itself.</summary>
+    public bool BarRoundEnds { get; private set; } = true;
+
+    /// <summary>The outlined style: the track a thin outline, the fill inset inside it.</summary>
+    public bool BarOutlined { get; private set; }
+
+    /// <summary>The line-and-knob style: a thin line, and a knob at the reading.</summary>
+    public bool BarLine { get; private set; }
+
     /// <summary>How many blocks a segmented bar has, whatever its length.</summary>
     public const int BarSegments = 12;
+
+    /// <summary>
+    /// The value drawn inside its bar, which fills 90% of the room between
+    /// label and peak - the ValueInBar setting, with bars shown.
+    /// </summary>
+    public bool ValueInBar { get; private set; }
+
+    /// <summary>How tall the bar is with the value inside: the thickness setting, but never less than the text.</summary>
+    public double InBarHeight { get; private set; } = 16;
+
+    /// <summary>
+    /// Set while the value is inside the bar: the masks' tiles are drawn for
+    /// this nominal width and stretched to the bar's real one, which is 90%
+    /// of the row's room and not known here. Null tiles in fixed pixels.
+    /// </summary>
+    private double? _tileStretchWidth;
+
+    /// <summary>Fills already made by <see cref="InBarFill"/>, by level and percent - see there.</summary>
+    private readonly Dictionary<(int Level, int Percent), Brush> _inBarFills = new();
+
+    /// <summary>
+    /// The gradient for a fill that is <paramref name="fraction"/> of an
+    /// inside-the-bar track whose width isn't known in pixels: drawn
+    /// relative to the fill, and stretched so the whole gradient spans the
+    /// whole track - a low reading stays at the start colour as on a normal
+    /// bar. Level 0 is calm, 1 warning, 2 critical. Kept by whole percent, so
+    /// a reading moving every tick reuses a hundred brushes at most rather
+    /// than making one each time.
+    /// </summary>
+    public Brush? InBarFill(int level, double fraction)
+    {
+        if (BarGradient is null)
+            return null;
+
+        int percent = Math.Clamp((int)Math.Round(fraction * 100), 1, 100);
+        if (_inBarFills.TryGetValue((level, percent), out var cached))
+            return cached;
+
+        Color end = level switch
+        {
+            2 when Crit is SolidColorBrush crit => crit.Color,
+            1 when Warn is SolidColorBrush warn => warn.Color,
+            _ => BarGradientEnd,
+        };
+        var brush = new LinearGradientBrush(BarGradientStart, end, new Point(0, 0), new Point(100.0 / percent, 0));
+        brush.Freeze();
+        _inBarFills[(level, percent)] = brush;
+        return brush;
+    }
+
+    /// <summary>
+    /// Works out the bar's look from BarStyle once per settings change, so
+    /// each row only reads it: rounded, flat, segmented, dots, striped,
+    /// ticks, outlined or line. Anything else - a hand-edited typo - is
+    /// rounded, the default.
+    /// </summary>
+    private void ApplyBarStyle(AppSettings settings)
+    {
+        ValueInBar = settings.ValueInBar && settings.ShowBars;
+        InBarHeight = Math.Max(Math.Max(1, settings.BarTrackHeight), Math.Ceiling(settings.FontSize * 1.35) + 2);
+        _inBarFills.Clear();
+
+        double width = Math.Max(1, settings.BarTrackWidth);
+        // With the value inside, the bar is as tall as its text, so the dots
+        // and blocks are drawn for that height - and their tiles stretch
+        // with a bar that is now 90% of whatever room the row has.
+        double height = ValueInBar ? InBarHeight : Math.Max(1, settings.BarTrackHeight);
+        _tileStretchWidth = ValueInBar ? width : null;
+        string style = (settings.BarStyle ?? string.Empty).Trim().ToLowerInvariant();
+
+        BarMask = null;
+        BarFillMask = null;
+        BarSteps = null;
+        BarRoundEnds = true;
+        BarOutlined = false;
+        BarLine = false;
+
+        switch (style)
+        {
+            case "flat":
+                BarRoundEnds = false;
+                break;
+            case "segmented":
+                BarMask = MakeSegments(width, height);
+                BarSteps = BarSegments;
+                BarRoundEnds = false;
+                break;
+            case "dots":
+                BarMask = MakeDots(width, height, out int dots);
+                BarSteps = dots;
+                BarRoundEnds = false;
+                break;
+            case "striped":
+                BarFillMask = MakeStripes(height);
+                break;
+            case "ticks":
+                BarMask = MakeTicks(width, height);
+                break;
+            case "outlined":
+                BarOutlined = true;
+                break;
+            case "outlined-striped":
+                // Both at once: the two are independent in MetricRow - the
+                // outline and inset are the track's, the stripes the fill's.
+                BarOutlined = true;
+                BarFillMask = MakeStripes(height);
+                break;
+            case "line":
+                BarLine = true;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Round dots, as many as fit the track with a gap of a third of their
+    /// size between - so a thicker bar has fewer, bigger dots. Spread to fill
+    /// the track exactly, so the last dot ends where the track does.
+    /// </summary>
+    private Brush MakeDots(double width, double height, out int count)
+    {
+        double gap = Math.Max(1, Math.Round(height / 3));
+        count = Math.Max(2, (int)Math.Floor((width + gap) / (height + gap)));
+        double pitch = width / count;
+        double size = Math.Max(1, Math.Min(height, pitch - gap));
+
+        var tile = new DrawingGroup();
+        tile.Children.Add(new GeometryDrawing(Brushes.Transparent, null, new RectangleGeometry(new Rect(0, 0, pitch, height))));
+        tile.Children.Add(new GeometryDrawing(Brushes.Black, null,
+            new EllipseGeometry(new Rect((pitch - gap - size) / 2, (height - size) / 2, size, size))));
+        return Tiled(tile, pitch, height);
+    }
+
+    /// <summary>
+    /// A notch every tenth of the track, so 70 against 80 percent is judged
+    /// without reading the number. 1 px wide - enough to see, too little to
+    /// break the bar into blocks.
+    /// </summary>
+    private Brush MakeTicks(double width, double height)
+    {
+        double pitch = width / 10;
+        var tile = new DrawingGroup();
+        tile.Children.Add(new GeometryDrawing(Brushes.Transparent, null, new RectangleGeometry(new Rect(0, 0, pitch, height))));
+        tile.Children.Add(new GeometryDrawing(Brushes.Black, null, new RectangleGeometry(new Rect(0, 0, Math.Max(1, pitch - 1), height))));
+        return Tiled(tile, pitch, height);
+    }
+
+    /// <summary>
+    /// Diagonal stripes, full and two-thirds strength in turn: dimmed rather
+    /// than cut out, so the fill keeps its colour and its length reads as
+    /// clearly as a plain one's. A repeating gradient with hard stops - one
+    /// brush, no tiles.
+    /// </summary>
+    private static Brush MakeStripes(double height)
+    {
+        double step = Math.Max(4, height);
+        var brush = new LinearGradientBrush
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(step, step),
+            SpreadMethod = GradientSpreadMethod.Repeat,
+        };
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0.5));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xA8, 0, 0, 0), 0.5));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xA8, 0, 0, 0), 1));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>A tile repeated along the track from its left end, frozen to share between every row.</summary>
+    private Brush Tiled(Drawing tile, double pitch, double height)
+    {
+        // Inside-the-bar: tiles as a share of the bar, stretched to it, so
+        // the same number of blocks or dots spans a bar of any width.
+        var brush = _tileStretchWidth is double nominal
+            ? new DrawingBrush(tile)
+            {
+                TileMode = TileMode.Tile,
+                Viewport = new Rect(0, 0, pitch / nominal, 1),
+                ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
+                Stretch = Stretch.Fill,
+            }
+            : new DrawingBrush(tile)
+            {
+                TileMode = TileMode.Tile,
+                Viewport = new Rect(0, 0, pitch, height),
+                ViewportUnits = BrushMappingMode.Absolute,
+                Stretch = Stretch.None,
+                AlignmentX = AlignmentX.Left,
+                AlignmentY = AlignmentY.Top,
+            };
+        brush.Freeze();
+        return brush;
+    }
 
     /// <summary>
     /// A tiled mask of <see cref="BarSegments"/> blocks with a 2px gap. Built
     /// once per settings change and shared by every row - one frozen brush
     /// costs nothing per tick, unlike twelve elements on each row.
     /// </summary>
-    private static Brush MakeSegments(double width, double height)
+    private Brush MakeSegments(double width, double height)
     {
         double pitch = width / BarSegments;
         double gap = pitch > 5 ? 2 : 1;
@@ -374,17 +584,9 @@ public sealed class UiTheme
         tile.Children.Add(new GeometryDrawing(Brushes.Black, null,
             new RectangleGeometry(new Rect(0, 0, Math.Max(1, pitch - gap), height), corner, corner)));
 
-        var brush = new DrawingBrush(tile)
-        {
-            TileMode = TileMode.Tile,
-            Viewport = new Rect(0, 0, pitch, height),
-            ViewportUnits = BrushMappingMode.Absolute,
-            Stretch = Stretch.None,
-            AlignmentX = AlignmentX.Left,
-            AlignmentY = AlignmentY.Top,
-        };
-        brush.Freeze();
-        return brush;
+        // Through Tiled like the newer masks, so it stretches too when the
+        // value is inside the bar.
+        return Tiled(tile, pitch, height);
     }
 
     /// <summary>The groove behind the bar.</summary>
