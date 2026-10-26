@@ -28,6 +28,19 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.70.0", "2026-10-26",
+            "Sessions: the chart's bars are thin, rounded neon tubes with a soft glow in their own colour",
+            "Sessions: the numbers over the chart's bars have a dark halo and sit above the average line, so the green dashes no longer run through them",
+            "Sessions: clicking a session in the table lights up its bar in the chart, with its value and ID shown",
+            "Sessions: Ctrl+click picks several sessions and Delete removes them all at once; a new Delete all clears the shown game's history - both ask twice",
+            "Sessions: the SCORE card shows its target frame rate - \"Target 144 fps ▾\" - and a click on it opens the menu to change it, not only a right-click",
+            "Settings: the status line at the bottom is the same size as the notes window's",
+            "Fix: the notes' HISTORY no longer fills with identical copies - opening unchanged notes again doesn't save another copy of them, and the repeats already there are cleared, the oldest of each kept",
+            "Notes: Clear history under the HISTORY list deletes every earlier copy of the note on show - it asks twice",
+            "Settings: Gradient across (BarGradientSpan) - \"bar\" fits the whole gradient into every bar, so short ones show the end colour too; \"track\" keeps it as before",
+            "Sessions: the chart's highest and lowest bars have gradients of their own, deep to light orange and rose to soft red, when Gradient bars is on",
+            "Sessions: a hint under the table says how to pick sessions - click one, Ctrl+click for more",
+            "Widget: the clock's day, date and week are a size larger and the date brighter, so they're easier to read"),
         new("1.69.0", "2026-10-25",
             "Widget: a VRAM row in the GAME section - how full the graphics card's memory is, amber at 90% and red at 97%",
             "Widget: the clock shows the week number after the date - \"2026-10-25 · Week 43\", counted the ISO way, from Monday",

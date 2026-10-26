@@ -251,6 +251,14 @@ public sealed class NotesStore
             Directory.CreateDirectory(BackupFolder);
 
             string prefix = SafeFileName(gameName) + "~";
+
+            // A copy is taken after every load, so opening the same notes
+            // three times without a change in between made three identical
+            // copies - HISTORY filled with repeats, and they pushed older,
+            // different copies out of the 20 kept.
+            if (SameAsNewest(prefix, File.ReadAllBytes(source)))
+                return;
+
             string target = Path.Combine(BackupFolder,
                 $"{prefix}{DateTime.Now:yyyy-MM-dd_HHmmss}.rtf");
 
@@ -264,11 +272,56 @@ public sealed class NotesStore
     }
 
     /// <summary>
+    /// Whether the newest copy of one game already holds exactly these bytes.
+    /// Only the newest: an older copy with the same text is a real step back
+    /// in the history - notes changed and then changed back - and stays.
+    /// The length first, so a copy that differs costs no read at all.
+    /// </summary>
+    private bool SameAsNewest(string prefix, byte[] data)
+    {
+        string? newest = Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf")
+            .OrderByDescending(path => path, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return newest is not null
+            && new FileInfo(newest).Length == data.Length
+            && File.ReadAllBytes(newest).AsSpan().SequenceEqual(data);
+    }
+
+    /// <summary>
+    /// Deletes each copy that is byte for byte the one before it - the
+    /// repeats builds before 1.70.0 made on every load (see Backup). The
+    /// oldest of a run stays, since its time is when those notes first
+    /// looked like that. Neighbours only, as in <see cref="SameAsNewest"/>:
+    /// the same text further apart is a real change and its undo.
+    /// The length first, so copies that differ are never read.
+    /// </summary>
+    private void RemoveRepeats(string prefix)
+    {
+        string? kept = null;
+        foreach (string path in Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf")
+                     .OrderBy(path => path, StringComparer.Ordinal).ToList())
+        {
+            if (kept is not null
+                && new FileInfo(kept).Length == new FileInfo(path).Length
+                && File.ReadAllBytes(kept).AsSpan().SequenceEqual(File.ReadAllBytes(path)))
+            {
+                File.Delete(path);
+                continue;
+            }
+            kept = path;
+        }
+    }
+
+    /// <summary>
     /// Keeps the newest <see cref="BackupsKept"/> copies of one game. The
     /// timestamp sorts the way it reads, so name order is age order.
     /// </summary>
     private void Prune(string prefix)
     {
+        // Repeats first, so the ones they free make room under the limit.
+        RemoveRepeats(prefix);
+
         var stale = Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf")
             .OrderByDescending(path => path, StringComparer.Ordinal)
             .Skip(BackupsKept);
@@ -292,10 +345,40 @@ public sealed class NotesStore
             Directory.CreateDirectory(BackupFolder);
 
             string prefix = SafeFileName(gameName) + "~";
+
+            // Already kept, byte for byte: a second failed switch with the
+            // same notes on screen would only add a repeat to HISTORY.
+            if (SameAsNewest(prefix, data))
+                return null;
+
             AtomicFile.WriteAllBytes(Path.Combine(BackupFolder, $"{prefix}{DateTime.Now:yyyy-MM-dd_HHmmss}.rtf"), data);
 
             // A prune that fails costs only tidiness; the copy is made.
             try { Prune(prefix); } catch { }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Deletes every copy of one game - the notes window's Clear history.
+    /// The same exact prefix as <see cref="BackupsOf"/>, so it takes only
+    /// what that list showed, never "Last Epoch 2"'s with "Last Epoch"'s.
+    /// Null when done, else why not; copies already gone count as done.
+    /// </summary>
+    public string? DeleteBackups(string gameName)
+    {
+        try
+        {
+            if (!Directory.Exists(BackupFolder))
+                return null;
+
+            string prefix = SafeFileName(gameName) + "~";
+            foreach (string path in Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf").ToList())
+                File.Delete(path);
             return null;
         }
         catch (Exception ex)
@@ -324,6 +407,13 @@ public sealed class NotesStore
                 return Array.Empty<BackupCopy>();
 
             string prefix = SafeFileName(gameName) + "~";
+
+            // Here too and not only on a new copy: with repeats no longer
+            // made, a game might not get a new copy for a long time, and the
+            // old repeats would sit in HISTORY until it did. A repeat that
+            // can't go is only a repeat, so it never stops the list.
+            try { RemoveRepeats(prefix); } catch { }
+
             var copies = new List<BackupCopy>();
 
             foreach (string path in Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf"))

@@ -443,6 +443,14 @@
                                       HorizontalScrollBarVisibility="Disabled" Focusable="False">
                             <StackPanel x:Name="HistoryList" />
                         </ScrollViewer>
+
+                        <!-- Under the list, at its right like the link popup's
+                             buttons. Asks twice - see ClearHistory_Click. -->
+                        <Button x:Name="ClearHistoryButton" Style="{StaticResource PanelButton}"
+                                Width="Auto" Padding="10,0" Margin="0,10,0,0" HorizontalAlignment="Right"
+                                Content="Clear history"
+                                ToolTip="Delete every earlier copy of this note&#x0a;The notes themselves and other notes' copies are kept."
+                                Click="ClearHistory_Click" />
                     </StackPanel>
                 </Border>
             </Popup>

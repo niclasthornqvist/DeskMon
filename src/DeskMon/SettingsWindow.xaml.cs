@@ -1662,8 +1662,10 @@ public partial class SettingsWindow : PanelWindow
         TitleText.Foreground = _theme.Section;
         TitleText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);
 
+        // The notes window's status line size, so the two windows' bottom
+        // lines match - this one was half a point larger.
         StatusText.Foreground = _theme.Header;
-        StatusText.FontSize = Math.Max(8, UiTheme.PanelFontSize - 2.5);
+        StatusText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 3);
 
         FontSize = UiTheme.PanelFontSize;
         FontFamily = _theme.PanelFont;

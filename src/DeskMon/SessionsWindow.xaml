@@ -113,7 +113,7 @@
                 <!-- A bin: lid with a handle, and a body with two ribs. -->
                 <Button x:Name="DeleteButton" Style="{StaticResource ToolButton}"
                         IsEnabled="False"
-                        ToolTip="Delete the selected session&#x0a;Click a session in the table first."
+                        ToolTip="Delete the selected sessions&#x0a;Click a session in the table first - Ctrl+click picks more than one."
                         ToolTipService.ShowOnDisabled="True"
                         Click="Delete_Click">
                     <StackPanel Orientation="Horizontal">
@@ -122,6 +122,21 @@
                                     M2.5,2.5 V9.5 H8.5 V2.5
                                     M4.5,4.5 V7.5 M6.5,4.5 V7.5" />
                         <TextBlock x:Name="DeleteText" Text="DELETE" />
+                    </StackPanel>
+                </Button>
+
+                <!-- The same bin with a cross through its body: everything goes. -->
+                <Button x:Name="DeleteAllButton" Style="{StaticResource ToolButton}"
+                        IsEnabled="False"
+                        ToolTip="Delete every session of this game&#x0a;Its whole log - other games are not touched."
+                        ToolTipService.ShowOnDisabled="True"
+                        Click="DeleteAll_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M1.5,2.5 H9.5 M4.5,2.5 V0.5 H6.5 V2.5
+                                    M2.5,2.5 V9.5 H8.5 V2.5
+                                    M4,4.5 L7,7.5 M7,4.5 L4,7.5" />
+                        <TextBlock x:Name="DeleteAllText" Text="DELETE ALL" />
                     </StackPanel>
                 </Button>
             </StackPanel>
@@ -314,6 +329,14 @@
             <!-- Column headings, outside the scroller so they stay put. -->
             <Grid x:Name="TableHeader" DockPanel.Dock="Top" Margin="12,12,12,2" />
             <Border x:Name="TableRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- How to pick sessions, under the table: Ctrl+click was only in
+                 Delete's tooltip, so picking several went unfound. Before the
+                 scroller, which fills what is left. Shown for one game's
+                 sessions only - see ShowRows. -->
+            <TextBlock x:Name="PickHint" DockPanel.Dock="Bottom" Margin="14,0,12,8"
+                       TextTrimming="CharacterEllipsis"
+                       Text="Click a session to select it  ·  Ctrl+click to select more  ·  Delete removes the selected" />
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           Margin="12,2,4,10" Focusable="False">

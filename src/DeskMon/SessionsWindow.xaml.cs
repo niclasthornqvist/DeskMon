@@ -45,8 +45,12 @@ public partial class SessionsWindow : PanelWindow
     private (string Key, bool Descending) _sessionSort = ("date", true);
     private (string Key, bool Descending) _gameSort = ("played", true);
 
-    /// <summary>The session clicked in the table - what Delete would delete.</summary>
-    private SessionRecord? _selected;
+    /// <summary>
+    /// The sessions clicked in the table - what Delete would delete. A list,
+    /// not one session, so Ctrl+click can gather several and clearing out a
+    /// run of test sessions isn't one delete per row.
+    /// </summary>
+    private readonly List<SessionRecord> _selected = new();
 
     /// <summary>
     /// Delete asks twice: the first click arms it, a second within this time
@@ -54,6 +58,13 @@ public partial class SessionsWindow : PanelWindow
     /// be the one white thing on a dark panel - and a deleted session is gone.
     /// </summary>
     private readonly DispatcherTimer _deleteArmed = new() { Interval = TimeSpan.FromSeconds(4) };
+
+    /// <summary>
+    /// Which of Delete and Delete all the timer is armed for: one shared
+    /// timer, so arming one disarms the other and a click meant for one can
+    /// never confirm the other.
+    /// </summary>
+    private Button? _armedButton;
 
     /// <summary>
     /// After a session is deleted. The notepad shows the game's last session
@@ -95,6 +106,19 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private static readonly Brush LowestBrush = Frozen(Color.FromRgb(0xF2, 0x8B, 0x8B));
     private static readonly Brush LowestHover = Frozen(Color.FromRgb(0xF8, 0xB4, 0xB4));
+
+    /// <summary>
+    /// The two marked bars' own gradients, for when the plain bars have one:
+    /// solid, they were the only flat bars in the chart. Each a deeper shade
+    /// of its colour at the foot rising to a lighter one, with the plain
+    /// colour in between - so it still reads as orange or soft red and still
+    /// matches its label and key. The red's foot kept rose rather than deep,
+    /// for the reason LowestBrush is pale.
+    /// </summary>
+    private static readonly Color HighestFoot = Color.FromRgb(0xEA, 0x6A, 0x12);
+    private static readonly Color HighestTip = Color.FromRgb(0xFC, 0xC3, 0x7E);
+    private static readonly Color LowestFoot = Color.FromRgb(0xE5, 0x6F, 0x7A);
+    private static readonly Color LowestTip = Color.FromRgb(0xF9, 0xB8, 0xB0);
 
     /// <summary>
     /// The average, drawn as a dashed line across the bars rather than as a
@@ -643,7 +667,10 @@ public partial class SessionsWindow : PanelWindow
         // Kept across a refresh, found again by its line since the records
         // are new objects. Gone if it isn't there any more, so Delete can
         // never act on a session the table no longer shows.
-        _selected = _selected is null ? null : _sessions.FirstOrDefault(s => s.Raw == _selected.Raw);
+        var kept = _selected.Select(old => _sessions.FirstOrDefault(s => s.Raw == old.Raw))
+                            .OfType<SessionRecord>().Distinct().ToList();
+        _selected.Clear();
+        _selected.AddRange(kept);
         DisarmDelete();
 
         DrawChart();
@@ -1043,10 +1070,11 @@ public partial class SessionsWindow : PanelWindow
             var card = AddStat("SCORE", $"{score}  {PerformanceScore.Grade(score)}",
                                $"Performance out of 100, from the last {PerformanceScore.GameSessions} sessions with a frame rate, " +
                                "weighted by how long each ran.\n" +
-                               target + "\nRight-click to give this game a target of its own.\n" +
+                               target + "\nClick to give this game a target of its own.\n" +
                                "Point at a session for how its score was reached.",
                                valueBrush: ScoreBrush(score), iconData: ScoreCardIcon);
             card.ContextMenu = TargetMenu(game);
+            ShowTargetOnCard(card, game);
         }
 
         // Both in one form, date and time, without the weekday: the two read
@@ -1195,6 +1223,39 @@ public partial class SessionsWindow : PanelWindow
         if (valueBrush is not null)
             text.Inlines.LastInline.Foreground = valueBrush;
         return chip;
+    }
+
+    /// <summary>
+    /// The target under SCORE's figure - "Target 144 fps ▾" - and a left click
+    /// that opens the target menu too. The menu was only on a right-click,
+    /// which nothing on screen hinted at, so the per-game target went unfound.
+    /// The ▾ says it opens a list, as on the window's dropdowns.
+    /// </summary>
+    private void ShowTargetOnCard(FrameworkElement card, string game)
+    {
+        if (card is not Border { Child: Panel content } border)
+            return;
+
+        content.Children.Add(new TextBlock
+        {
+            Text = PerformanceScore.HasOwnTarget(game)
+                ? $"Target {PerformanceScore.TargetFor(game):0} fps (this game) ▾"
+                : $"Target {PerformanceScore.Target:0} fps ▾",
+            Foreground = _theme.Label,
+            FontSize = SmallFont - 1,
+            Margin = new Thickness(0, 1, 0, 0),
+        });
+
+        border.Cursor = Cursors.Hand;
+        border.MouseLeftButtonUp += (_, _) =>
+        {
+            if (border.ContextMenu is { } menu)
+            {
+                menu.PlacementTarget = border;
+                menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                menu.IsOpen = true;
+            }
+        };
     }
 
     /// <summary>Frame rates offered for a game's own target: the common caps and refresh rates.</summary>
@@ -1662,10 +1723,56 @@ public partial class SessionsWindow : PanelWindow
 
         // Slots spread over the whole width, but never wider than an eighth of
         // it: a game with three sessions would otherwise draw three slabs.
-        // Bars take 60% of their slot, so the gaps between sessions stay
-        // visible, and stop at 24 px for the same reason.
+        // Neon bars: thin, at most 11 px, so the glow around them is what fills
+        // the slot - wide bars with a glow merged into one bright block.
         double slot = plotWidth / Math.Max(shown.Count, 8);
-        double barWidth = Math.Min(24, Math.Max(2, Math.Min(slot * 0.6, slot - Gap)));
+        double barWidth = Math.Min(NeonBarWidth, Math.Max(2, Math.Min(slot * 0.6, slot - Gap)));
+
+        // The sessions picked in the table: a faint accent column behind each
+        // one's slot, so they can be found in the chart without counting IDs.
+        // Behind the glow and bars, and drawn even without a bar, so a session
+        // that didn't record this reading still shows where it would be.
+        var picked = new HashSet<int>(_selected.Select(p => shown.FindIndex(s => ReferenceEquals(s, p))).Where(i => i >= 0));
+        foreach (int i in picked)
+        {
+            var column = new Border
+            {
+                Width = slot,
+                Height = plotHeight + ZeroRoom,
+                Background = _theme.AccentAt(0x26),
+                CornerRadius = new CornerRadius(Math.Min(4, slot / 2)),
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(column, plotLeft + i * slot);
+            Canvas.SetTop(column, plotTop);
+            Chart.Children.Add(column);
+        }
+
+        // With one picked its value and ID are always shown; with several,
+        // forced labels on neighbouring bars would run into each other.
+        int onlyPicked = picked.Count == 1 ? picked.First() : -1;
+
+        // The glow: a copy of every bar in one layer behind them, blurred as a
+        // whole. One effect for the chart instead of one per bar - each WPF
+        // effect renders its element off-screen, and forty of them is real GPU
+        // work in a window that can sit over a game. A copy rather than a
+        // DropShadowEffect so each glow keeps its own bar's colour.
+        var glow = new Canvas
+        {
+            IsHitTestVisible = false,
+            Effect = new System.Windows.Media.Effects.BlurEffect
+            {
+                Radius = 10,
+                RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance,
+            },
+        };
+        Chart.Children.Add(glow);
+
+        // The bars' value labels in a layer of their own, added last so they
+        // sit over the average line, with the window-coloured halo round them:
+        // where the green dashes ran through a number it was hard to read.
+        // One effect on the layer, not one per label, for the glow's reason.
+        var valueLabels = new Canvas { IsHitTestVisible = false, Effect = _theme.TextHalo };
 
         // Every bar's value above it when the slots are wide enough for the
         // widest of them - a few sessions, or a wide window. Squeezed, only the
@@ -1706,24 +1813,46 @@ public partial class SessionsWindow : PanelWindow
                 // difference there isn't.
                 bool isHighest = value >= highest;
                 bool isLowest = markLowest && value <= lowest;
-                var (normal, lit) = isHighest ? (HighestBrush, HighestHover)
-                                  : isLowest ? (LowestBrush, LowestHover)
+                var (normal, lit) = isHighest ? MarkedBar(HighestFoot, HighestTip, HighestBrush, HighestHover, barHeight, plotHeight)
+                                  : isLowest ? MarkedBar(LowestFoot, LowestTip, LowestBrush, LowestHover, barHeight, plotHeight)
                                   : PlainBar(barHeight, plotHeight);
 
-                // Rounded at the data end only; the foot sits square on the baseline.
+                // The picked session's bar stays in its hover colour, so it
+                // stands out of the column as well as being inside it.
+                bool isPicked = picked.Contains(i);
+                if (isPicked)
+                    normal = lit;
+
+                // Rounded at both ends, a lit tube rather than a block standing
+                // on the baseline - the neon look.
                 var bar = new Border
                 {
                     Width = barWidth,
                     Height = barHeight,
                     Background = normal,
-                    CornerRadius = new CornerRadius(Math.Min(3, barWidth / 2), Math.Min(3, barWidth / 2), 0, 0),
+                    CornerRadius = new CornerRadius(barWidth / 2),
                     IsHitTestVisible = false,
                 };
                 Canvas.SetLeft(bar, x);
                 Canvas.SetTop(bar, baseline - barHeight);
                 Chart.Children.Add(bar);
 
-                if (labelAll || isHighest || isLowest)
+                // Its glow: 2 px wider so the blur has more colour to spread
+                // and still shows beside a 2 px bar on a squeezed chart.
+                var halo = new Border
+                {
+                    Width = barWidth + 2,
+                    Height = barHeight,
+                    Background = normal,
+                    CornerRadius = new CornerRadius(barWidth / 2 + 1),
+                };
+                Canvas.SetLeft(halo, x - 1);
+                Canvas.SetTop(halo, baseline - barHeight);
+                glow.Children.Add(halo);
+
+                // The picked one always has its number, even squeezed: having
+                // picked it, its value is what you came to the chart for.
+                if (labelAll || isHighest || isLowest || i == onlyPicked)
                 {
                     // In the bar's own colour when it is a marked one, so the
                     // number says which mark it is; dim otherwise.
@@ -1740,7 +1869,7 @@ public partial class SessionsWindow : PanelWindow
                     double left = Math.Clamp(x + barWidth / 2 - textWidth / 2, plotLeft, width - textWidth);
                     Canvas.SetLeft(label, left);
                     Canvas.SetTop(label, baseline - barHeight - labelSize - 4);
-                    Chart.Children.Add(label);
+                    valueLabels.Children.Add(label);
                 }
 
                 // Not "Highest {name}": the peak measures are already named
@@ -1751,8 +1880,10 @@ public partial class SessionsWindow : PanelWindow
                 else if (isLowest)
                     (headline, headlineBrush) = ($"Lowest in the chart: {value:0}", LowestBrush);
 
-                hover.MouseEnter += (_, _) => bar.Background = lit;
-                hover.MouseLeave += (_, _) => bar.Background = normal;
+                // The glow lights up with its bar, or the hovered bar would
+                // sit brighter than its own halo.
+                hover.MouseEnter += (_, _) => bar.Background = halo.Background = lit;
+                hover.MouseLeave += (_, _) => bar.Background = halo.Background = normal;
             }
 
             // A new driver or Windows build: a small accent triangle under the
@@ -1771,7 +1902,12 @@ public partial class SessionsWindow : PanelWindow
             }
 
             // Below the change triangle's row, whether or not there is a bar.
-            if ((shown.Count - 1 - i) % idEvery == 0)
+            // A picked session's ID in the accent. A lone pick's always, and a
+            // neighbour's that would run into it gives way, or the two read as
+            // one number.
+            bool idPicked = picked.Contains(i);
+            bool crowdsPicked = onlyPicked >= 0 && i != onlyPicked && Math.Abs(i - onlyPicked) * slot < idWidth;
+            if (i == onlyPicked || ((shown.Count - 1 - i) % idEvery == 0 && !crowdsPicked))
             {
                 string id = session.Id.ToString(CultureInfo.InvariantCulture);
                 double idTextWidth = ValueWidth(id, idSize);
@@ -1779,7 +1915,8 @@ public partial class SessionsWindow : PanelWindow
                 {
                     Text = id,
                     FontSize = idSize,
-                    Foreground = _theme.Header,
+                    Foreground = idPicked ? _theme.Accent : _theme.Header,
+                    FontWeight = idPicked ? FontWeights.SemiBold : FontWeights.Normal,
                     IsHitTestVisible = false,
                 };
                 Canvas.SetLeft(idLabel, Math.Clamp(plotLeft + i * slot + slot / 2 - idTextWidth / 2, plotLeft, width - idTextWidth));
@@ -1805,6 +1942,7 @@ public partial class SessionsWindow : PanelWindow
             // away from the bars, which are what the chart is about.
             Opacity = AverageOpacity,
         });
+        Chart.Children.Add(valueLabels);
     }
 
     /// <summary>
@@ -1853,6 +1991,9 @@ public partial class SessionsWindow : PanelWindow
     /// <summary>The average line's opacity, which its key in the legend shares so the two still match.</summary>
     private const double AverageOpacity = 0.55;
 
+    /// <summary>The chart's neon bars at their widest - see DrawChart.</summary>
+    private const double NeonBarWidth = 11;
+
     /// <summary>
     /// An unmarked bar's colour and its hover: the blue, or with BarGradient on
     /// the settings' gradient rising from the baseline. The gradient spans the
@@ -1865,11 +2006,25 @@ public partial class SessionsWindow : PanelWindow
         if (!_settings.BarGradient)
             return (BarBrush, BarHover);
 
+        return GradientBar(_theme.BarGradientStart, _theme.BarGradientEnd, barHeight, plotHeight);
+    }
+
+    /// <summary>
+    /// The highest or lowest bar: its own gradient when the plain bars have
+    /// one, laid out the same way so all bars agree, else its solid colour.
+    /// </summary>
+    private (Brush Normal, Brush Lit) MarkedBar(Color foot, Color tip, Brush solid, Brush solidLit,
+                                                double barHeight, double plotHeight)
+        => _settings.BarGradient ? GradientBar(foot, tip, barHeight, plotHeight) : (solid, solidLit);
+
+    /// <summary>A bar's gradient from <paramref name="start"/> at its foot, and the lighter one for its hover.</summary>
+    private (Brush Normal, Brush Lit) GradientBar(Color start, Color end, double barHeight, double plotHeight)
+    {
         // In the bar's own pixels: its foot is at barHeight, the plot's top
-        // plotHeight above that.
+        // plotHeight above that - or, with BarGradientSpan "bar", the bar's
+        // own top, so every bar shows the whole gradient as the widget's do.
         var foot = new Point(0, barHeight);
-        var top = new Point(0, barHeight - plotHeight);
-        Color start = _theme.BarGradientStart, end = _theme.BarGradientEnd;
+        var top = new Point(0, _theme.GradientAcrossBar ? 0 : barHeight - plotHeight);
         return (UiTheme.MakeGradient(start, end, foot, top),
                 UiTheme.MakeGradient(UiTheme.Lighten(start, 0.35), UiTheme.Lighten(end, 0.35), foot, top));
     }
@@ -2002,7 +2157,11 @@ public partial class SessionsWindow : PanelWindow
 
     private void ShowRows()
     {
-        DeleteButton.IsEnabled = !_allGames && _selected is not null;
+        DeleteButton.IsEnabled = !_allGames && _selected.Count > 0;
+        DeleteAllButton.IsEnabled = !_allGames && _sessions.Count > 0;
+        // The games table's rows open a game rather than pick it, so the
+        // hint would be wrong there.
+        PickHint.Visibility = !_allGames && _sessions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         _energyPrice = _settings.EnergyPrice;
         _energyCurrency = _settings.EnergyCurrency?.Trim() ?? string.Empty;
 
@@ -2017,15 +2176,37 @@ public partial class SessionsWindow : PanelWindow
             ShowTable(VisibleSessionColumns(), _sessions.Reverse().ToList(), _sessionSort,
                       sort => _sessionSort = sort,
                       s => SessionTip(s), mark: SessionMarks,
-                      open: Select, selected: s => ReferenceEquals(s, _selected));
+                      open: Select, selected: s => _selected.Contains(s));
     }
 
-    /// <summary>A click picks the session for Delete; a click on the picked one lets it go again.</summary>
+    /// <summary>
+    /// A click picks the session for Delete, and a click on the only picked
+    /// one lets it go again. Ctrl+click adds or removes one without touching
+    /// the rest, as in Explorer, so several can go in one delete.
+    /// </summary>
     private void Select(SessionRecord session)
     {
-        _selected = ReferenceEquals(session, _selected) ? null : session;
+        bool had = _selected.Contains(session);
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (had)
+                _selected.Remove(session);
+            else
+                _selected.Add(session);
+        }
+        else
+        {
+            // A plain click on one of several picked keeps just that one,
+            // as Explorer does; only on the lone pick does it let go.
+            bool lone = had && _selected.Count == 1;
+            _selected.Clear();
+            if (!lone)
+                _selected.Add(session);
+        }
         DisarmDelete();
         ShowRows();
+        // The chart marks the picked session too - see DrawChart.
+        DrawChart();
     }
 
     /// <summary>
@@ -2634,40 +2815,85 @@ public partial class SessionsWindow : PanelWindow
 
     private void Delete_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is null || GamePicker.SelectedItem is not string game)
+        if (_selected.Count == 0 || GamePicker.SelectedItem is not string game)
             return;
 
-        if (!_deleteArmed.IsEnabled)
-        {
-            // In the warning colour, and said in full, so the second click
-            // is a decision and not a double-click that happened to land.
-            DeleteText.Text = $"CLICK AGAIN TO DELETE ID {_selected.Id}";
-            DeleteButton.Foreground = _theme.Warn;
-            _deleteArmed.Start();
+        if (!Arm(DeleteButton, DeleteText, $"CLICK AGAIN TO DELETE {PickedName()}"))
             return;
-        }
 
         DisarmDelete();
+        FinishDelete(game, _history.Delete(game, _selected), _selected.Count == 1 ? "the session" : "the sessions");
+    }
 
-        if (_history.Delete(game, _selected) is { } error)
+    /// <summary>
+    /// Every session of the game on show, for starting its history over - a
+    /// new PC, or a log full of test runs. The shown game only, never every
+    /// game: that would be one misclick away from losing all of it.
+    /// </summary>
+    private void DeleteAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allGames || _sessions.Count == 0 || GamePicker.SelectedItem is not string game)
+            return;
+
+        // The count in the warning, so it says what is about to go.
+        if (!Arm(DeleteAllButton, DeleteAllText, $"CLICK AGAIN TO DELETE ALL {_sessions.Count} SESSIONS"))
+            return;
+
+        DisarmDelete();
+        FinishDelete(game, _history.DeleteAll(game), "the sessions");
+    }
+
+    /// <summary>
+    /// The first click of a delete: arms <paramref name="button"/> and returns
+    /// false, or true when it was already armed and this click confirms it.
+    /// In the warning colour, and said in full, so the second click is a
+    /// decision and not a double-click that happened to land.
+    /// </summary>
+    private bool Arm(Button button, TextBlock text, string warning)
+    {
+        if (_deleteArmed.IsEnabled && _armedButton == button)
+            return true;
+
+        // Disarms the other one first, so only one button ever waits for a second click.
+        DisarmDelete();
+        text.Text = warning;
+        button.Foreground = _theme.Warn;
+        _armedButton = button;
+        _deleteArmed.Start();
+        return false;
+    }
+
+    /// <summary>After a delete: the error in the summary, or the window read again.</summary>
+    private void FinishDelete(string game, string? error, string what)
+    {
+        if (error is not null)
         {
             AddSummary(SummaryText.Inlines.Count > 0
-                ? $"\nCouldn't delete the session: {error}"
-                : $"Couldn't delete the session: {error}");
+                ? $"\nCouldn't delete {what}: {error}"
+                : $"Couldn't delete {what}: {error}");
             SummaryText.Inlines.LastInline.Foreground = _theme.Warn;
             return;
         }
 
-        _selected = null;
+        _selected.Clear();
         FillPicker(game);
         SessionDeleted?.Invoke();
     }
 
+    /// <summary>"ID 123" for one picked session, "3 SESSIONS" for several.</summary>
+    private string PickedName()
+        => _selected.Count == 1 ? $"ID {_selected[0].Id}" : $"{_selected.Count} SESSIONS";
+
     private void DisarmDelete()
     {
         _deleteArmed.Stop();
-        DeleteText.Text = _selected is null ? "DELETE" : $"DELETE: SESSION ID {_selected.Id}";
+        _armedButton = null;
+        DeleteText.Text = _selected.Count == 0 ? "DELETE"
+                        : _selected.Count == 1 ? $"DELETE: SESSION ID {_selected[0].Id}"
+                        : $"DELETE: {_selected.Count} SESSIONS";
         DeleteButton.ClearValue(ForegroundProperty);
+        DeleteAllText.Text = "DELETE ALL";
+        DeleteAllButton.ClearValue(ForegroundProperty);
     }
 
     private void OpenLog_Click(object sender, RoutedEventArgs e)
@@ -2852,6 +3078,10 @@ public partial class SessionsWindow : PanelWindow
         _theme.Dress(Panel);
         HeaderRule.Background = _theme.Separator;
         TableRule.Background = _theme.Separator;
+
+        // Dim and as small as the notes' status line: a hint, not content.
+        PickHint.Foreground = _theme.Header;
+        PickHint.FontSize = Math.Max(9, UiTheme.PanelFontSize - 3);
 
         // Over the picture, inside its fade: the window colour, strongest on
         // the left where the cards and text are and gone by two thirds of the

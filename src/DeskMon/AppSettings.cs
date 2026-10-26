@@ -438,6 +438,15 @@ public sealed class AppSettings
     /// <summary>The colour a full bar reaches.</summary>
     public string BarGradientEndColor { get; set; } = "#FFA855F7";
 
+    /// <summary>
+    /// What the gradient is spread over. "track", the default: the whole
+    /// track, so a bar's colour says how full it is and only a full one
+    /// reaches the end colour. "bar": the filled part alone, so every bar
+    /// runs from start to end however short - everyday readings at 20-40%
+    /// left the end colour all but unseen.
+    /// </summary>
+    public string BarGradientSpan { get; set; } = "track";
+
     /// <summary>The unfilled groove behind it.</summary>
     public string BarTrackColor { get; set; } = "#26FFFFFF";
 
@@ -798,6 +807,7 @@ public sealed class AppSettings
         BarColor ??= string.Empty;
         BarGradientStartColor ??= "#FF22D3EE";
         BarGradientEndColor ??= "#FFA855F7";
+        BarGradientSpan ??= "track";
         BarTrackColor ??= "#26FFFFFF";
         Theme ??= ThemeCatalogue.Custom;
         CustomTheme ??= new Dictionary<string, string>();

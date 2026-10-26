@@ -2043,16 +2043,21 @@ public partial class MainWindow : Window
         VersionChip.Background = lit ? _theme.AccentAt(0x40) : Brushes.Transparent;
 
         // The clock: the time well above the rows' size so it is readable at a
-        // glance from across the desk, in the section colour, and the day and
-        // date at the version's small size so the pair is no taller than it.
-        // From the font setting rather than fixed, so it scales with the rest.
+        // glance from across the desk, in the section colour. The day and date
+        // a point under the rows' size: at the version's size, and the date in
+        // the dim header colour, they were hard to read. Two lines of that
+        // still stay no taller than the time beside them. From the font
+        // setting rather than fixed, so it scales with the rest.
         ClockAccent.Background = _theme.SectionAccent;
         ClockTime.Foreground = _theme.Section;
         ClockTime.FontSize = _settings.FontSize + 10;
+        double clockSmall = Math.Max(8, _settings.FontSize - 1.5);
         ClockDay.Foreground = _theme.Section;
-        ClockDay.FontSize = VersionText.FontSize;
-        ClockDate.Foreground = _theme.Header;
-        ClockDate.FontSize = VersionText.FontSize;
+        ClockDay.FontSize = clockSmall;
+        // The labels' colour: brighter than the header grey, still a step
+        // under the day's, so the day keeps leading.
+        ClockDate.Foreground = _theme.Label;
+        ClockDate.FontSize = clockSmall;
     }
 
     /// <summary>Fires on each new minute - see UpdateClock.</summary>

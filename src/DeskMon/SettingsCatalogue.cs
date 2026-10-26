@@ -184,6 +184,8 @@ public static class SettingsCatalogue
             new Setting("BarGradient", "Gradient bars", "Bars in the gradient below. Their end still turns amber and red."),
             new Setting("BarGradientStartColor", "Gradient start", "The empty end of a bar."),
             new Setting("BarGradientEndColor", "Gradient end", "The colour a full bar reaches."),
+            new Setting("BarGradientSpan", "Gradient across", "Track: only a full bar reaches the end colour. Bar: every bar shows the whole gradient.",
+                        Choices: new[] { "track", "bar" }),
             new Setting("BarColor", "Bar", "Without the gradient. Empty colours each bar by its reading."),
             new Setting("BarTrackColor", "Bar background", "The empty part of the bar."),
             new Setting("NormalColor", "Normal reading", "Below the warning level."),

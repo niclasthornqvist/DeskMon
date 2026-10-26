@@ -163,29 +163,39 @@ public sealed class SessionHistory
 
 
     /// <summary>
-    /// Takes one session out of the game's log. Returns null on success, or
+    /// Takes sessions out of the game's log. Returns null on success, or
     /// why it couldn't - shown to the user, who is waiting on this one.
     ///
     /// Matched by its line, which holds the session to the minute along with
-    /// every reading, so it can't take out a different session by mistake. Only
-    /// the first match goes: two identical lines are two sessions, and one
-    /// click deletes one.
+    /// every reading, so it can't take out a different session by mistake. One
+    /// match per session: two identical lines are two sessions, and picking
+    /// one deletes one.
+    ///
+    /// All or nothing, in one write: if any is gone from the log - changed in
+    /// Notepad - none is deleted, rather than some of a picked set vanishing.
     ///
     /// The log is deleted when nothing but its heading is left, or the game
     /// would stay in the picker with nothing under it.
     /// </summary>
-    public string? Delete(string game, SessionRecord session)
+    public string? Delete(string game, SessionRecord session) => Delete(game, new[] { session });
+
+    /// <inheritdoc cref="Delete(string, SessionRecord)"/>
+    public string? Delete(string game, IReadOnlyCollection<SessionRecord> sessions)
     {
         try
         {
             string path = PathFor(game);
             var lines = AllLines(path);
 
-            int at = lines.FindIndex(l => l.Trim() == session.Raw);
-            if (at < 0)
-                return "That session is no longer in the log - it may have been changed in Notepad. Press Refresh.";
-
-            lines.RemoveAt(at);
+            foreach (var session in sessions)
+            {
+                int at = lines.FindIndex(l => l.Trim() == session.Raw);
+                if (at < 0)
+                    return sessions.Count == 1
+                        ? "That session is no longer in the log - it may have been changed in Notepad. Press Refresh."
+                        : $"Session ID {session.Id} is no longer in the log - it may have been changed in Notepad. Nothing was deleted; press Refresh.";
+                lines.RemoveAt(at);
+            }
 
             if (lines.All(l => string.IsNullOrWhiteSpace(l) || l.TrimStart().StartsWith('#')))
             {
@@ -198,6 +208,26 @@ public sealed class SessionHistory
             // in by hand - AtomicFile writes without one, and Notepad needs it.
             string text = string.Join(Environment.NewLine, lines) + Environment.NewLine;
             AtomicFile.WriteAllBytes(path, [.. Utf8WithBom.GetPreamble(), .. Utf8WithBom.GetBytes(text)]);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Every session of the game: its log goes, as it would once its last
+    /// session was deleted, so the game leaves the picker. Null on success,
+    /// or why it couldn't.
+    /// </summary>
+    public string? DeleteAll(string game)
+    {
+        try
+        {
+            // File.Delete is quiet about a file that is already gone, which
+            // is the outcome asked for anyway.
+            File.Delete(PathFor(game));
             return null;
         }
         catch (Exception ex)

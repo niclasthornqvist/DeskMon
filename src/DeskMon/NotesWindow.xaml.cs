@@ -592,6 +592,13 @@ public partial class NotesWindow : PanelWindow
             ? "No copies yet. One is kept each time these notes are opened and then changed - the last 20."
             : "Click one to put it back. The notes as they are now are kept as a copy first, so this can be undone the same way.";
 
+        // Unarmed on every opening, so a first click left from last time
+        // can't turn the next one into a delete. Hidden with nothing to clear.
+        _clearArmed = false;
+        ClearHistoryButton.Content = "Clear history";
+        ClearHistoryButton.ClearValue(ForegroundProperty);
+        ClearHistoryButton.Visibility = copies.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
         double small = Math.Max(9, UiTheme.PanelFontSize - 3);
 
         foreach (var copy in copies)
@@ -638,6 +645,39 @@ public partial class NotesWindow : PanelWindow
 
             HistoryList.Children.Add(row);
         }
+    }
+
+    /// <summary>Whether Clear history has had its first click - see ClearHistory_Click.</summary>
+    private bool _clearArmed;
+
+    /// <summary>
+    /// Deletes every copy of this note in one go. Asks twice, the second
+    /// time naming the count, like the sessions window's Delete all: the
+    /// copies are what is left when notes go missing, and they don't come back.
+    /// The popup closing disarms it - see HistoryPopup_Opened.
+    /// </summary>
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_clearArmed)
+        {
+            _clearArmed = true;
+            int count = HistoryList.Children.Count;
+            ClearHistoryButton.Content = $"Click again to delete {count} {(count == 1 ? "copy" : "copies")}";
+            ClearHistoryButton.Foreground = _theme.Warn;
+            return;
+        }
+
+        HistoryPopup.IsOpen = false;
+        if (_store.DeleteBackups(_currentGame) is { } error)
+        {
+            ShowStatus("History not cleared: " + error, problem: true);
+            return;
+        }
+
+        // A fresh copy before the next save, so the notes on screen are
+        // still covered - clearing took the one made after this load.
+        _backupBeforeWrite = true;
+        ShowStatus("History cleared");
     }
 
     /// <summary>

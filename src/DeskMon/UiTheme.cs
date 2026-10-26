@@ -74,12 +74,20 @@ public sealed class UiTheme
         // start colour, only a full one reaches the end. The fill sits at the
         // left of the track, so the track's width in pixels is where it ends -
         // and Apply runs again when that setting changes.
+        // With BarGradientSpan "bar" instead, relative to the fill itself, so
+        // the whole gradient fits whatever width it has.
         BarGradientStart = Parse(settings.BarGradientStartColor, "#FF22D3EE");
         BarGradientEnd = Parse(settings.BarGradientEndColor, "#FFA855F7");
-        BarGradient = settings.BarGradient
-            ? MakeGradient(BarGradientStart, BarGradientEnd,
-                           new Point(0, 0), new Point(Math.Max(1, settings.BarTrackWidth), 0))
-            : null;
+        GradientAcrossBar = string.Equals(settings.BarGradientSpan, "bar", StringComparison.OrdinalIgnoreCase);
+        Brush Spread(Color start, Color end)
+        {
+            if (!GradientAcrossBar)
+                return MakeGradient(start, end, new Point(0, 0), new Point(Math.Max(1, settings.BarTrackWidth), 0));
+            var fit = new LinearGradientBrush(start, end, new Point(0, 0), new Point(1, 0));
+            fit.Freeze();
+            return fit;
+        }
+        BarGradient = settings.BarGradient ? Spread(BarGradientStart, BarGradientEnd) : null;
 
         BarTrack = Make(settings.BarTrackColor, "#26FFFFFF");
 
@@ -91,12 +99,11 @@ public sealed class UiTheme
         // warning or critical level. With one gradient for every reading, the
         // bar stayed calm next to a red number - the start colour is kept so
         // the bar still looks like itself, only its tip gives the alarm.
-        Point from = new(0, 0), to = new(Math.Max(1, settings.BarTrackWidth), 0);
         BarGradientWarn = settings.BarGradient
-            ? MakeGradient(BarGradientStart, Parse(settings.WarnColor, "#FFFBBF24"), from, to)
+            ? Spread(BarGradientStart, Parse(settings.WarnColor, "#FFFBBF24"))
             : null;
         BarGradientCrit = settings.BarGradient
-            ? MakeGradient(BarGradientStart, Parse(settings.CritColor, "#FFF87171"), from, to)
+            ? Spread(BarGradientStart, Parse(settings.CritColor, "#FFF87171"))
             : null;
 
         // Top to bottom over the heading's accent, relative so it fits
@@ -336,6 +343,9 @@ public sealed class UiTheme
     public Color BarGradientStart { get; private set; }
     public Color BarGradientEnd { get; private set; }
 
+    /// <summary>BarGradientSpan "bar": every fill shows the whole gradient, not its share of the track's.</summary>
+    public bool GradientAcrossBar { get; private set; }
+
     /// <summary>The short bar before each section heading.</summary>
     public Brush SectionAccent { get; private set; } = Brushes.Transparent;
 
@@ -404,7 +414,9 @@ public sealed class UiTheme
         if (BarGradient is null)
             return null;
 
-        int percent = Math.Clamp((int)Math.Round(fraction * 100), 1, 100);
+        // Across the bar: as a full fill's, the whole gradient over the fill
+        // whatever its width - one brush per level, no stretching needed.
+        int percent = GradientAcrossBar ? 100 : Math.Clamp((int)Math.Round(fraction * 100), 1, 100);
         if (_inBarFills.TryGetValue((level, percent), out var cached))
             return cached;
 

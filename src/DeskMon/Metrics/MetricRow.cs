@@ -693,6 +693,10 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
         Color end = ReferenceEquals(_valueBrush, _theme.Crit) && _theme.Crit is SolidColorBrush crit ? crit.Color
                   : ReferenceEquals(_valueBrush, _theme.Warn) && _theme.Warn is SolidColorBrush warn ? warn.Color
                   : _theme.BarGradientEnd;
+        // With the gradient across the bar the fill always ends in the end
+        // colour, so the knob at its tip does too, or it wouldn't match.
+        if (_theme.GradientAcrossBar)
+            fraction = 1;
         byte Mix(byte a, byte b) => (byte)Math.Round(a + (b - a) * fraction);
 
         var brush = new SolidColorBrush(Color.FromArgb(Mix(start.A, end.A), Mix(start.R, end.R), Mix(start.G, end.G), Mix(start.B, end.B)));
