@@ -568,6 +568,15 @@ public sealed class AppSettings
     public double? NotesWidth { get; set; }
     public double? NotesHeight { get; set; }
 
+    /// <summary>
+    /// The notes window has been widened once for its notes list (1.72) - see
+    /// NotesWindow's constructor. Kept so it happens only the once.
+    /// </summary>
+    public bool NotesListWidened { get; set; }
+
+    /// <summary>The notes list folded down to its icons, by its « button.</summary>
+    public bool NotesListFolded { get; set; }
+
     // --- Session history ---
     /// <summary>
     /// When a game is quit, add one line to its session history saying how long
@@ -860,7 +869,7 @@ public sealed class AppSettings
         nameof(ShowFpsOverlay),   // flipped by its hotkey
         nameof(CollapsedSections), nameof(SectionOrder), nameof(ExpandedMetrics),
         nameof(CollapsedSectionsInGame), nameof(UpdateAnnounced), nameof(SessionsGame),
-        nameof(NotesLeft), nameof(NotesTop), nameof(NotesWidth), nameof(NotesHeight),
+        nameof(NotesLeft), nameof(NotesTop), nameof(NotesWidth), nameof(NotesHeight), nameof(NotesListWidened), nameof(NotesListFolded),
         nameof(HardwareLeft), nameof(HardwareTop), nameof(HardwareWidth), nameof(HardwareHeight),
         nameof(VersionsLeft), nameof(VersionsTop), nameof(VersionsWidth), nameof(VersionsHeight),
         nameof(SessionsLeft), nameof(SessionsTop), nameof(SessionsWidth), nameof(SessionsHeight),

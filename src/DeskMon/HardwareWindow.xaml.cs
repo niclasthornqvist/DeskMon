@@ -386,6 +386,23 @@ public partial class HardwareWindow : PanelWindow
             firstAdapter = false;
         }
 
+        // How far the usual game-server regions are, under the ping test and
+        // behind the same setting - see NetworkCheck.Regions. Only with a
+        // connection to test: without one every row would say "No answer".
+        _regionRows.Clear();
+        if (pingItem is not null)
+        {
+            bool firstRegion = true;
+            foreach (var (region, _) in NetworkCheck.Regions)
+            {
+                var row = Item(firstRegion ? "Regions" : string.Empty, region, null, null, detail: null, full: new List<string>())
+                          .WithStatus(Checking($"Measuring the way to {region}…"));
+                AddItem(row, Array.Empty<SystemInfo.Check>());
+                _regionRows.Add(row);
+                firstRegion = false;
+            }
+        }
+
         // Here because this is the window people open to ask "what does this
         // machine have" - and on a fresh install, what it lacks is the part
         // that explains the n/a on the widget. As warning notes so it can't
@@ -399,6 +416,7 @@ public partial class HardwareWindow : PanelWindow
                                   underItem: false, copy: true));
         }
 
+        MarkGroupEnds();
         Rows.Items.Refresh();
         RowsScroller.ScrollToTop();
 
@@ -410,6 +428,7 @@ public partial class HardwareWindow : PanelWindow
         var biosTask = biosItem is null ? null
             : UpdateCheck.AsusBiosAsync(info.BoardProduct!, info.BiosVersion, info.BiosDate);
         var pingTask = pingItem is null ? null : NetworkCheck.PingAsync(pingHost);
+        var regionsTask = _regionRows.Count == 0 ? null : NetworkCheck.RegionsAsync();
 
         // The loading screen stays up until the online checks are in too, so
         // the window opens on every answer rather than on "Checking…" rows
@@ -450,6 +469,18 @@ public partial class HardwareWindow : PanelWindow
 
         if (pingTask is not null)
             SetStatus(pingItem!, await pingTask, generation, pingAgain: true);
+        if (regionsTask is not null)
+            ShowRegions(await regionsTask, generation);
+    }
+
+    /// <summary>The region rows, in NetworkCheck.Regions' order, as they now stand - SetStatus swaps in a copy.</summary>
+    private readonly List<InfoRow> _regionRows = new();
+
+    private void ShowRegions(IReadOnlyList<SystemInfo.Check> checks, int generation)
+    {
+        for (int i = 0; i < _regionRows.Count && i < checks.Count; i++)
+            if (SetStatus(_regionRows[i], checks[i], generation) is { } done)
+                _regionRows[i] = done;
     }
 
     /// <summary>
@@ -515,10 +546,19 @@ public partial class HardwareWindow : PanelWindow
         if (measuring is null)
             return;
 
+        // The regions again too, side by side with the ping: a fresh look
+        // at the connection is a fresh look at all of it.
+        for (int i = 0; i < _regionRows.Count; i++)
+            if (SetStatus(_regionRows[i], Checking($"Measuring the way to {NetworkCheck.Regions[i].Name}…"), generation) is { } waiting)
+                _regionRows[i] = waiting;
+        var regionsTask = _regionRows.Count == 0 ? null : NetworkCheck.RegionsAsync();
+
         try
         {
             var ping = await NetworkCheck.PingAsync(host);
             SetStatus(measuring, ping, generation, pingAgain: true);
+            if (regionsTask is not null)
+                ShowRegions(await regionsTask, generation);
         }
         catch (Exception ex)
         {
@@ -565,6 +605,8 @@ public partial class HardwareWindow : PanelWindow
             done.AttachedNote = note;
         }
 
+        // A note put in or taken out moves where a group ends.
+        MarkGroupEnds();
         Rows.Items.Refresh();
         return done;
     }
@@ -581,6 +623,19 @@ public partial class HardwareWindow : PanelWindow
         foreach (var check in checks)
             if (check is { Level: >= SystemInfo.Condition.Warning })
                 _rows.Add(NoteRow(check, underItem: true));
+    }
+
+    /// <summary>
+    /// Drops the grey rule under the last item of each group: the next
+    /// group's accent line follows right after it, and the two lines on top
+    /// of each other read as a double border. Worked out over the whole list
+    /// rather than when a row is added, since a late answer's note can land
+    /// after an item and change which row ends its group.
+    /// </summary>
+    private void MarkGroupEnds()
+    {
+        for (int i = 0; i < _rows.Count; i++)
+            _rows[i].LastInGroup = i + 1 == _rows.Count || _rows[i + 1].Kind == RowKind.Heading;
     }
 
     /// <summary>Starts a group of rows under a heading - see InfoRow.Heading.</summary>
@@ -1078,6 +1133,10 @@ public partial class HardwareWindow : PanelWindow
         public Thickness RowMargin { get; init; }
         public Brush RuleBrush { get; }
 
+        /// <summary>No rule under the last row of a group - see MarkGroupEnds.</summary>
+        public bool LastInGroup { get; set; }
+        public Thickness RuleThickness => new(0, 0, 0, LastInGroup ? 0 : 1);
+
         /// <summary>A step under the rows' size, like the widget's section headings.</summary>
         public double HeadingFontSize => Math.Max(8, UiTheme.PanelFontSize - 1.5);
 
@@ -1121,8 +1180,16 @@ public partial class HardwareWindow : PanelWindow
         /// note under an item, the gaming ticks: the label column, the logo
         /// column and the gap after it.
         /// </summary>
-        public double NameIndent => LabelWidth + LogoColumnWidth + 6;
-        public Thickness TogglesMargin => new(LogoColumnWidth + 6, 0, 0, 0);
+        public double NameIndent => LabelWidth + LogoColumnWidth + LogoGap;
+        public Thickness TogglesMargin => new(LogoColumnWidth + LogoGap, 0, 0, 0);
+
+        /// <summary>
+        /// The space between the logo and the name. One value for the item rows
+        /// and for everything that lines up with the names, so widening it
+        /// can't leave the notes and ticks a few pixels off.
+        /// </summary>
+        private const double LogoGap = 12;
+        public Thickness LogoMargin => new(0, 0, LogoGap, 0);
 
         // The status at the right: a mark and a word or two.
         public string? StatusText { get; private set; }

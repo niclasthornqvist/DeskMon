@@ -28,6 +28,20 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.72.0", "2026-10-26",
+            "Hardware: under the ping test, how far the usual game-server regions are - Stockholm, Frankfurt, London and US East - timed as a connection to Amazon's servers there; the ping button measures them again too",
+            "Notes: a list of every note at the left in place of the drop-down - General first, the game you are playing under PLAYING NOW, then the rest, newest played first, each with its icon and when it was last played",
+            "Notes: search (with its magnifier inside the box) and NEW NOTE are in the list; the open note's name is large at the top, with when it was last played beside the icons",
+            "Notes: SCREENSHOT, PICTURES, HISTORY and DELETE are icons by the name, with the same tooltips",
+            "Notes: on a narrow window the list folds away - the button by the name, or Ctrl+F, brings it back over the page",
+            "Notes: the window opens wider once, to make room for the list",
+            "Notes: the « button at the top of the list folds it down to just the game icons, for more room - » opens it again, and it is remembered. It slides smoothly, with the arrow turning round",
+            "Notes: the formatting bar (font, size, bold…) has a solid background, so a bright game picture behind it no longer makes it hard to read",
+            "Hardware: the status words at the right start at the same place on every row",
+            "Hardware: label, logo and status sit in the middle of each row, also on rows with a grey detail line",
+            "Hardware: the line after each group's heading is in the accent blue, fading to the right, like the sessions window's",
+            "Hardware: no grey line under the last item of a group, where it ran into the next group's line",
+            "Hardware: more space between each logo and its name"),
         new("1.71.0", "2026-10-26",
             "All windows: the scrollbar is wider and easier to grab (18 px) - a round pill in a faint groove that shows on hover, lit in the accent colour while dragged",
             "All windows: small arrows at the ends of the scrollbar show which way there is more to see, and fade once you reach that end",

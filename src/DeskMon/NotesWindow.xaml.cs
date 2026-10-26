@@ -11,6 +11,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DeskMon.Notes;
@@ -188,6 +189,19 @@ public partial class NotesWindow : PanelWindow
         SetUpFontPickers();
         RestorePlacement();
 
+        // Once, the first time the window has the notes list: it was sized for
+        // the old layout, and at that width the list would open folded away -
+        // the new layout hidden behind a button. Widened by the list's width,
+        // so the page keeps the room it had. A width picked after this stays.
+        if (!_settings.NotesListWidened)
+        {
+            _settings.NotesListWidened = true;
+            // The constant, not Sidebar.Width: a folded list has set that to
+            // the icon strip's width already.
+            if (_settings.NotesWidth is double width && width < ListFoldWidth + ListWidth)
+                Width = width + ListWidth;
+        }
+
         Topmost = _settings.NotesAlwaysOnTop;
         DimDuringGames(_settings, () => _settings.NotesOpacity);
 
@@ -230,6 +244,7 @@ public partial class NotesWindow : PanelWindow
         {
             if (SearchPopup.IsOpen)
                 AlignSearchPopup();
+            FitList();
             QueuePlacementSave();
         };
         PreviewMouseDown += (_, _) =>
@@ -237,6 +252,12 @@ public partial class NotesWindow : PanelWindow
             // A click anywhere but the box or its list puts the list away.
             if (SearchPopup.IsOpen && !SearchBox.IsMouseOver && !SearchPanel.IsMouseOver)
                 SearchPopup.IsOpen = false;
+
+            // The notes list laid over the page goes the same way, as a menu
+            // does: it covers the button that brought it, so a click beside
+            // it is the way to put it back.
+            if (_listOverlay && !Sidebar.IsMouseOver)
+                HideListOverlay();
         };
         // The line's own width, not the path's: the path is sized to fit it.
         StatusBar.SizeChanged += (_, e) => { if (e.WidthChanged) FitStatus(); };
@@ -858,10 +879,15 @@ public partial class NotesWindow : PanelWindow
     {
         string game = string.IsNullOrWhiteSpace(gameName) ? NotesStore.GeneralNotes : gameName!;
 
+        // The list's PLAYING NOW. Every caller passes the game that is running
+        // - or none, as one quits - so this is the one place that knows; set
+        // before the load, whose list refresh shows it.
+        _playing = IsGeneral(game) ? null : game;
+
         if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
             LoadGame(game);   // saves what is on screen first
         else
-            RefreshPicker();
+            RefreshList();
     }
 
     /// <summary>
@@ -949,18 +975,17 @@ public partial class NotesWindow : PanelWindow
             _saved = Serialise();
 
             // Title is the taskbar entry, and names the game since nothing else
-            // there does. The header just says NOTES: the picker right under
-            // it already names the game, and the two said it twice.
+            // there does. The header names it too, large: with the drop-down
+            // gone, it is what says whose notes these are.
             Title = $"Notes - {game}";
-            TitleText.Text = "NOTES";
+            TitleText.Text = game;
+            // General is only ever emptied, never removed, so the button says
+            // what it will really do there rather than promising a delete.
             DeleteNoteButton.ToolTip = IsGeneral(game)
                 ? "Clear General\nGeneral can't be deleted, only cleared. The old notes go to the Recycle Bin."
                 : "Delete this note\nIt goes to the Recycle Bin.";
-            // General is only ever emptied, never removed, so the button says
-            // what it will really do there rather than promising a delete.
-            DeleteNoteLabel.Text = IsGeneral(game) ? "CLEAR" : "DELETE";
-            RefreshPicker();
-            RefreshLastSession();
+            RefreshList();
+            ShowLastSession();
             _dirty = false;
             ShowStatus(state, problem);
 
@@ -1148,56 +1173,405 @@ public partial class NotesWindow : PanelWindow
                 FromOldDefaultSize((DependencyObject)child);
     }
 
+    // --- The notes list -------------------------------------------------
+
+    /// <summary>The game being played, for the list's PLAYING NOW - see SwitchTo. Null between games.</summary>
+    private string? _playing;
+
     /// <summary>
-    /// The picker lists every game that already has notes, which is what makes
-    /// this useful away from the game: you can read up on a puzzle months later.
+    /// When each note was last played or edited, and the line its row shows
+    /// for it, by file name. Read on a worker - see LoadActivityLater - and
+    /// kept, so a rebuilt list has its lines at once instead of blinking empty.
     /// </summary>
-    private void RefreshPicker()
+    private readonly Dictionary<string, (DateTime When, string Line)> _activity = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Only the newest read is used: an older one finishing late would put back stale lines.</summary>
+    private int _activityTicket;
+
+    /// <summary>The notes the list was last built from, for a late answer to rebuild it with.</summary>
+    private List<string> _listed = new();
+
+    /// <summary>
+    /// Below this width the list folds away behind a button: at the old
+    /// window's width the list and a page beside it would both be too
+    /// narrow to use.
+    /// </summary>
+    private const double ListFoldWidth = 560;
+
+    /// <summary>The list laid over the page on a narrow window, from the button by the title.</summary>
+    private bool _listOverlay;
+
+    /// <summary>The window is under <see cref="ListFoldWidth"/>, and the list is folded away - see FitList.</summary>
+    private bool _narrow;
+
+    /// <summary>
+    /// The list open, and folded down to its icons. The strip is the 24 px
+    /// icon, the rows' 6 px margins and 8 px padding each side, the 1 px edge
+    /// and a little to spare: at 52 it came out a pixel short and cut the
+    /// icons' right edge off.
+    /// </summary>
+    private const double ListWidth = 210;
+    private const double IconRailWidth = 58;
+
+    /// <summary>
+    /// The list shows only its icons (the « button). Never laid over the page:
+    /// opened from the narrow window's button it is wanted in full.
+    /// </summary>
+    private bool ListFolded => _settings.NotesListFolded && !_narrow;
+
+    /// <summary>Whether the list on screen is folded - what FitList last laid out.</summary>
+    private bool _shownFolded;
+
+    /// <summary>
+    /// The list shows every note there is, which is what makes this useful
+    /// away from the game: you can read up on a puzzle months later.
+    /// </summary>
+    private void RefreshList()
     {
-        // General first, then the rest by name. It is the one note that is
-        // always there and the one you fall back to, so it keeps the top of
-        // the list instead of landing among the G's. Added whether or not it
-        // has a file: deleting it only clears it, and a cleared General has
-        // no file until something is typed into it - which left it missing
-        // from the list once you had switched away.
-        var games = new List<string> { NotesStore.GeneralNotes };
-        games.AddRange(_store.ListGames().Where(g => !IsGeneral(g)));
+        // General is added by BuildList, pinned first, whether or not it has a
+        // file: deleting it only clears it, and a cleared General has no file
+        // until something is typed into it - which left it missing from the
+        // list once you had switched away.
+        var games = _store.ListGames().Where(g => !IsGeneral(g)).ToList();
 
         // The list is made from file names, which have the characters Windows
         // forbids replaced: "The Witcher 3: Wild Hunt" is listed as "The
         // Witcher 3- Wild Hunt". Compared by name alone, the running game
         // wasn't found and was added a second time - two entries for one
-        // file. Its file's entry takes the real name instead.
-        string file = NotesStore.SafeFileName(_currentGame);
-        int listed = games.FindIndex(g => string.Equals(NotesStore.SafeFileName(g), file, StringComparison.OrdinalIgnoreCase));
-        if (listed >= 0)
-            games[listed] = _currentGame;
-        else
-            games.Insert(1, _currentGame);
+        // file. Its file's entry takes the real name instead. The game being
+        // played is listed even before it has notes, like the one on screen.
+        void Include(string? game)
+        {
+            if (game is null || IsGeneral(game))
+                return;
+            int listed = games.FindIndex(g => SameNote(g, game));
+            if (listed >= 0)
+                games[listed] = game;
+            else
+                games.Add(game);
+        }
+        Include(_currentGame);
+        Include(_playing);
 
+        _listed = games;
+        BuildList();
+        LoadActivityLater(games);
+    }
+
+    /// <summary>
+    /// Lays the list out from <see cref="_listed"/> and what is known of when
+    /// each was played: General, PLAYING NOW, then RECENT with the newest
+    /// first, so the notes you are likely to want are at the top rather than
+    /// somewhere in the alphabet.
+    /// </summary>
+    private void BuildList()
+    {
+        double small = Math.Max(9, UiTheme.PanelFontSize - 3);
+        bool folded = ListFolded;
+        NoteEntry Row(string name, string? detail, Brush? detailBrush = null) => new()
+        {
+            Name = name, Detail = detail, SmallFontSize = small, Folded = folded,
+            NameBrush = _theme.NotesText, DetailBrush = detailBrush ?? _theme.Header,
+        };
+        NoteEntry Heading(string text) => new()
+        {
+            Name = text, IsHeading = true, SmallFontSize = small, NameBrush = _theme.Header,
+        };
+        // Folded to icons there is no room for PLAYING NOW or RECENT: the
+        // headings go, and the order alone says which is which.
+        void AddHeading(List<NoteEntry> list, string text)
+        {
+            if (!folded)
+                list.Add(Heading(text));
+        }
+        string? LineFor(string game) => _activity.TryGetValue(NotesStore.SafeFileName(game), out var a) ? a.Line : null;
+        DateTime WhenFor(string game) => _activity.TryGetValue(NotesStore.SafeFileName(game), out var a) ? a.When : DateTime.MinValue;
+
+        string? playing = _playing is null ? null : _listed.FirstOrDefault(g => SameNote(g, _playing));
+        var entries = new List<NoteEntry> { Row(NotesStore.GeneralNotes, "Notes for any game") };
+        if (playing is not null)
+        {
+            AddHeading(entries, "PLAYING NOW");
+            entries.Add(Row(playing, "● Playing now", _theme.Normal));
+        }
+
+        var rest = _listed.Where(g => playing is null || !SameNote(g, playing))
+                          .OrderByDescending(WhenFor)
+                          .ThenBy(g => g, StringComparer.CurrentCultureIgnoreCase)
+                          .ToList();
+        if (rest.Count > 0)
+        {
+            AddHeading(entries, "RECENT");
+            entries.AddRange(rest.Select(g => Row(g, LineFor(g))));
+        }
+
+        // Guarded like a load: setting the selection here is the list
+        // following the notes on screen, not someone picking a note.
         bool wasLoading = _loading;
         _loading = true;
         try
         {
-            GamePicker.ItemsSource = games;
-            GamePicker.SelectedItem = games.FirstOrDefault(
-                g => string.Equals(g, _currentGame, StringComparison.OrdinalIgnoreCase));
+            NoteList.ItemsSource = entries;
+            NoteList.SelectedItem = entries.FirstOrDefault(n => !n.IsHeading && SameNote(n.Name, _currentGame));
         }
         finally
         {
             _loading = wasLoading;
         }
+
+        ShowNoteDetail();
     }
 
-    private void GamePicker_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    /// <summary>
+    /// The grey line under the title: playing now, or when the note was last
+    /// played or edited. Nothing for General, which belongs to no game.
+    /// </summary>
+    private void ShowNoteDetail()
     {
-        if (_loading || GamePicker.SelectedItem is not string game)
+        bool playing = _playing is not null && SameNote(_currentGame, _playing);
+        string? line = IsGeneral(_currentGame) ? null
+                     : playing ? "● Playing now"
+                     : _activity.TryGetValue(NotesStore.SafeFileName(_currentGame), out var a) ? "Last " + a.Line : null;
+
+        NoteDetail.Text = line ?? "";
+        NoteDetail.Foreground = playing ? _theme.Normal : _theme.Header;
+        NoteDetail.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Reads when every listed note was last played and edited, on a worker:
+    /// it opens every session log, the very read that froze the sessions
+    /// window on the UI thread (bugtest M5). The list is up already, by name;
+    /// this only adds the lines and the order.
+    /// </summary>
+    private async void LoadActivityLater(IReadOnlyList<string> games)
+    {
+        int ticket = ++_activityTicket;
+        Dictionary<string, (DateTime When, string Line)> found;
+        try
+        {
+            found = await Task.Run(() => ReadActivity(games));
+        }
+        catch
+        {
+            return;   // only ever a footnote under a name - never worth an error
+        }
+
+        if (ticket != _activityTicket)
             return;
 
-        // Refused, the picker goes back to the notes still on screen.
-        if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase)
-            && !LoadGame(game, mayRefuse: true))
-            Dispatcher.BeginInvoke(new Action(RefreshPicker));
+        // Rebuilt only when something changed: a new ItemsSource scrolls the
+        // list back to the top, which would be a jolt for nothing.
+        bool changed = found.Count != _activity.Count
+                    || found.Any(kv => !_activity.TryGetValue(kv.Key, out var old) || old != kv.Value);
+        if (!changed)
+            return;
+
+        _activity.Clear();
+        foreach (var (key, value) in found)
+            _activity[key] = value;
+        BuildList();
+    }
+
+    /// <summary>Off the UI thread: file reads only, no WPF.</summary>
+    private Dictionary<string, (DateTime When, string Line)> ReadActivity(IReadOnlyList<string> games)
+    {
+        var found = new Dictionary<string, (DateTime When, string Line)>(StringComparer.OrdinalIgnoreCase);
+        foreach (string game in games)
+        {
+            var last = _sessions.LastSession(game);
+            DateTime? edited = _store.LastSaved(game);
+            if (last is null && edited is null)
+                continue;
+
+            // Whichever was later counts as "recent": notes read up on away
+            // from the game belong near the top as much as the game last played.
+            DateTime when = last is null ? edited!.Value
+                          : edited is DateTime e && e > last.End ? e
+                          : last.End;
+            // The session says more than the edit - how long it ran - so it
+            // wins the line even when the notes were edited after it.
+            string line = last is not null
+                ? $"{last.Start.ToString("d MMM", CultureInfo.InvariantCulture)} · {SessionRecord.Describe(last.Length)}"
+                : $"edited {edited!.Value.ToString("d MMM", CultureInfo.InvariantCulture)}";
+            found[NotesStore.SafeFileName(game)] = (when, line);
+        }
+        return found;
+    }
+
+    /// <summary>One note's file, however its name is spelled - see RefreshList.</summary>
+    private static bool SameNote(string a, string b)
+        => string.Equals(NotesStore.SafeFileName(a), NotesStore.SafeFileName(b), StringComparison.OrdinalIgnoreCase);
+
+    private void NoteList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || NoteList.SelectedItem is not NoteEntry { IsHeading: false } note)
+            return;
+
+        // Laid over the page, the list has done its job once a note is picked.
+        HideListOverlay();
+
+        // Refused, the list goes back to the notes still on screen.
+        if (!string.Equals(note.Name, _currentGame, StringComparison.OrdinalIgnoreCase)
+            && !LoadGame(note.Name, mayRefuse: true))
+            Dispatcher.BeginInvoke(new Action(BuildList));
+    }
+
+    /// <summary>
+    /// Docks the list beside the page, or on a narrow window folds it away
+    /// behind the button by the title - and lays it over the page while that
+    /// button is on. The page then takes the list's column too.
+    /// </summary>
+    private void FitList()
+    {
+        bool narrow = ActualWidth > 0 && ActualWidth < ListFoldWidth;
+        if (!narrow)
+            _listOverlay = false;
+
+        Grid.SetColumn(NotePane, narrow ? 0 : 1);
+        Grid.SetColumnSpan(NotePane, narrow ? 2 : 1);
+        Sidebar.Visibility = !narrow || _listOverlay ? Visibility.Visible : Visibility.Collapsed;
+        ListButton.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        ListButton.IsChecked = _listOverlay;
+
+        // Over the page it needs a solid ground, or the notes would show
+        // through it; beside the page, the faint shade the cards have.
+        Sidebar.Background = narrow ? new SolidColorBrush(_theme.WindowColor) : _theme.Shade(0x08);
+
+        // Against what is on screen, not ListFolded before: the « button
+        // changes the setting first and then calls this, so the setting read
+        // here was already the new one, no change was ever seen - and nothing
+        // animated or rebuilt.
+        bool wasFolded = _shownFolded;
+        bool wasNarrow = _narrow;
+        _narrow = narrow;
+        bool folded = ListFolded;
+        _shownFolded = folded;
+
+        // Folded, everything with words gives way: the heading, the search
+        // box (to its magnifier) and NEW NOTE's label. The fold button stays,
+        // centred in the strip, and has nothing to do on a narrow window,
+        // whose list is either away or wanted in full.
+        //
+        // Animated only for the « button itself: a window opening, or one
+        // dragged across the narrow line, just takes its layout.
+        double width = folded ? IconRailWidth : ListWidth;
+        if (folded != wasFolded && narrow == wasNarrow && IsVisible)
+        {
+            AnimateFold(width, folded);
+        }
+        else
+        {
+            Sidebar.BeginAnimation(WidthProperty, null);
+            Sidebar.Width = width;
+            FoldTurn.BeginAnimation(RotateTransform.AngleProperty, null);
+            FoldTurn.Angle = folded ? 180 : 0;
+        }
+        ListHeading.Visibility = folded ? Visibility.Collapsed : Visibility.Visible;
+        SearchRow.Visibility = folded ? Visibility.Collapsed : Visibility.Visible;
+        SearchRailButton.Visibility = folded ? Visibility.Visible : Visibility.Collapsed;
+        NewNoteLabel.Visibility = folded ? Visibility.Collapsed : Visibility.Visible;
+        NewNoteButton.HorizontalAlignment = folded ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        // The 18 px scrollbar would take most of the strip's room from the
+        // icons; hidden, the wheel still scrolls a long list.
+        ScrollViewer.SetVerticalScrollBarVisibility(NoteList, folded ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Auto);
+
+        FoldListButton.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetColumn(FoldListButton, folded ? 0 : 1);
+        Grid.SetColumnSpan(FoldListButton, folded ? 2 : 1);
+        FoldListButton.HorizontalAlignment = folded ? HorizontalAlignment.Center : HorizontalAlignment.Right;
+        ListTop.Margin = folded ? new Thickness(0, 6, 0, 4) : new Thickness(0, 6, 6, 4);
+        // In the narrow strip the line keeps closer to the edges, or it would be a dash.
+        ListRule.Margin = folded ? new Thickness(8, 0, 8, 8) : new Thickness(10, 0, 10, 8);
+        FoldListButton.ToolTip = folded ? "Show the names\nOpen the list out again." : "Only the icons\nFold the list down to its icons, for more room on the page.";
+
+        // The rows carry whether they show their names - see NoteEntry.
+        if (folded != wasFolded && NoteList.ItemsSource is not null)
+            BuildList();
+    }
+
+    /// <summary>
+    /// The fold, as one smooth movement: the list slides to its new width
+    /// with an ease at both ends, its rows fade up as the names come or go -
+    /// so the swap to icons, which happens all at once, reads as part of
+    /// the slide - and the « turns round to » on the way. A quarter of a
+    /// second: long enough to see where the list went, short enough not to
+    /// wait on.
+    /// </summary>
+    private void AnimateFold(double to, bool folded)
+    {
+        var time = TimeSpan.FromMilliseconds(260);
+        var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
+
+        // From the width it has on screen right now, so a click mid-slide
+        // turns it round from there instead of jumping. FillBehavior.Stop
+        // hands back to the local value, already the end width, once done.
+        double from = Sidebar.ActualWidth > 0 ? Sidebar.ActualWidth : to;
+        Sidebar.Width = to;
+        Sidebar.BeginAnimation(WidthProperty,
+            new DoubleAnimation(from, to, time) { EasingFunction = ease, FillBehavior = FillBehavior.Stop });
+
+        NoteList.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0.15, 1, time) { EasingFunction = ease, FillBehavior = FillBehavior.Stop });
+
+        FoldTurn.BeginAnimation(RotateTransform.AngleProperty,
+            new DoubleAnimation(folded ? 180 : 0, time) { EasingFunction = ease });
+    }
+
+    private void FoldList_Click(object sender, RoutedEventArgs e)
+    {
+        SetListFolded(!_settings.NotesListFolded);
+    }
+
+    /// <summary>Remembered, like the widget's folded sections: the room on the page is wanted every time, not once.</summary>
+    private void SetListFolded(bool folded)
+    {
+        if (_settings.NotesListFolded == folded)
+            return;
+        _settings.NotesListFolded = folded;
+        _settings.Save();
+        FitList();
+    }
+
+    /// <summary>The magnifier on the folded list: open it out, into the box, as Ctrl+F does.</summary>
+    private void SearchRail_Click(object sender, RoutedEventArgs e) => FocusSearch();
+
+    /// <summary>
+    /// Into the search box, ready to type over - opening the list first,
+    /// laid over the page on a narrow window or out of its icons, since the
+    /// box is in it.
+    /// </summary>
+    private void FocusSearch()
+    {
+        ShowListOverlay();
+        // Laid over the page the list is shown in full anyway, so the folded
+        // setting - for the wide window - is left as it was.
+        if (!_narrow)
+            SetListFolded(false);
+        Keyboard.Focus(SearchBox);
+        SearchBox.SelectAll();
+    }
+
+    private void ListButton_Click(object sender, RoutedEventArgs e)
+    {
+        _listOverlay = ListButton.IsChecked == true;
+        FitList();
+    }
+
+    private void ShowListOverlay()
+    {
+        if (ListButton.Visibility != Visibility.Visible || _listOverlay)
+            return;
+        _listOverlay = true;
+        FitList();
+    }
+
+    private void HideListOverlay()
+    {
+        if (!_listOverlay)
+            return;
+        _listOverlay = false;
+        FitList();
     }
 
     private bool _tidying;
@@ -1929,8 +2303,7 @@ public partial class NotesWindow : PanelWindow
     {
         if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
         {
-            Keyboard.Focus(SearchBox);
-            SearchBox.SelectAll();
+            FocusSearch();
             e.Handled = true;
         }
     }
@@ -2020,17 +2393,12 @@ public partial class NotesWindow : PanelWindow
     }
 
     /// <summary>
-    /// Drops the list down with its right edge on the box's. Placed below
-    /// the box it would start at the box's left edge, and the box is at the
-    /// window's right: the list, wider than the box, would hang past the
-    /// window. Before it has been open once it has no width yet, and its
-    /// width from the XAML - 350 plus padding and border - stands in.
+    /// Drops the list down from the box's left edge, out over the page. The
+    /// box used to be at the window's right, where the list had to be lined
+    /// up on its right edge instead; in the notes list it is at the left, and
+    /// the list's own placement is the right one.
     /// </summary>
-    private void AlignSearchPopup()
-    {
-        double width = SearchPanel.ActualWidth > 0 ? SearchPanel.ActualWidth : 372;
-        SearchPopup.HorizontalOffset = SearchBox.ActualWidth - width;
-    }
+    private void AlignSearchPopup() => SearchPopup.HorizontalOffset = 0;
 
     /// <summary>
     /// The matches, each with its game and the line it is on, the matched
@@ -2444,15 +2812,26 @@ public partial class NotesWindow : PanelWindow
         Panel.Background = background;
         Panel.BorderBrush = _theme.Border;
         _theme.Dress(Panel);
-        HeaderRule.Background = _theme.Separator;
+        Sidebar.BorderBrush = _theme.Separator;
+        ListFoot.BorderBrush = _theme.Separator;
+        ListHeading.Foreground = _theme.Section;
+        ListHeading.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);
+        FitList();   // the list's ground is a theme colour too
 
         // The window's own text in the theme's font; the notes themselves keep
         // theirs - the editor's font is part of what is saved.
         FontFamily = _theme.PanelFont;
         _pictures.ApplyTheme(_theme);
 
-        TitleText.Foreground = _theme.Section;
-        TitleText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);
+        // The note's name, a few steps over the text: the drop-down that
+        // named it is gone, so this is what says whose notes these are.
+        TitleText.Foreground = _theme.NotesText;
+        TitleText.FontSize = UiTheme.PanelFontSize + 4;
+        NoteDetail.FontSize = Math.Max(9, UiTheme.PanelFontSize - 3);
+
+        // The rows carry their colours, so a theme change needs them made again.
+        if (NoteList.ItemsSource is not null)
+            BuildList();
 
         Editor.Foreground = text;
         Editor.CaretBrush = text;
@@ -2479,7 +2858,7 @@ public partial class NotesWindow : PanelWindow
         // cards, so the notes - the one thing here that is read - stay the
         // calmest surface.
         var card = _theme.Shade(0x0E);
-        ToolbarCard.Background = card;
+        ToolbarCard.Background = Opaque(card);
         SessionStrip.Background = card;
         Page.Background = _theme.Shade(0x08);
         SessionHeading.Foreground = _theme.Section;
@@ -2514,6 +2893,26 @@ public partial class NotesWindow : PanelWindow
         TodoChecksHint.FontSize = Math.Max(9, UiTheme.PanelFontSize - 3);
     }
 
+    /// <summary>
+    /// A see-through shade worked out as the solid colour it gives over the
+    /// window, for the formatting toolbar: it sits where the game's picture
+    /// behind the header (the banner) is still showing, and a bright picture
+    /// through the see-through card made the buttons hard to read. Looks the
+    /// same as the shade over a plain window, but nothing shows through it.
+    /// </summary>
+    private Brush Opaque(Brush shade)
+    {
+        if (shade is not SolidColorBrush { Color: var over })
+            return shade;
+
+        double amount = over.A / 255.0;
+        var window = _theme.WindowColor;
+        byte Channel(byte under, byte top) => (byte)Math.Round(under + (top - under) * amount);
+        var solid = new SolidColorBrush(Color.FromRgb(Channel(window.R, over.R), Channel(window.G, over.G), Channel(window.B, over.B)));
+        solid.Freeze();
+        return solid;
+    }
+
     // --- Last session -----------------------------------------------------
 
     /// <summary>
@@ -2533,6 +2932,16 @@ public partial class NotesWindow : PanelWindow
             return;
         }
 
+        ShowLastSession();
+
+        // A session just written moves its game up the list and changes its
+        // line. Not done from a load, whose list refresh reads them already.
+        LoadActivityLater(_listed);
+    }
+
+    /// <summary>The card itself, for a load - see <see cref="RefreshLastSession"/>.</summary>
+    private void ShowLastSession()
+    {
         bool general = string.Equals(_currentGame, NotesStore.GeneralNotes, StringComparison.OrdinalIgnoreCase);
         var last = general ? null : _sessions.LastSession(_currentGame);
 
@@ -3292,4 +3701,31 @@ public partial class NotesWindow : PanelWindow
         return null;
     }
 
+    /// <summary>
+    /// A row of the notes list: a note, or a heading over a group of them.
+    /// Made fresh for each build rather than changed in place, like the
+    /// hardware window's rows - see BuildList.
+    /// </summary>
+    private sealed class NoteEntry
+    {
+        public string Name { get; init; } = "";
+        public bool IsHeading { get; init; }
+        public string? Detail { get; init; }
+        public Brush? NameBrush { get; init; }
+        public Brush? DetailBrush { get; init; }
+        public double SmallFontSize { get; init; }
+
+        /// <summary>The list folded down to its icons: the name goes to the tooltip.</summary>
+        public bool Folded { get; init; }
+        public Visibility TextVisibility => Folded ? Visibility.Collapsed : Visibility.Visible;
+        public Thickness IconMargin => Folded ? new Thickness(0) : new Thickness(0, 0, 9, 0);
+
+        /// <summary>Folded, the icon in the middle of the strip, not at its left with the spare room after it.</summary>
+        public HorizontalAlignment RowAlignment => Folded ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+        public string? IconToolTip => !Folded ? null : string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
+
+        public Visibility HeadingVisibility => IsHeading ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility RowVisibility => IsHeading ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility DetailVisibility => string.IsNullOrEmpty(Detail) ? Visibility.Collapsed : Visibility.Visible;
+    }
 }

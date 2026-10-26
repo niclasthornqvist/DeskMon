@@ -70,7 +70,10 @@
             <ScrollViewer x:Name="RowsScroller"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           Margin="12,2,4,10" Focusable="False">
-            <ItemsControl x:Name="Rows" Margin="0,0,8,0" Focusable="False">
+            <!-- One shared-size scope, so every row's status column takes the
+                 widest status's width and the marks and words start at the same
+                 place on every row, instead of each hugging its own text. -->
+            <ItemsControl x:Name="Rows" Margin="0,0,8,0" Focusable="False" Grid.IsSharedSizeScope="True">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <!-- Headings, items, notes and the gaming ticks share one
@@ -90,9 +93,20 @@
                                        FontSize="{Binding HeadingFontSize}"
                                        Foreground="{Binding LabelBrush}"
                                        VerticalAlignment="Center" />
+                            <!-- In the accent, strong by the heading and fading
+                                 to the right, matching the line between the
+                                 sessions window's chart and table, so the groups
+                                 stand apart more than the grey rules under each
+                                 row. -->
                             <Border Grid.Column="1" Height="1" Margin="8,0,0,0"
-                                    VerticalAlignment="Center"
-                                    Background="{Binding RuleBrush}" />
+                                    VerticalAlignment="Center">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="{DynamicResource Theme.AccentColor.80}" Offset="0" />
+                                        <GradientStop Color="{DynamicResource Theme.AccentColor.14}" Offset="1" />
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                            </Border>
                         </Grid>
 
                         <!-- An item: label, logo, name with its grey detail line
@@ -101,20 +115,25 @@
                              its status. The name's tooltip has the full text
                              behind every short form. -->
                         <Border Visibility="{Binding ItemVisibility}"
-                                BorderBrush="{Binding RuleBrush}" BorderThickness="0,0,0,1"
+                                BorderBrush="{Binding RuleBrush}" BorderThickness="{Binding RuleThickness}"
                                 Padding="0,4,0,5">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="Status" />
                                 </Grid.ColumnDefinitions>
 
+                                <!-- Label, logo and status are centred on the row's
+                                     height, so a row with a detail line looks the
+                                     same as one without - they sat on the first
+                                     line before, and only one-line rows looked
+                                     centred. -->
                                 <TextBlock Grid.Column="0"
                                            Text="{Binding Label}"
                                            Width="{Binding LabelWidth}"
-                                           VerticalAlignment="Top"
+                                           VerticalAlignment="Center"
                                            Foreground="{Binding LabelBrush}" />
 
                                 <!-- The logo in a column of one width on every
@@ -122,13 +141,13 @@
                                      gets maximums, and Uniform stretch fits each
                                      shape inside them: a square mark fills the
                                      height, a wide wordmark hits the width and
-                                     comes out shorter, centred on the first line
-                                     of the name by the fixed-height Grid. -->
+                                     comes out shorter, centred in the fixed-height
+                                     Grid. -->
                                 <Grid Grid.Column="1"
                                       Width="{Binding LogoColumnWidth}"
                                       Height="{Binding LogoHeight}"
-                                      VerticalAlignment="Top"
-                                      Margin="0,1,6,0">
+                                      VerticalAlignment="Center"
+                                      Margin="{Binding LogoMargin}">
                                     <Path Data="{Binding LogoShape}"
                                           Fill="{Binding LogoFill}"
                                           MaxHeight="{Binding LogoHeight}"
@@ -150,7 +169,7 @@
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="3" Orientation="Horizontal"
-                                            VerticalAlignment="Top" Margin="10,0,0,0"
+                                            VerticalAlignment="Center" Margin="10,0,0,0"
                                             Visibility="{Binding StatusVisibility}"
                                             Background="Transparent"
                                             ToolTip="{Binding StatusFull}">
