@@ -671,24 +671,36 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
 
         // Only told when the colour really moved: a new brush every tick
         // would redraw the knob even with the reading standing still.
+        // The colour compared first, and a brush made only when it moved: a
+        // new brush each tick per row was garbage for a knob that mostly
+        // stands still.
         if (_theme.BarLine)
         {
-            var knob = KnobColour(fraction);
-            if (!(knob is SolidColorBrush now && _knobBrush is SolidColorBrush was && now.Color == was.Color))
-                KnobBrush = knob;
+            if (_theme.BarGradient is null)
+            {
+                if (!ReferenceEquals(_knobBrush, BarBrush))
+                    KnobBrush = BarBrush;
+            }
+            else
+            {
+                var colour = KnobColour(fraction);
+                if (!(_knobBrush is SolidColorBrush was && was.Color == colour))
+                {
+                    var brush = new SolidColorBrush(colour);
+                    brush.Freeze();
+                    KnobBrush = brush;
+                }
+            }
         }
     }
 
     /// <summary>
     /// The gradient's colour at <paramref name="fraction"/> along it, ending
-    /// in amber or red with the value as the bar's own gradient does; the
-    /// bar's plain brush when there is no gradient.
+    /// in amber or red with the value as the bar's own gradient does. Only
+    /// with a gradient on - without one the knob is the bar's plain brush.
     /// </summary>
-    private Brush KnobColour(double fraction)
+    private Color KnobColour(double fraction)
     {
-        if (_theme.BarGradient is null)
-            return BarBrush;
-
         Color start = _theme.BarGradientStart;
         Color end = ReferenceEquals(_valueBrush, _theme.Crit) && _theme.Crit is SolidColorBrush crit ? crit.Color
                   : ReferenceEquals(_valueBrush, _theme.Warn) && _theme.Warn is SolidColorBrush warn ? warn.Color
@@ -699,9 +711,7 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             fraction = 1;
         byte Mix(byte a, byte b) => (byte)Math.Round(a + (b - a) * fraction);
 
-        var brush = new SolidColorBrush(Color.FromArgb(Mix(start.A, end.A), Mix(start.R, end.R), Mix(start.G, end.G), Mix(start.B, end.B)));
-        brush.Freeze();
-        return brush;
+        return Color.FromArgb(Mix(start.A, end.A), Mix(start.R, end.R), Mix(start.G, end.G), Mix(start.B, end.B));
     }
 
     /// <summary>

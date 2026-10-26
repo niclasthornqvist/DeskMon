@@ -377,11 +377,15 @@ public sealed class PictureViewer : Window
     {
         try
         {
+            // Checked before it is decoded, as the art is - see GameArt.ReadPlainPicture.
+            if (GameArt.ReadPlainPicture(path) is not { } data)
+                return null;
+
             var image = new BitmapImage();
             image.BeginInit();
             image.CacheOption = BitmapCacheOption.OnLoad;
             image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
-            image.StreamSource = new MemoryStream(File.ReadAllBytes(path));
+            image.StreamSource = new MemoryStream(data);
             image.EndInit();
             image.Freeze();
             return image;

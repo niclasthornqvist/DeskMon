@@ -23,7 +23,9 @@ public static class PictureClipboard
     {
         try
         {
-            byte[] bytes = File.ReadAllBytes(path);
+            // Checked before it is decoded, as the art is - see GameArt.ReadPlainPicture.
+            byte[] bytes = GameArt.ReadPlainPicture(path)
+                           ?? throw new InvalidDataException("it isn't a PNG or JPEG picture");
 
             var image = new BitmapImage();
             image.BeginInit();

@@ -97,6 +97,25 @@ public partial class NotesWindow : PanelWindow
     private bool _backupBeforeWrite;
 
     /// <summary>
+    /// The notes file's bytes as they are on disk - as loaded, then as last
+    /// saved. What the backup before the first write copies, from memory,
+    /// so it needs no file read on the UI thread - see NotesStore.BackupLater.
+    /// </summary>
+    private byte[]? _onDisk;
+
+    /// <summary>
+    /// A game's notes file read ahead on a worker - see ShowForAsync - for
+    /// LoadInto to use instead of reading it on the UI thread. Null otherwise.
+    /// </summary>
+    private (string Game, byte[]? Rtf)? _preloaded;
+
+    /// <summary>
+    /// A key was pressed in the editor while a load was settling - see
+    /// LoadGame's deferred reset, which would otherwise mark that typing saved.
+    /// </summary>
+    private bool _inputWhileLoading;
+
+    /// <summary>
     /// The editing commands that change how the text looks without changing the
     /// text. WPF does not reliably raise TextChanged for these, so they are
     /// watched directly - and watched by command rather than by button, so a
@@ -155,6 +174,14 @@ public partial class NotesWindow : PanelWindow
         // ContextMenuOpening, which marks the event handled before a handler
         // added here is ever asked - so the picture's menu never showed.
         Editor.PreviewMouseRightButtonUp += Editor_PreviewMouseRightButtonUp;
+
+        // Typing while a load settles: TextChanged ignores it then (_loading),
+        // so it is noted here - see the deferred reset at the end of LoadGame.
+        Editor.PreviewKeyDown += (_, _) =>
+        {
+            if (_loading)
+                _inputWhileLoading = true;
+        };
         ApplyTheme();
         _theme.Changed += ApplyTheme;   // a theme picked, or a colour changed, in the settings window
         SetUpPicker();
@@ -619,7 +646,10 @@ public partial class NotesWindow : PanelWindow
             // the one taken just after something was lost.
             var size = new TextBlock
             {
-                Text = copy.Bytes < 1024 * 1024 ? $"{Math.Max(1, copy.Bytes / 1024)} KB" : $"{copy.Bytes / (1024.0 * 1024):0.0} MB",
+                // Invariant, so a Swedish Windows shows "1.5 MB" like every other number here.
+                Text = copy.Bytes < 1024 * 1024
+                    ? $"{Math.Max(1, copy.Bytes / 1024)} KB"
+                    : (copy.Bytes / (1024.0 * 1024)).ToString("0.0", CultureInfo.InvariantCulture) + " MB",
                 Foreground = _theme.Label,
                 FontSize = small,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -951,15 +981,52 @@ public partial class NotesWindow : PanelWindow
             // and write the file straight back. Every such round trip re-runs
             // WPF's RTF serializer over the content, so hold the guard until
             // the queue has drained rather than clearing it here.
+            _inputWhileLoading = false;
             Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
             {
                 _loading = false;
+
+                // Keys pressed before this ran are real edits, which input
+                // priority let in ahead of it; clearing the flag for them
+                // left that typing to wait for the next edit or a close.
+                if (_inputWhileLoading)
+                {
+                    _inputWhileLoading = false;
+                    MarkDirty();
+                    return;
+                }
+
                 _dirty = false;
                 _autoSave.Stop();
             }));
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// <see cref="ShowFor"/> with the game's notes file read on a worker
+    /// first - for a game starting, where reading megabytes of notes with
+    /// screenshots on the UI thread held up every window at the launch.
+    /// The document itself is still built on the UI thread, as WPF needs.
+    /// </summary>
+    public async Task ShowForAsync(string? gameName)
+    {
+        string game = string.IsNullOrWhiteSpace(gameName) ? NotesStore.GeneralNotes : gameName!;
+        if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
+        {
+            byte[]? rtf = await Task.Run(() => _store.LoadRtf(game));
+            _preloaded = (game, rtf);
+        }
+
+        try
+        {
+            ShowFor(game);
+        }
+        finally
+        {
+            _preloaded = null;   // only ever for the one load it was read for
+        }
     }
 
     /// <summary>
@@ -994,7 +1061,11 @@ public partial class NotesWindow : PanelWindow
         // a .txt import is never written over (its .rtf is a new file).
         _backupBeforeWrite = false;
 
-        byte[]? rtf = _store.LoadRtf(game);
+        // Read ahead on a worker when this load came from ShowForAsync.
+        byte[]? rtf = _preloaded is { } ahead && string.Equals(ahead.Game, game, StringComparison.OrdinalIgnoreCase)
+            ? ahead.Rtf
+            : _store.LoadRtf(game);
+        _onDisk = rtf is { Length: > 0 } ? rtf : null;
         if (rtf is { Length: > 0 })
         {
             try
@@ -1227,9 +1298,11 @@ public partial class NotesWindow : PanelWindow
             // held. Done here rather than on load, so merely opening notes
             // never writes anything - and only when the file had something in
             // it, so a run of empty saves can never push the last good copy out.
+            // From the bytes in hand, on the writer thread - see BackupLater.
             if (_backupBeforeWrite)
             {
-                _store.Backup(_currentGame);
+                if (_onDisk is { } original)
+                    _store.BackupLater(_currentGame, original);
                 _backupBeforeWrite = false;
             }
 
@@ -1243,7 +1316,10 @@ public partial class NotesWindow : PanelWindow
 
             _dirty = error is not null;
             if (error is null)
+            {
                 _saved = rtf;
+                _onDisk = rtf;   // what the next backup (after Clear history) copies
+            }
 
             // Date as well as time. Notes outlive the session they were written
             // in, so "Saved 21:04" is no use the next day - it reads as though
@@ -1733,11 +1809,14 @@ public partial class NotesWindow : PanelWindow
                 return;
             if (_saved is not null)
             {
+                // The error first: with a copy of the last notes kept, the
+                // status is already a problem, and a note created all the same
+                // used to be reported as "Could not create the file: " - blank.
                 string? error = _store.SaveRtf(name, _saved, hasContent: true);
-                if (error is null && !_statusProblem)
-                    ShowStatus("New note created successfully");
-                else
+                if (error is not null)
                     ShowStatus("Could not create the file: " + error, problem: true);
+                else if (!_statusProblem)
+                    ShowStatus("New note created successfully");
             }
         }
 
@@ -2123,12 +2202,12 @@ public partial class NotesWindow : PanelWindow
         BitmapSource preview;
         try
         {
-            // Read through a stream closed straight after, so the file isn't
-            // held open - it can still be deleted or moved.
+            // Read whole and checked before it is decoded, so the file isn't
+            // held open and nothing but a plain PNG or JPEG reaches GDI+ in
+            // this elevated process - see Screenshot.LoadChecked.
             preview = await Task.Run(() =>
             {
-                using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var bitmap = new System.Drawing.Bitmap(stream);
+                using var bitmap = Screenshot.LoadChecked(fullPath);
                 return Screenshot.Preview(bitmap, takenAt);
             });
         }
@@ -2161,10 +2240,10 @@ public partial class NotesWindow : PanelWindow
         BitmapSource preview;
         try
         {
+            // Checked before it is decoded - see Screenshot.LoadChecked.
             preview = await Task.Run(() =>
             {
-                using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var bitmap = new System.Drawing.Bitmap(stream);
+                using var bitmap = Screenshot.LoadChecked(fullPath);
                 return Screenshot.Preview(bitmap, takenAt);
             });
         }

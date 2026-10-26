@@ -51,11 +51,11 @@ public static class NetworkCheck
         catch
         {
             // No network, or a host name that doesn't resolve.
-            return new SystemInfo.Check($"Could not ping {host} - no connection?", SystemInfo.Condition.Bad);
+            return new SystemInfo.Check($"Could not ping {host} - no connection?", SystemInfo.Condition.Bad, "No connection");
         }
 
         if (times.Count == 0)
-            return new SystemInfo.Check($"No answer from {host} - no internet connection, or it blocks pings", SystemInfo.Condition.Bad);
+            return new SystemInfo.Check($"No answer from {host} - no internet connection, or it blocks pings", SystemInfo.Condition.Bad, "No answer");
 
         // The median rather than the average, so one slow reply doesn't speak
         // for the other nine. Jitter is how far replies stray from it on
@@ -72,6 +72,6 @@ public static class NetworkCheck
                   : SystemInfo.Condition.Good;
 
         string lossText = lost == 0 ? "no loss" : $"{loss:0}% lost";
-        return new SystemInfo.Check($"Ping to {host}: {median} ms, jitter {jitter:0} ms, {lossText}", level);
+        return new SystemInfo.Check($"Ping to {host}: {median} ms, jitter {jitter:0} ms, {lossText}", level, lost == 0 ? $"{median} ms" : $"{median} ms, {loss:0}% lost");
     }
 }

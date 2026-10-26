@@ -48,6 +48,20 @@ internal static class Screenshot
     }
 
     /// <summary>
+    /// A screenshot file as a GDI+ bitmap, after the same check the art gets
+    /// (GameArt.ReadPlainPicture) - decoded from memory, so the file isn't
+    /// held open and what was checked is what is decoded. Throws for a file
+    /// that is missing or isn't a plain PNG or JPEG. Dispose the result.
+    /// </summary>
+    public static Drawing.Bitmap LoadChecked(string path)
+    {
+        byte[] data = GameArt.ReadPlainPicture(path)
+                      ?? throw new InvalidDataException("It isn't a PNG or JPEG picture, or it is missing.");
+        // The stream is kept alive by the bitmap, which GDI+ reads from lazily.
+        return new Drawing.Bitmap(new MemoryStream(data));
+    }
+
+    /// <summary>
     /// Whether the capture came back black. Windows' screen capture can't see
     /// into a game running in exclusive fullscreen, and returns black for it
     /// rather than failing - which would otherwise be pasted into the notes as

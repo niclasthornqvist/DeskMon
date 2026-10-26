@@ -65,8 +65,30 @@ internal static class BrandLogos
     private static readonly Logo Corsair = Make(BrandLogoPaths.Corsair, null);
     private static readonly Logo Samsung = Make(BrandLogoPaths.Samsung, "#1428A0");
 
+    // Board and PC makers that make monitors too, so shared with Displays.
+    private static readonly Logo Asus = Make(BrandLogoPaths.Asus, null);
+    private static readonly Logo Msi = Make(BrandLogoPaths.Msi, "#FF0000");
+    private static readonly Logo Alienware = Make(BrandLogoPaths.Alienware, "#541BAE");
+    private static readonly Logo Dell = Make(BrandLogoPaths.Dell, "#007DB8");
+    private static readonly Logo Hp = Make(BrandLogoPaths.Hp, "#0096D6");
+    private static readonly Logo Lenovo = Make(BrandLogoPaths.Lenovo, "#E2231A");
+    private static readonly Logo Acer = Make(BrandLogoPaths.Acer, "#83B81A");
+    private static readonly Logo Razer = Make(BrandLogoPaths.Razer, "#00FF00");
+
     /// <summary>The Windows 11 mark, for the operating system row.</summary>
     public static readonly Logo Windows = Make(BrandLogoPaths.Windows, "#0078D4");
+
+    /// <summary>A gamepad, for the gaming checks - plain, in the text colour, since it stands for no brand.</summary>
+    public static readonly Logo Gaming = Make(BrandLogoPaths.Gamepad, null);
+
+    // The fallbacks when no maker's logo matches - see ForDisplay and ForNetwork.
+    private static readonly Logo AnyMonitor = Make(BrandLogoPaths.Monitor, null);
+    private static readonly Logo Wired = Make(BrandLogoPaths.Network, null);
+    private static readonly Logo Wireless = Make(BrandLogoPaths.Wifi, null);
+
+    // How a wireless adapter names itself; anything else is taken as wired.
+    private static readonly Regex WirelessName = Pattern(@"\b(wireless|wi-?fi|wlan|802\.11)");
+    private static readonly Regex BluetoothName = Pattern(@"\bbluetooth\b");
 
     // Matched as names, with product lines too, because the strings are not
     // uniform: the registry fallback for the CPU can lack the vendor, and a
@@ -86,16 +108,38 @@ internal static class BrandLogos
     // Alienware board could mention both.
     private static readonly (Regex Name, Logo Logo)[] Boards =
     {
-        (Pattern(@"\basus"), Make(BrandLogoPaths.Asus, null)),   // the registry says "ASUSTeK", so no end boundary
-        (Pattern(@"\bmsi\b|micro-star"), Make(BrandLogoPaths.Msi, "#FF0000")),
+        (Pattern(@"\basus"), Asus),   // the registry says "ASUSTeK", so no end boundary
+        (Pattern(@"\bmsi\b|micro-star"), Msi),
         (Pattern(@"\bnzxt\b"), Make(BrandLogoPaths.Nzxt, null)),
-        (Pattern(@"\balienware\b"), Make(BrandLogoPaths.Alienware, "#541BAE")),
-        (Pattern(@"\bdell\b"), Make(BrandLogoPaths.Dell, "#007DB8")),
-        (Pattern(@"\bhp\b|hewlett"), Make(BrandLogoPaths.Hp, "#0096D6")),
-        (Pattern(@"\blenovo\b"), Make(BrandLogoPaths.Lenovo, "#E2231A")),
-        (Pattern(@"\bacer\b"), Make(BrandLogoPaths.Acer, "#83B81A")),
-        (Pattern(@"\brazer\b"), Make(BrandLogoPaths.Razer, "#00FF00")),
+        (Pattern(@"\balienware\b"), Alienware),
+        (Pattern(@"\bdell\b"), Dell),
+        (Pattern(@"\bhp\b|hewlett"), Hp),
+        (Pattern(@"\blenovo\b"), Lenovo),
+        (Pattern(@"\bacer\b"), Acer),
+        (Pattern(@"\brazer\b"), Razer),
         (Pattern(@"\bframework\b"), Make(BrandLogoPaths.Framework, null)),
+    };
+
+    // Screens, by the maker SystemInfo puts in front of the model from its
+    // EDID code. Alienware before Dell: their screens report Dell's code, so
+    // the "AW" model ("AW2723DF") is what tells them apart. BenQ, AOC,
+    // Philips, ViewSonic, Gigabyte and iiyama have no Simple Icons logo and
+    // get the plain screen instead.
+    private static readonly (Regex Name, Logo Logo)[] Displays =
+    {
+        (Pattern(@"\balienware\b|\baw\d{4}"), Alienware),
+        (Pattern(@"\bdell\b"), Dell),
+        (Pattern(@"\bacer\b"), Acer),
+        (Pattern(@"\basus\b"), Asus),
+        (Pattern(@"\bsamsung\b"), Samsung),
+        (Pattern(@"\blg\b"), Make(BrandLogoPaths.Lg, "#A50034")),
+        (Pattern(@"\bmsi\b"), Msi),
+        (Pattern(@"\bhp\b"), Hp),
+        (Pattern(@"\blenovo\b"), Lenovo),
+        (Pattern(@"\brazer\b"), Razer),
+        (Pattern(@"\bsony\b"), Make(BrandLogoPaths.Sony, null)),   // white in Simple Icons: the text colour instead, or it vanishes on a pale theme
+        (Pattern(@"\bxiaomi\b"), Make(BrandLogoPaths.Xiaomi, "#FF6900")),
+        (Pattern(@"\bhuawei\b"), Make(BrandLogoPaths.Huawei, "#FF0000")),
     };
 
     // HyperX before Kingston: HyperX sticks were made by Kingston and report
@@ -126,7 +170,8 @@ internal static class BrandLogos
 
     // Realtek, the most common maker of all, has no Simple Icons logo, and
     // Killer cards are left out because the name says nothing about whose
-    // chip is inside - older ones are Qualcomm, newer ones Intel.
+    // chip is inside - older ones are Qualcomm, newer ones Intel. Both get
+    // the plain wired or Wi-Fi symbol instead - see ForNetwork.
     private static readonly (Regex Name, Logo Logo)[] Network =
     {
         (Pattern(@"\bintel\b"), Intel),
@@ -147,8 +192,24 @@ internal static class BrandLogos
     /// <summary>The logo for a drive, from its model name.</summary>
     public static Logo? ForStorage(string? name) => Find(Storage, name);
 
-    /// <summary>The logo for a network adapter's chip maker.</summary>
-    public static Logo? ForNetwork(string? name) => Find(Network, name);
+    /// <summary>
+    /// The logo for a screen's maker, or the plain screen when it has none -
+    /// so every screen row has a mark and the column doesn't look half-filled
+    /// on a desk with one known brand and one unknown.
+    /// </summary>
+    public static Logo? ForDisplay(string? name) => Find(Displays, name) ?? AnyMonitor;
+
+    /// <summary>
+    /// The logo for a network adapter's chip maker, or else the plain wired or
+    /// Wi-Fi symbol, which says the one thing worth knowing about an adapter
+    /// whose maker has no logo (Realtek). Not for Bluetooth: a network symbol
+    /// would pass it off as an internet connection.
+    /// </summary>
+    public static Logo? ForNetwork(string? name)
+        => Find(Network, name)
+           ?? (string.IsNullOrEmpty(name) || BluetoothName.IsMatch(name) ? null
+               : WirelessName.IsMatch(name) ? Wireless
+               : Wired);
 
     private static Logo? Find((Regex Name, Logo Logo)[] brands, string? name)
     {

@@ -449,6 +449,19 @@ public sealed class FpsMonitor : IDisposable
             _lastFrameAt = DateTime.UtcNow;
         }
 
+        // A new game starts its count of restarts afresh; the same one keeps
+        // counting, so a PresentMon that keeps dying stops being restarted.
+        if (pid != _restartsFor)
+        {
+            _restartsFor = pid;
+            _restarts = 0;
+        }
+        else if (_diedEarly)
+        {
+            _restarts++;
+        }
+        _diedEarly = false;
+
         TargetPid = pid;
         Error = null;
         _starting = true;
@@ -524,11 +537,14 @@ public sealed class FpsMonitor : IDisposable
             CreateNoWindow = true,
         };
 
+        // By name for a multi-process game, by id otherwise - see TargetArgs.
+        foreach (string arg in TargetArgs(pid))
+            info.ArgumentList.Add(arg);
+
         // v2 metrics gives the FrameTime column this reads. GPU and input
         // tracking are switched off because they add ETW work we never use.
         foreach (string arg in new[]
                  {
-                     "--process_id", pid.ToString(CultureInfo.InvariantCulture),
                      "--output_stdout",
                      "--no_console_stats",
                      "--v2_metrics",
@@ -546,6 +562,7 @@ public sealed class FpsMonitor : IDisposable
 
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
         process.OutputDataReceived += OnOutputLine;
+        process.Exited += OnPresentMonExited;   // dying mid-game is noticed - see NeedsRestart
         process.ErrorDataReceived += (_, _) => { };   // drain, or the pipe can fill and block
         process.Start();
         process.BeginOutputReadLine();
@@ -558,14 +575,179 @@ public sealed class FpsMonitor : IDisposable
                 _process = process;
                 _exePath = exe;
                 _starting = false;
-                return;
             }
+        }
+
+        if (ReferenceEquals(_process, process))
+        {
+            // Exited before it was _process - a PresentMon that fails at once -
+            // was ignored by the handler; asked again now that it is.
+            if (process.HasExited)
+                OnPresentMonExited(process, EventArgs.Empty);
+            return;
         }
 
         // Overtaken while it started - the game was left, or another took
         // over. Shut down here, before anything later on the queue can start
         // a run under the same session name.
         StopRun(process, exe);
+    }
+
+    /// <summary>
+    /// Which process PresentMon should listen to.
+    ///
+    /// The window in front is not always the one that presents. Chromium-based
+    /// games - NW.js (RPG Maker MV/MZ), Electron - draw from a separate GPU
+    /// process, a child running the same exe. Followed by id, the window's
+    /// process presents nothing at all: the session is logged but FPS stays
+    /// n/a for the whole game. Followed by name, the GPU process is included,
+    /// and the busiest-chain rule in <see cref="GameChain"/> picks its frames.
+    ///
+    /// Only when a process of the same exe is the game's own child. Any second
+    /// copy used to be enough, which also caught a second instance of the game,
+    /// or an unrelated program sharing a generic name like Game.exe - and their
+    /// frames could end up in the session.
+    /// </summary>
+    private static string[] TargetArgs(int pid)
+    {
+        string byId = pid.ToString(CultureInfo.InvariantCulture);
+        try
+        {
+            if (ChildWithSameExe(pid) is { } exeName)
+                return new[] { "--process_name", exeName };
+        }
+        catch { /* the snapshot failed - followed by id, as before */ }
+
+        return new[] { "--process_id", byId };
+    }
+
+    /// <summary>
+    /// The game's exe name ("nw.exe") when one of its direct children runs the
+    /// same exe, else null. From one Toolhelp snapshot of every process, which
+    /// carries each one's parent and exe name without opening any of them.
+    /// </summary>
+    private static string? ChildWithSameExe(int pid)
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+            return null;
+
+        try
+        {
+            var entries = new List<(int Pid, int Parent, string Exe)>();
+            var entry = new ProcessEntry { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<ProcessEntry>() };
+            for (bool more = Process32FirstW(snapshot, ref entry); more; more = Process32NextW(snapshot, ref entry))
+                entries.Add(((int)entry.ProcessId, (int)entry.ParentProcessId, entry.ExeFile));
+
+            string? exe = entries.FirstOrDefault(e => e.Pid == pid).Exe;
+            if (string.IsNullOrEmpty(exe))
+                return null;
+
+            return entries.Any(e => e.Parent == pid && e.Pid != pid
+                                    && string.Equals(e.Exe, exe, StringComparison.OrdinalIgnoreCase))
+                ? exe
+                : null;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+    }
+
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential,
+                                                 CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct ProcessEntry
+    {
+        public uint Size, Usage, ProcessId;
+        public IntPtr DefaultHeapId;
+        public uint ModuleId, Threads, ParentProcessId;
+        public int PriorityClassBase;
+        public uint Flags;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string ExeFile;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry entry);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry entry);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    // --- PresentMon stopping by itself ----------------------------------------
+
+    /// <summary>Restarts for one game before giving up - a PresentMon that keeps dying must not loop.</summary>
+    private const int MaxRestarts = 3;
+
+    /// <summary>PresentMon ended while its game still ran; the widget restarts it on a later tick - see NeedsRestart.</summary>
+    private volatile bool _diedEarly;
+    private int _restarts;
+    private int _restartsFor;
+    private DateTime _retryAt;
+
+    /// <summary>
+    /// PresentMon stopped by itself while the game is still running - crashed,
+    /// or its trace session was taken - and it is time to try again. Asked by
+    /// the widget's tick, which harvests the frames and calls Start: nothing
+    /// else would, as Start is only called when a game is first picked up,
+    /// and FPS stayed n/a for the rest of the session with no reason given.
+    /// </summary>
+    public bool NeedsRestart
+        => _diedEarly && TargetPid is not null && !_starting && _restarts < MaxRestarts && DateTime.UtcNow >= _retryAt;
+
+    /// <summary>
+    /// The current run's PresentMon exited. A stop on purpose has already let
+    /// go of it (_process is another or null), and with the game gone
+    /// --terminate_on_proc_exit is doing its job - neither is a failure.
+    /// On a pool thread.
+    /// </summary>
+    private void OnPresentMonExited(object? sender, EventArgs e)
+    {
+        if (sender is not Process process)
+            return;
+
+        int? target;
+        lock (_lock)
+        {
+            if (!ReferenceEquals(_process, process))
+                return;
+            target = TargetPid;
+        }
+
+        if (target is not int pid || !IsAlive(pid))
+            return;
+
+        int code;
+        try { code = process.ExitCode; } catch { code = -1; }
+
+        _retryAt = DateTime.UtcNow + TimeSpan.FromSeconds(2 * (_restarts + 1));
+        Error = _restarts < MaxRestarts
+            ? $"PresentMon stopped (exit code {code}) - starting it again"
+            : $"PresentMon stopped (exit code {code}) {MaxRestarts} times - not started again for this game";
+        _diedEarly = true;
+    }
+
+    private static bool IsAlive(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public void Stop()

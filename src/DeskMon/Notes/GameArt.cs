@@ -465,6 +465,30 @@ public static class GameArt
         return data.Length >= 4 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
     }
 
+    /// <summary>
+    /// Bigger than any screenshot DeskMon takes - an 8K PNG of a busy scene
+    /// is well under it - and small enough that a planted file can't make an
+    /// elevated process read gigabytes before the check below turns it away.
+    /// </summary>
+    internal const long MaxPictureFile = 128L * 1024 * 1024;
+
+    /// <summary>
+    /// A screenshot's bytes, read whole and checked the way the downloaded art
+    /// is - see <see cref="IsPlainPicture"/> - or null for anything else. For
+    /// every place a screenshot is decoded: the folders are the signed-in
+    /// user's to write, a link in pasted notes can point anywhere on the PC,
+    /// and DeskMon decodes as administrator.
+    /// </summary>
+    internal static byte[]? ReadPlainPicture(string path)
+    {
+        var file = new FileInfo(path);
+        if (!file.Exists || file.Length > MaxPictureFile)
+            return null;
+
+        byte[] data = File.ReadAllBytes(path);
+        return IsPlainPicture(data) ? data : null;
+    }
+
     private static string SafeName(string game)
     {
         var invalid = Path.GetInvalidFileNameChars();

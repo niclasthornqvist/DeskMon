@@ -25,7 +25,23 @@ internal sealed class PingMonitor : IDisposable
     private int _busy;
 
     /// <summary>The last round trip in milliseconds; null when off, or the last ping got no answer.</summary>
-    public double? Latest { get; private set; }
+    public double? Latest
+    {
+        get
+        {
+            double value = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _latestBits));
+            return double.IsNaN(value) ? null : value;
+        }
+        private set => Interlocked.Exchange(ref _latestBits, BitConverter.DoubleToInt64Bits(value ?? double.NaN));
+    }
+
+    /// <summary>
+    /// <see cref="Latest"/> as a double's bits, NaN for none: written on a
+    /// timer thread and read on the UI thread, where a double? - 16 bytes -
+    /// could be read half old and half new. One 64-bit word, read and written
+    /// whole through Interlocked.
+    /// </summary>
+    private long _latestBits = BitConverter.DoubleToInt64Bits(double.NaN);
 
     public PingMonitor() => _timer = new Timer(_ => Send(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 

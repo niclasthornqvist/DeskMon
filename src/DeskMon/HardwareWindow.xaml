@@ -73,8 +73,9 @@
             <ItemsControl x:Name="Rows" Margin="0,0,8,0" Focusable="False">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <!-- A heading row and a fact row share one template: the
-                             heading's parts show on a heading, the rest on a fact. -->
+                        <!-- Headings, items, notes and the gaming ticks share one
+                             template: each part shows only on its own kind of
+                             row - see InfoRow. -->
                         <StackPanel Margin="{Binding RowMargin}">
                         <!-- A group's heading - "BOARD & BIOS" with a thin line
                              running on from it, like the widget's sections - so
@@ -84,7 +85,7 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="{Binding Value}"
+                            <TextBlock Text="{Binding Name}"
                                        FontWeight="SemiBold"
                                        FontSize="{Binding HeadingFontSize}"
                                        Foreground="{Binding LabelBrush}"
@@ -94,49 +95,153 @@
                                     Background="{Binding RuleBrush}" />
                         </Grid>
 
-                        <Grid Visibility="{Binding FactVisibility}">
+                        <!-- An item: label, logo, name with its grey detail line
+                             under it, and its status at the right. A faint rule
+                             under each, so the eye can follow a row across to
+                             its status. The name's tooltip has the full text
+                             behind every short form. -->
+                        <Border Visibility="{Binding ItemVisibility}"
+                                BorderBrush="{Binding RuleBrush}" BorderThickness="0,0,0,1"
+                                Padding="0,4,0,5">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding Label}"
+                                           Width="{Binding LabelWidth}"
+                                           VerticalAlignment="Top"
+                                           Foreground="{Binding LabelBrush}" />
+
+                                <!-- The logo in a column of one width on every
+                                     row, so the names line up. The Path only
+                                     gets maximums, and Uniform stretch fits each
+                                     shape inside them: a square mark fills the
+                                     height, a wide wordmark hits the width and
+                                     comes out shorter, centred on the first line
+                                     of the name by the fixed-height Grid. -->
+                                <Grid Grid.Column="1"
+                                      Width="{Binding LogoColumnWidth}"
+                                      Height="{Binding LogoHeight}"
+                                      VerticalAlignment="Top"
+                                      Margin="0,1,6,0">
+                                    <Path Data="{Binding LogoShape}"
+                                          Fill="{Binding LogoFill}"
+                                          MaxHeight="{Binding LogoHeight}"
+                                          Stretch="Uniform"
+                                          HorizontalAlignment="Left"
+                                          VerticalAlignment="Center" />
+                                </Grid>
+
+                                <StackPanel Grid.Column="2" Background="Transparent" ToolTip="{Binding ToolTip}">
+                                    <TextBlock Text="{Binding Name}"
+                                               TextWrapping="Wrap"
+                                               Foreground="{Binding NameBrush}" />
+                                    <TextBlock Text="{Binding Detail}"
+                                               Visibility="{Binding DetailVisibility}"
+                                               TextWrapping="Wrap"
+                                               FontSize="{Binding DetailFontSize}"
+                                               Margin="0,1,0,0"
+                                               Foreground="{Binding DetailBrush}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="3" Orientation="Horizontal"
+                                            VerticalAlignment="Top" Margin="10,0,0,0"
+                                            Visibility="{Binding StatusVisibility}"
+                                            Background="Transparent"
+                                            ToolTip="{Binding StatusFull}">
+                                    <Grid Width="13" Height="13" Margin="0,0,5,0" VerticalAlignment="Center">
+                                        <Ellipse Fill="{Binding StatusTint}" />
+                                        <Path Data="{Binding StatusMark}" Stroke="{Binding StatusBrush}"
+                                              Width="12" Height="12" StrokeThickness="1.5"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusTextBrush}"
+                                               VerticalAlignment="Center" />
+
+                                    <!-- Ping again, on the ping test's row once it
+                                         has an answer, right after the result it
+                                         repeats. -->
+                                    <Button Style="{StaticResource PanelButton}"
+                                            Width="18" Height="16" Margin="4,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Visibility="{Binding RetryVisibility}"
+                                            ToolTip="Ping again"
+                                            Click="PingAgain_Click">
+                                        <Path Data="M8.46,0.6 V3 H6.06 M8.46,3 A4,4 0 1 0 8.94,5.7"
+                                              Width="10" Height="10" StrokeThickness="1.3"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- A note: the full sentence of a check that is a
+                             warning or worse, in its colour on a faint tint of
+                             it, so a problem can't be missed in a list of
+                             short words. -->
+                        <Border Visibility="{Binding NoteVisibility}"
+                                Margin="{Binding NoteMargin}"
+                                CornerRadius="{DynamicResource Theme.CornerSmall}"
+                                Background="{Binding NoteTint}"
+                                Padding="8,5">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Path Data="{Binding StatusMark}" Stroke="{Binding StatusBrush}"
+                                      Width="12" Height="12" StrokeThickness="1.6" Margin="0,1,6,0"
+                                      VerticalAlignment="Top"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" TextWrapping="Wrap"
+                                           Foreground="{Binding StatusBrush}" />
+                            </Grid>
+                        </Border>
+
+                        <!-- The gaming checks: ticks two to a line, the gamepad
+                             where an item's label would be. Each tick's tooltip
+                             has its full sentence. -->
+                        <Grid Visibility="{Binding TogglesVisibility}" Margin="0,3,0,2">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       Text="{Binding Label}"
-                                       Width="{Binding LabelWidth}"
-                                       VerticalAlignment="Top"
-                                       Foreground="{Binding LabelBrush}" />
-
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding Value}"
-                                       TextWrapping="Wrap"
-                                       Foreground="{Binding ValueBrush}" />
-
-                            <!-- Vendor logo at the far right rather than in a
-                                 column of its own before the value: that column
-                                 would sit empty on every other row and push all
-                                 the values out of line. Collapsed rows give the
-                                 value the full width.
-                                 The Path only gets maximums, and Uniform stretch
-                                 fits each shape inside them: a square mark fills
-                                 the height, a wide wordmark hits the width cap
-                                 and comes out shorter. The fixed-height Grid
-                                 around it centres those shorter ones on the
-                                 first line of text, where a wrapped module row
-                                 would otherwise drift them up or down. -->
-                            <Grid Grid.Column="2"
-                                  Height="{Binding LogoHeight}"
-                                  Visibility="{Binding LogoVisibility}"
-                                  VerticalAlignment="Top"
-                                  Margin="10,1,0,0">
-                                <Path Data="{Binding LogoShape}"
-                                      Fill="{Binding LogoFill}"
-                                      MaxHeight="{Binding LogoHeight}"
-                                      MaxWidth="{Binding LogoMaxWidth}"
-                                      Stretch="Uniform"
-                                      HorizontalAlignment="Right"
-                                      VerticalAlignment="Center" />
+                            <Grid Width="{Binding LabelWidth}" Height="{Binding LogoHeight}" VerticalAlignment="Top" Margin="0,2,0,0">
+                                <Path Data="{Binding LogoShape}" Fill="{Binding LogoFill}"
+                                      MaxHeight="{Binding LogoHeight}" Stretch="Uniform"
+                                      HorizontalAlignment="Left" VerticalAlignment="Center" />
                             </Grid>
+                            <ItemsControl Grid.Column="1" ItemsSource="{Binding Toggles}" Focusable="False"
+                                          Margin="{Binding TogglesMargin}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="2" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="0,2,10,2"
+                                                    Background="Transparent" ToolTip="{Binding Full}">
+                                            <Grid Width="13" Height="13" Margin="0,0,6,0" VerticalAlignment="Center">
+                                                <Ellipse Fill="{Binding MarkTint}" />
+                                                <Path Data="{Binding Mark}" Stroke="{Binding MarkBrush}"
+                                                      Width="12" Height="12" StrokeThickness="1.5"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <TextBlock Text="{Binding Text}" Foreground="{Binding TextBrush}"
+                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </Grid>
                         </StackPanel>
                     </DataTemplate>
@@ -144,16 +249,34 @@
             </ItemsControl>
             </ScrollViewer>
 
-            <!-- While the facts are gathered: three dots pulsing in turn over
+            <!-- While the facts are gathered: a chip in a spinning ring over
                  what it is doing, in the middle of the space the rows will
-                 take - see ShowLoading. -->
+                 take - see ShowLoading. A chip because it is this window's
+                 own motif (the banner's too), so the wait already looks like
+                 the window it opens into. Colours are set in ApplyTheme. -->
             <StackPanel x:Name="Loading" Visibility="Collapsed" IsHitTestVisible="False"
                         HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,0,40">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <Ellipse x:Name="LoadingDot1" Width="8" Height="8" Margin="4,0" />
-                    <Ellipse x:Name="LoadingDot2" Width="8" Height="8" Margin="4,0" />
-                    <Ellipse x:Name="LoadingDot3" Width="8" Height="8" Margin="4,0" />
-                </StackPanel>
+                <Grid Width="64" Height="64" HorizontalAlignment="Center">
+                    <!-- The ring's track, then the arc that runs round it. Both
+                         on a radius of 30 about the centre, so the arc sits
+                         exactly on the track. -->
+                    <Ellipse x:Name="LoadingTrack" Margin="1" StrokeThickness="2" />
+                    <Path x:Name="LoadingArc" Data="M32,2 A30,30 0 0 1 62,32" StrokeThickness="2.5"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          RenderTransformOrigin="0.5,0.5">
+                        <Path.RenderTransform>
+                            <RotateTransform x:Name="LoadingSpin" />
+                        </Path.RenderTransform>
+                    </Path>
+                    <Canvas Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Path x:Name="LoadingPins" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              Data="M10,1 V5 M15,1 V5 M20,1 V5 M10,25 V29 M15,25 V29 M20,25 V29 M1,10 H5 M1,15 H5 M1,20 H5 M25,10 H29 M25,15 H29 M25,20 H29" />
+                        <Rectangle x:Name="LoadingBody" Canvas.Left="5" Canvas.Top="5" Width="20" Height="20"
+                                   RadiusX="3" RadiusY="3" StrokeThickness="1.5" />
+                        <Rectangle x:Name="LoadingCore" Canvas.Left="10" Canvas.Top="10" Width="10" Height="10"
+                                   RadiusX="1.5" RadiusY="1.5" />
+                    </Canvas>
+                </Grid>
                 <TextBlock x:Name="LoadingText" Text="Reading hardware…"
                            HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>

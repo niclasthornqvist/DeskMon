@@ -559,9 +559,10 @@
          buttons, which in these windows looks like a piece of another program
          bolted to the edge.
 
-         Rebuilt as a thin gutter with a floating pill and no arrows: a
-         scrollbar is a position indicator you occasionally grab, and the
-         arrows are a hundredth of its use. Nothing below is keyed to one
+         Rebuilt as a thin gutter with a floating pill and two small chevrons
+         instead of boxed arrow buttons: the chevrons are there less to be
+         clicked than to say which way there is more to see, so each one fades
+         once its end is reached. Nothing below is keyed to one
          window - the style has no x:Key, so every scrollbar in every window
          that merges this dictionary gets it, including the ones inside the
          notepad's editor and a dropdown's list.
@@ -582,23 +583,70 @@
         </Setter>
     </Style>
 
+    <!-- The end arrows: a bare chevron, no box, in the same overlay shade as
+         the pill so the bar reads as one piece. The chevron itself is the
+         button's Content, so one style serves all four directions. Opacity is
+         left free for the scrollbar's own triggers, which fade an arrow at its
+         end - the hover colour here and the fade there then don't fight. -->
+    <Style x:Key="PanelScrollArrow" TargetType="RepeatButton">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Ov.8F}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <!-- Transparent, not null, so the whole square takes the
+                         click rather than only the chevron's thin stroke. -->
+                    <Border Background="Transparent">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource Theme.Accent}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The chevron drawn in each arrow. Round caps and joins, or a 1.5 px
+         stroke this small turns into a blunt wedge. -->
+    <Style x:Key="PanelScrollChevron" TargetType="Path">
+        <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RepeatButton}}" />
+        <Setter Property="StrokeThickness" Value="1.5" />
+        <Setter Property="StrokeStartLineCap" Value="Round" />
+        <Setter Property="StrokeEndLineCap" Value="Round" />
+        <Setter Property="StrokeLineJoin" Value="Round" />
+        <Setter Property="SnapsToDevicePixels" Value="False" />
+    </Style>
+
     <!-- Inset on every side, so the pill floats in the gutter instead of
-         filling it edge to edge. Brightens on hover and again while dragged,
-         which is the only feedback a bar with no arrows can give. -->
+         filling it edge to edge; the corner is half the vertical pill's 12 px
+         so the ends are fully round (WPF scales it down on the thinner
+         horizontal pill). Brightens on hover, and takes the accent while dragged
+         so the bar you are holding reads as "live" in the same colour as the
+         rest of the theme's active controls. The thin edge keeps the pill
+         visible on pale themes, where a light overlay alone washes out. -->
     <Style x:Key="PanelScrollThumb" TargetType="Thumb">
         <Setter Property="Focusable" Value="False" />
         <Setter Property="IsTabStop" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
-                    <Border x:Name="Grip" Margin="2" CornerRadius="3"
-                            Background="{DynamicResource Theme.Ov.38}" />
+                    <Border x:Name="Grip" Margin="3" CornerRadius="6"
+                            Background="{DynamicResource Theme.Ov.40}"
+                            BorderBrush="{DynamicResource Theme.Ov.14}" BorderThickness="1" />
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Theme.Ov.5C}" />
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                            <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Theme.Ov.8F}" />
+                            <Setter TargetName="Grip" Property="Background" Value="{DynamicResource Theme.Accent.99}" />
+                            <Setter TargetName="Grip" Property="BorderBrush" Value="{DynamicResource Theme.Accent}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -608,10 +656,28 @@
 
     <!-- The Track has to be called PART_Track: that name is how a ScrollBar
          finds it and wires the thumb to the value. IsDirectionReversed is what
-         makes dragging down scroll down - a vertical Track counts upwards. -->
+         makes dragging down scroll down - a vertical Track counts upwards.
+         The groove behind it is barely there at rest, so a short list doesn't
+         carry a heavy rail, and firms up under the mouse to show how far the
+         pill can travel before you grab it. -->
     <ControlTemplate x:Key="PanelScrollBarVertical" TargetType="ScrollBar">
         <Grid Background="{TemplateBinding Background}">
-            <Track x:Name="PART_Track" IsDirectionReversed="True">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="14" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="14" />
+            </Grid.RowDefinitions>
+            <RepeatButton x:Name="LineBack" Grid.Row="0" Style="{StaticResource PanelScrollArrow}"
+                          Command="ScrollBar.LineUpCommand">
+                <Path Style="{StaticResource PanelScrollChevron}" Data="M0.75,4.5 L4,1.25 L7.25,4.5" />
+            </RepeatButton>
+            <RepeatButton x:Name="LineForward" Grid.Row="2" Style="{StaticResource PanelScrollArrow}"
+                          Command="ScrollBar.LineDownCommand">
+                <Path Style="{StaticResource PanelScrollChevron}" Data="M0.75,1.25 L4,4.5 L7.25,1.25" />
+            </RepeatButton>
+            <Border x:Name="Groove" Grid.Row="1" Margin="3,0" CornerRadius="6"
+                    Background="{DynamicResource Theme.Ov.08}" />
+            <Track x:Name="PART_Track" Grid.Row="1" IsDirectionReversed="True">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Style="{StaticResource PanelScrollPage}"
                                   Command="ScrollBar.PageUpCommand" />
@@ -626,11 +692,56 @@
                 </Track.IncreaseRepeatButton>
             </Track>
         </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Groove" Property="Background" Value="{DynamicResource Theme.Ov.14}" />
+            </Trigger>
+            <!-- Faded rather than hidden at its end, so the bar keeps its shape
+                 and the arrow doesn't pop in and out as you scroll. Self, not
+                 TemplatedParent: in a template's own triggers Self is already the
+                 scrollbar, and TemplatedParent is the ScrollViewer around it, which
+                 has no Value - the arrows then never faded. -->
+            <DataTrigger Value="True">
+                <DataTrigger.Binding>
+                    <MultiBinding Converter="{x:Static ui:ScrollAtEnd.Instance}" ConverterParameter="start">
+                        <Binding Path="Value" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource Self}" />
+                    </MultiBinding>
+                </DataTrigger.Binding>
+                <Setter TargetName="LineBack" Property="Opacity" Value="0.25" />
+            </DataTrigger>
+            <DataTrigger Value="True">
+                <DataTrigger.Binding>
+                    <MultiBinding Converter="{x:Static ui:ScrollAtEnd.Instance}" ConverterParameter="end">
+                        <Binding Path="Value" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource Self}" />
+                    </MultiBinding>
+                </DataTrigger.Binding>
+                <Setter TargetName="LineForward" Property="Opacity" Value="0.25" />
+            </DataTrigger>
+        </ControlTemplate.Triggers>
     </ControlTemplate>
 
     <ControlTemplate x:Key="PanelScrollBarHorizontal" TargetType="ScrollBar">
         <Grid Background="{TemplateBinding Background}">
-            <Track x:Name="PART_Track">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="14" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="14" />
+            </Grid.ColumnDefinitions>
+            <RepeatButton x:Name="LineBack" Grid.Column="0" Style="{StaticResource PanelScrollArrow}"
+                          Command="ScrollBar.LineLeftCommand">
+                <Path Style="{StaticResource PanelScrollChevron}" Data="M4.5,0.75 L1.25,4 L4.5,7.25" />
+            </RepeatButton>
+            <RepeatButton x:Name="LineForward" Grid.Column="2" Style="{StaticResource PanelScrollArrow}"
+                          Command="ScrollBar.LineRightCommand">
+                <Path Style="{StaticResource PanelScrollChevron}" Data="M1.25,0.75 L4.5,4 L1.25,7.25" />
+            </RepeatButton>
+            <Border x:Name="Groove" Grid.Column="1" Margin="0,3" CornerRadius="4"
+                    Background="{DynamicResource Theme.Ov.08}" />
+            <Track x:Name="PART_Track" Grid.Column="1">
                 <Track.DecreaseRepeatButton>
                     <RepeatButton Style="{StaticResource PanelScrollPage}"
                                   Command="ScrollBar.PageLeftCommand" />
@@ -644,12 +755,45 @@
                 </Track.IncreaseRepeatButton>
             </Track>
         </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Groove" Property="Background" Value="{DynamicResource Theme.Ov.14}" />
+            </Trigger>
+            <!-- Faded rather than hidden at its end, so the bar keeps its shape
+                 and the arrow doesn't pop in and out as you scroll. Self, not
+                 TemplatedParent: in a template's own triggers Self is already the
+                 scrollbar, and TemplatedParent is the ScrollViewer around it, which
+                 has no Value - the arrows then never faded. -->
+            <DataTrigger Value="True">
+                <DataTrigger.Binding>
+                    <MultiBinding Converter="{x:Static ui:ScrollAtEnd.Instance}" ConverterParameter="start">
+                        <Binding Path="Value" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource Self}" />
+                    </MultiBinding>
+                </DataTrigger.Binding>
+                <Setter TargetName="LineBack" Property="Opacity" Value="0.25" />
+            </DataTrigger>
+            <DataTrigger Value="True">
+                <DataTrigger.Binding>
+                    <MultiBinding Converter="{x:Static ui:ScrollAtEnd.Instance}" ConverterParameter="end">
+                        <Binding Path="Value" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource Self}" />
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource Self}" />
+                    </MultiBinding>
+                </DataTrigger.Binding>
+                <Setter TargetName="LineForward" Property="Opacity" Value="0.25" />
+            </DataTrigger>
+        </ControlTemplate.Triggers>
     </ControlTemplate>
 
+    <!-- 18 px rather than 10: at 10 the inset pill was 6 px wide, too thin to
+         grab without aiming. Only the vertical bar is widened - the horizontal
+         one stays 14 px tall, so it doesn't eat into the rows above it. -->
     <Style TargetType="{x:Type ScrollBar}">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Width" Value="10" />
-        <Setter Property="MinWidth" Value="10" />
+        <Setter Property="Width" Value="18" />
+        <Setter Property="MinWidth" Value="18" />
         <Setter Property="Template" Value="{StaticResource PanelScrollBarVertical}" />
         <Style.Triggers>
             <!-- One ScrollBar class serves both directions, so the orientation
@@ -657,8 +801,8 @@
             <Trigger Property="Orientation" Value="Horizontal">
                 <Setter Property="Width" Value="Auto" />
                 <Setter Property="MinWidth" Value="0" />
-                <Setter Property="Height" Value="10" />
-                <Setter Property="MinHeight" Value="10" />
+                <Setter Property="Height" Value="14" />
+                <Setter Property="MinHeight" Value="14" />
                 <Setter Property="Template" Value="{StaticResource PanelScrollBarHorizontal}" />
             </Trigger>
         </Style.Triggers>

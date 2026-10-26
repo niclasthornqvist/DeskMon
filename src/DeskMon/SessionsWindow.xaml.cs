@@ -546,9 +546,35 @@ public partial class SessionsWindow : PanelWindow
             FillPicker(GamePicker.SelectedItem);
     }
 
-    private void FillPicker(object? wanted)
+    /// <summary>Counts fills, so a slow read finishing after a newer one doesn't put the older list back.</summary>
+    private int _fillTicket;
+
+    /// <summary>
+    /// The logs are listed, and the latest found, on a worker: this runs when
+    /// a game quits with the window open - inside the widget's tick - and on
+    /// the UI thread it opened every log and stat'ed it there.
+    /// </summary>
+    private async void FillPicker(object? wanted)
     {
-        var games = _history.Games();
+        int ticket = ++_fillTicket;
+        IReadOnlyList<string> games;
+        string? recent;
+        try
+        {
+            (games, recent) = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var found = _history.Games();
+                return (found, MostRecent(found));
+            });
+        }
+        catch (Exception ex)
+        {
+            App.Log("listing the session logs", ex);
+            return;
+        }
+
+        if (ticket != _fillTicket)
+            return;
 
         // All games first, above the names, so it reads as a view of the list
         // rather than one more game in it.
@@ -560,7 +586,7 @@ public partial class SessionsWindow : PanelWindow
         object? pick = wanted is AllGamesEntry && games.Count > 0
             ? AllGames
             : games.FirstOrDefault(g => string.Equals(g, wanted as string, StringComparison.OrdinalIgnoreCase))
-              ?? MostRecent(games);
+              ?? recent;
 
         _filling = true;
         try
@@ -593,7 +619,7 @@ public partial class SessionsWindow : PanelWindow
     private void GamePicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_filling)
-            ShowSelection(GamePicker.SelectedItem, _history.Games());
+            ShowSelection(GamePicker.SelectedItem, null);   // All games lists the logs itself, on its worker
     }
 
     /// <summary>What SessionsGame says was looked at last: All games, a game's name, or nothing yet.</summary>
@@ -608,7 +634,8 @@ public partial class SessionsWindow : PanelWindow
     /// <summary>Counts selections, so All games' totals arriving after another game was picked are dropped.</summary>
     private int _selectionTicket;
 
-    private async void ShowSelection(object? item, IReadOnlyList<string> games)
+    /// <param name="games">Every game with a log, if the caller has just listed them; null to list them on the worker.</param>
+    private async void ShowSelection(object? item, IReadOnlyList<string>? games)
     {
         int ticket = ++_selectionTicket;
         _allGames = item is AllGamesEntry;
@@ -640,7 +667,7 @@ public partial class SessionsWindow : PanelWindow
             List<GameTotal> totals;
             try
             {
-                totals = await System.Threading.Tasks.Task.Run(() => games.Select(Total).OfType<GameTotal>().ToList());
+                totals = await System.Threading.Tasks.Task.Run(() => (games ?? _history.Games()).Select(Total).OfType<GameTotal>().ToList());
             }
             catch (Exception ex)
             {
@@ -658,8 +685,28 @@ public partial class SessionsWindow : PanelWindow
         else
         {
             string? game = item as string;
+
+            // On a worker, as All games' totals are: a long log is read and
+            // parsed line by line, and this runs in the widget's tick when a
+            // game quits with the window open.
+            IReadOnlyList<SessionRecord> sessions;
+            try
+            {
+                sessions = game is null
+                    ? Array.Empty<SessionRecord>()
+                    : await System.Threading.Tasks.Task.Run(() => _history.Sessions(game));
+            }
+            catch (Exception ex)
+            {
+                App.Log("reading a session log", ex);
+                sessions = Array.Empty<SessionRecord>();
+            }
+
+            if (ticket != _selectionTicket)
+                return;   // another game picked meanwhile
+
             _games = Array.Empty<GameTotal>();
-            _sessions = game is null ? Array.Empty<SessionRecord>() : _history.Sessions(game);
+            _sessions = sessions;
             _changes = ChangesIn(_sessions);
             ShowSummary(game);
         }
@@ -1280,7 +1327,7 @@ public partial class SessionsWindow : PanelWindow
             else
                 _settings.GameTargetFps.Remove(game);
             _settings.Save();
-            ShowSelection(GamePicker.SelectedItem, _history.Games());
+            ShowSelection(GamePicker.SelectedItem, null);
         }
 
         var settings = new MenuItem
@@ -2046,7 +2093,7 @@ public partial class SessionsWindow : PanelWindow
         if (_scoredFor != PerformanceScore.Target)
         {
             _scoredFor = PerformanceScore.Target;
-            ShowSelection(GamePicker.SelectedItem, _history.Games());
+            ShowSelection(GamePicker.SelectedItem, null);
         }
         else
             DrawChart();
@@ -2186,6 +2233,7 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private void Select(SessionRecord session)
     {
+        var before = _selected.ToList();
         bool had = _selected.Contains(session);
         if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
@@ -2204,10 +2252,24 @@ public partial class SessionsWindow : PanelWindow
                 _selected.Add(session);
         }
         DisarmDelete();
-        ShowRows();
+
+        // Only the rows whose pick changed are repainted. ShowRows rebuilt the
+        // whole table - some twenty elements a session, every session - on
+        // every click, which grew slow as a game's history did.
+        foreach (var changed in before.Concat(_selected).Distinct())
+            if (_sessionRows.TryGetValue(changed, out var row))
+                row.Background = _selected.Contains(changed) ? SelectedBrush : Brushes.Transparent;
+        DeleteButton.IsEnabled = !_allGames && _selected.Count > 0;
+
         // The chart marks the picked session too - see DrawChart.
         DrawChart();
     }
+
+    /// <summary>
+    /// Each session's row in the table as last built, so a click can repaint
+    /// its background without building the table again - see Select.
+    /// </summary>
+    private readonly Dictionary<SessionRecord, Grid> _sessionRows = new();
 
     /// <summary>
     /// The heading row and every row under it. One method for both tables, so
@@ -2245,6 +2307,7 @@ public partial class SessionsWindow : PanelWindow
         AddGroupLines(GroupLines, columns, 1);
 
         Rows.Children.Clear();
+        _sessionRows.Clear();
         bool firstRow = true;
         foreach (var item in Sorted(items, sortBy, sort.Descending))
         {
@@ -2259,6 +2322,8 @@ public partial class SessionsWindow : PanelWindow
             };
             LazyTip(row, () => tooltip(item));
             AddColumns(row, columns);
+            if (item is SessionRecord record)
+                _sessionRows[record] = row;   // for Select's repaint
 
             // The widget's row hover (MainWindow's RowHover): the same faint
             // strip, faded in quickly and out a little slower, over a picked
@@ -2822,6 +2887,9 @@ public partial class SessionsWindow : PanelWindow
             return;
 
         DisarmDelete();
+        // Session lines are now written on AtomicFile's writer (M1); any
+        // still queued land first, or the rewrite below could drop them.
+        AtomicFile.Flush(TimeSpan.FromSeconds(3));
         FinishDelete(game, _history.Delete(game, _selected), _selected.Count == 1 ? "the session" : "the sessions");
     }
 
@@ -2840,6 +2908,7 @@ public partial class SessionsWindow : PanelWindow
             return;
 
         DisarmDelete();
+        AtomicFile.Flush(TimeSpan.FromSeconds(3));   // a queued line would otherwise bring the log back
         FinishDelete(game, _history.DeleteAll(game), "the sessions");
     }
 

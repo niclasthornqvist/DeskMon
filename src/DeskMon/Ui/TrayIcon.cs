@@ -98,11 +98,36 @@ public sealed class TrayIcon : IDisposable
                 FlipWidget();
         };
 
-        _icon.BalloonTipClicked += (_, _) => _notificationClicked?.Invoke();
-        _icon.BalloonTipClosed += (_, _) => _notificationClicked = null;
+        _icon.BalloonTipClicked += (_, _) =>
+        {
+            _balloonUp = false;
+            _notificationClicked?.Invoke();
+        };
+
+        // A balloon replaced by a newer one closes after the newer one is
+        // shown, and its Closed used to clear the newer one's click action -
+        // so "DeskMon x.y is out" did nothing when clicked. Those closes are
+        // counted when the newer one is shown, and passed over here.
+        _icon.BalloonTipClosed += (_, _) =>
+        {
+            if (_staleCloses > 0)
+            {
+                _staleCloses--;
+                return;
+            }
+
+            _balloonUp = false;
+            _notificationClicked = null;
+        };
     }
 
     private Action? _notificationClicked;
+
+    /// <summary>A balloon is on screen, so the next Notify replaces it - see the BalloonTipClosed handler.</summary>
+    private bool _balloonUp;
+
+    /// <summary>Closed events still to come from balloons a newer one replaced.</summary>
+    private int _staleCloses;
 
     /// <summary>
     /// A Windows notification from the tray icon - an alert, or a new version.
@@ -113,6 +138,9 @@ public sealed class TrayIcon : IDisposable
     /// </summary>
     public void Notify(string title, string text, bool warning, Action? clicked = null)
     {
+        if (_balloonUp)
+            _staleCloses++;   // the one up now closes after this is shown
+        _balloonUp = true;
         _notificationClicked = clicked;
         _icon.ShowBalloonTip(10_000, title, text, warning ? Forms.ToolTipIcon.Warning : Forms.ToolTipIcon.Info);
     }

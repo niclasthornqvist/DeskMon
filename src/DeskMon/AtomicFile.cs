@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 
 namespace DeskMon;
@@ -65,6 +66,46 @@ internal static class AtomicFile
             throw;
         }
     }
+
+    /// <summary>
+    /// Deletes temporary files a write left behind - DeskMon stopped between
+    /// writing "name.&lt;guid&gt;.tmp" and renaming it - in these folders and
+    /// below. They used to stay for good beside settings.json and the notes.
+    /// Only this class's own pattern, and only a day old or more, so a write
+    /// in flight is never touched. On the writer thread, after anything queued.
+    /// </summary>
+    public static void SweepStrays(IEnumerable<string> folders)
+    {
+        var roots = folders.Where(f => !string.IsNullOrWhiteSpace(f))
+                           .Distinct(StringComparer.OrdinalIgnoreCase)
+                           .ToList();
+        Later(() =>
+        {
+            var cutoff = DateTime.UtcNow - TimeSpan.FromDays(1);
+            foreach (string root in roots)
+            {
+                if (!Directory.Exists(root))
+                    continue;
+
+                foreach (string file in Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        if (StrayName.IsMatch(Path.GetFileName(file)) && File.GetLastWriteTimeUtc(file) < cutoff)
+                            File.Delete(file);
+                    }
+                    catch
+                    {
+                        // Held or gone - the next start tries again.
+                    }
+                }
+            }
+        });
+    }
+
+    /// <summary>"settings.json.3f2a…(32 hex).tmp" - the name Write gives its temporary file.</summary>
+    private static readonly System.Text.RegularExpressions.Regex StrayName =
+        new(@"\.[0-9a-f]{32}\.tmp$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     // --- Off the UI thread ----------------------------------------------------
     //

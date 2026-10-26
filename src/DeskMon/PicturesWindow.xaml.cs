@@ -1420,12 +1420,16 @@ public partial class PicturesWindow : PanelWindow
     {
         try
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            // Read whole and checked first, as the art is - the folder is the
+            // user's to write in and this decodes as administrator.
+            if (GameArt.ReadPlainPicture(path) is not { } data)
+                return null;
+
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
             bitmap.DecodePixelWidth = width;
-            bitmap.StreamSource = stream;
+            bitmap.StreamSource = new MemoryStream(data);
             bitmap.EndInit();
             bitmap.Freeze();   // made on a worker thread, shown on the UI one
             return bitmap;

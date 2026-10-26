@@ -251,9 +251,45 @@ public sealed class SessionHistory
     }
 
     /// <summary>
+    /// <see cref="Append"/> on AtomicFile's writer thread, behind any checkpoint
+    /// still queued - for the polling tick, where waiting on a busy disk froze
+    /// every DeskMon window the moment a game quit. A failure is logged, as
+    /// nobody is waiting on it. <paramref name="done"/> runs on the UI thread
+    /// once the line is on disk, so the windows that show the log read it then.
+    /// </summary>
+    public void AppendLater(string game, string line, Action? done = null)
+    {
+        var ui = System.Windows.Application.Current?.Dispatcher;
+        AtomicFile.Later(() =>
+        {
+            if (Append(game, line) is { } error)
+                App.Log("writing a session", error);
+            if (done is not null)
+                ui?.BeginInvoke(done);
+        });
+    }
+
+    /// <summary>
+    /// <see cref="Delete(string, SessionRecord)"/> on the writer thread, after
+    /// any append still queued - so a line taken back is never looked for
+    /// before it has been written. Logged on failure, like AppendLater.
+    /// </summary>
+    public void DeleteLater(string game, SessionRecord session, Action? done = null)
+    {
+        var ui = System.Windows.Application.Current?.Dispatcher;
+        AtomicFile.Later(() =>
+        {
+            if (Delete(game, session) is { } error)
+                App.Log("taking back a session line", error);
+            if (done is not null)
+                ui?.BeginInvoke(done);
+        });
+    }
+
+    /// <summary>
     /// Adds one line for the session that just ended. Returns null on success,
-    /// or the reason it failed - nothing is waiting on the answer, since by the
-    /// time this runs the game is gone and there is nobody to tell.
+    /// or the reason it failed. Synchronous: at startup (RecoverOpenSession)
+    /// and on the writer thread through <see cref="AppendLater"/>.
     /// </summary>
     public string? Append(string game, string line)
     {

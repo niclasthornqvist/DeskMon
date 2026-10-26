@@ -40,6 +40,9 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<object> _visibleItems = new();     // what is drawn right now
     private readonly FpsMonitor _fps = new();
 
+    /// <summary>The FPS error the tooltip last showed - see OnTick.</summary>
+    private string? _fpsErrorShown;
+
     /// <summary>Round trips to PingHost, only while a game runs - see PingMonitor.</summary>
     private readonly PingMonitor _ping = new();
 
@@ -265,6 +268,11 @@ public partial class MainWindow : Window
         // Before anything can open a session of its own: the last run may have
         // stopped without closing - a crash, a power cut - with one still open.
         _sessions.RecoverOpenSession();
+
+        // Temporary files left by a write DeskMon was stopped in the middle
+        // of - see AtomicFile.SweepStrays. On the writer thread, so the start
+        // doesn't wait on it; the notes and sessions may live elsewhere.
+        AtomicFile.SweepStrays(new[] { DataFolder.Root, _notesStore.FolderPath, _settings.SessionFolder });
 
         InitializeComponent();
 
@@ -787,6 +795,23 @@ public partial class MainWindow : Window
             UpdateGameState();
             UpdateGameTitle();   // the playtime moves on while the game runs
             CheckpointSession();
+
+            // PresentMon stopped by itself mid-game: started again, with the
+            // dead run's frames harvested first - Start forgets them. Nothing
+            // else would restart it, as TrackGame only starts it for a new game.
+            if (_inGame && _fps.NeedsRestart)
+            {
+                HarvestFrames();
+                _fps.Start(_gamePid, _settings.PresentMonPath);
+            }
+
+            // Its reason in the tooltip as it changes - it can change off the
+            // UI thread, where nothing would otherwise say so.
+            if (_fps.Error != _fpsErrorShown)
+            {
+                _fpsErrorShown = _fps.Error;
+                UpdateTooltip();
+            }
         }
 
         // Pinging only while there is a game to be lagging; Run is a no-op
@@ -1331,10 +1356,35 @@ public partial class MainWindow : Window
         // they just launched.
         // Through Open: this runs in the tick, where a notes window that can't
         // be made would otherwise fail on every game start.
-        if (_settings.AutoOpenNotesWithGame)
-            Open("notes window", () => Notes().ShowFor(_gameName));
-        else
-            _notes?.ShowFor(_gameName);   // already open: at least switch it over
+        //
+        // Posted out of the tick, and the notes file read on a worker first
+        // (ShowForAsync): loading notes full of screenshots inside the tick
+        // froze every window right as the game launched. Checked again when
+        // it runs, in case the game was already left by then.
+        string? game = _gameName;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (!_inGame || _gamePid != pid)
+                return;
+
+            if (_settings.AutoOpenNotesWithGame)
+                Open("notes window", () => _ = ShowNotesForGameAsync(game));
+            else if (_notes is not null)
+                _ = ShowNotesForGameAsync(game);   // already open: at least switch it over
+        }));
+    }
+
+    /// <summary>The notes' ShowForAsync with its errors logged - nothing waits on it.</summary>
+    private async Task ShowNotesForGameAsync(string? game)
+    {
+        try
+        {
+            await Notes().ShowForAsync(game);
+        }
+        catch (Exception ex)
+        {
+            App.Log("opening the notes for a game", ex);
+        }
     }
 
     /// <summary>The process whose friendly name was last worked out - by pid and start time, as pids are reused - and the name.</summary>
@@ -1381,7 +1431,22 @@ public partial class MainWindow : Window
     {
         try
         {
-            string? description = process.MainModule?.FileVersionInfo.FileDescription;
+            // From the exe's path rather than MainModule: that lists every
+            // module in the game - hundreds - on the UI thread, and is refused
+            // by anti-cheat, while the path needs only the limited query right.
+            string? path = SteamPlaytime.ExePath(process.Id);
+            string? description = path is null ? null : FileVersionInfo.GetVersionInfo(path).FileDescription;
+
+            // NW.js games - RPG Maker MV and MZ among them - ship the runtime
+            // unchanged, so the version info only says "nwjs" and every one
+            // of them was filed under that. The window title is the game's
+            // own; "RPG Maker MZ" only when there is none to go by.
+            if (string.Equals(description?.Trim(), "nwjs", StringComparison.OrdinalIgnoreCase))
+            {
+                string title = process.MainWindowTitle;
+                return string.IsNullOrWhiteSpace(title) ? "RPG Maker MZ" : Shorten(title);
+            }
+
             if (!string.IsNullOrWhiteSpace(description))
                 return Shorten(description);
         }
@@ -1772,8 +1837,9 @@ public partial class MainWindow : Window
         if (ended - started < ShortestLoggedSession)
             return;
 
-        _sessions.Append(game, DescribeSession(started, ended, frames, extras, note));
-        RefreshAfterSession();
+        // Queued, not written here: this runs in the tick, and a busy disk
+        // froze every window as the game quit. The windows redraw once it lands.
+        _sessions.AppendLater(game, DescribeSession(started, ended, frames, extras, note), RefreshAfterSession);
     }
 
     /// <summary>
@@ -1807,14 +1873,17 @@ public partial class MainWindow : Window
             frames.Add(_fps.SessionTotals);
 
         string line = DescribeSession(_sessionStartedAt, ended, frames, SessionExtras(), null);
-        if (_sessions.Append(_sessionGame, line) is not null)
-            return;   // not written: FinishSession tries again at the end of the grace
 
+        // Queued on the writer, off the tick - see FinishSession. Counted as
+        // logged straight away: a write that fails after all is in error.log,
+        // which beats the tick waiting on the disk to find out.
         _loggedLine = line;
+        _sessions.AppendLater(_sessionGame, line, RefreshAfterSession);
 
-        // Its line is in the log now; a recovery after a crash would add it again.
+        // Behind the append on the same writer: the line is in the log by the
+        // time the saved copy goes, so a crash in between can't lose it, and a
+        // recovery after one can't add it twice.
         _sessions.ClearOpenSession();
-        RefreshAfterSession();
     }
 
     /// <summary>
@@ -1828,9 +1897,9 @@ public partial class MainWindow : Window
             return;
 
         _loggedLine = null;
-        if (SessionRecord.Parse(line) is { } logged && _sessions.Delete(_sessionGame, logged) is { } problem)
-            App.Log("taking back a session line", problem);
-        RefreshAfterSession();
+        // On the writer, behind the append that wrote it - see SessionHistory.DeleteLater.
+        if (SessionRecord.Parse(line) is { } logged)
+            _sessions.DeleteLater(_sessionGame, logged, RefreshAfterSession);
     }
 
     /// <summary>
@@ -3654,14 +3723,17 @@ public partial class MainWindow : Window
     /// </summary>
     private void SetPaused(bool paused)
     {
-        if (paused)
-            _needsPrime = true;
+        // All of it through the dispatcher: SystemEvents may call from a
+        // thread of its own, and the flags are read by the tick on the UI
+        // thread with no barrier - as is the drift's clock.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (paused)
+                _needsPrime = true;
 
-        _paused = paused;
-
-        // Through the dispatcher: SystemEvents may call from a thread of its
-        // own, and the drift's clock belongs to the UI thread.
-        Dispatcher.BeginInvoke(new Action(UpdateDrift));
+            _paused = paused;
+            UpdateDrift();
+        }));
     }
 
     /// <summary>

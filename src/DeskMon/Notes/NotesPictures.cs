@@ -1279,7 +1279,9 @@ internal sealed class NotesPictures
             if (!File.Exists(path))
                 return (null, 0);
 
-            using var full = new System.Drawing.Bitmap(path);
+            // Checked before GDI+ sees it, as the art is: a link in pasted
+            // notes can point at any file on the PC - see Screenshot.LoadChecked.
+            using var full = Screenshot.LoadChecked(path);
 
             // The label at a fixed size on screen, whatever the picture's:
             // decoded pixels per shown DIP undoes both the DPI scale and the

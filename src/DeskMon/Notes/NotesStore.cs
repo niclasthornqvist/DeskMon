@@ -272,6 +272,23 @@ public sealed class NotesStore
     }
 
     /// <summary>
+    /// <see cref="Backup"/> from bytes already in memory - the file as the
+    /// notes window last read or wrote it - on AtomicFile's writer thread.
+    /// Done inline, the first save after a load read the notes file, the
+    /// newest copy and its neighbours on the UI thread, megabytes for notes
+    /// with screenshots. From memory, so the save that follows straight away
+    /// can't overwrite the file before the copy is taken.
+    /// </summary>
+    public void BackupLater(string gameName, byte[] original)
+    {
+        AtomicFile.Later(() =>
+        {
+            if (KeepCopy(gameName, original) is { } error)
+                App.Log("backing up notes", error);
+        });
+    }
+
+    /// <summary>
     /// Whether the newest copy of one game already holds exactly these bytes.
     /// Only the newest: an older copy with the same text is a real step back
     /// in the history - notes changed and then changed back - and stays.

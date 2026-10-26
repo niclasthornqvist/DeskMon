@@ -25,7 +25,11 @@ namespace DeskMon.Hardware;
 public static class UpdateCheck
 {
     /// <summary>What to tell the user, and how up to date it is - which sets its colour.</summary>
-    public sealed record Verdict(string Text, Freshness Level);
+    /// <param name="Short">The word or two the hardware window shows at the right of its row ("Newest", "Update available"); the full text is for the note under it and Copy.</param>
+    public sealed record Verdict(string Text, Freshness Level, string? Short = null)
+    {
+        public string ShortText => Short ?? Text;
+    }
 
     /// <summary>
     /// Green, yellow, red - or dim when nothing could be said. Levels rather
@@ -130,10 +134,10 @@ public static class UpdateCheck
                     // Only newer counts. A Studio or hotfix driver can be ahead of
                     // the newest Game Ready one, and is not something to "update" from.
                     if (newest <= have)
-                        return new Verdict("Newest driver from NVIDIA", Freshness.Current);
+                        return new Verdict("Newest driver from NVIDIA", Freshness.Current, "Newest");
 
                     string when = latest.Value.Released is { } date ? $" ({date:yyyy-MM-dd})" : string.Empty;
-                    return new Verdict($"Newer driver available: {latest.Value.Version}{when}", Behind(installedDate));
+                    return new Verdict($"Newer driver available: {latest.Value.Version}{when}", Behind(installedDate), "Update available");
                 }
 
                 // Reached NVIDIA fine, so "could not be reached" would be wrong.
@@ -147,7 +151,7 @@ public static class UpdateCheck
         }
 
         return Age("Driver", installedDate, $" ({why})")
-               ?? new Verdict($"Could not check for a newer driver: {why}", Freshness.Unknown);
+               ?? new Verdict($"Could not check for a newer driver: {why}", Freshness.Unknown, "Can't check");
     }
 
     /// <summary>
@@ -172,10 +176,10 @@ public static class UpdateCheck
                     && int.TryParse(latest.Value.Version, NumberStyles.None, CultureInfo.InvariantCulture, out int newest))
                 {
                     if (newest <= have)
-                        return new Verdict("Newest BIOS from ASUS", Freshness.Current);
+                        return new Verdict("Newest BIOS from ASUS", Freshness.Current, "Newest");
 
                     string when = latest.Value.Released is { } date ? $" ({date:yyyy-MM-dd})" : string.Empty;
-                    return new Verdict($"Newer BIOS available: {latest.Value.Version}{when}", Behind(installedDate));
+                    return new Verdict($"Newer BIOS available: {latest.Value.Version}{when}", Behind(installedDate), "Update available");
                 }
 
                 // Laptops' BIOSes are named like "X515EA.312"; reached ASUS fine all the same.
@@ -188,7 +192,7 @@ public static class UpdateCheck
         }
 
         return Age("BIOS", installedDate, $" ({why})")
-               ?? new Verdict($"Could not check for a newer BIOS: {why}", Freshness.Unknown);
+               ?? new Verdict($"Could not check for a newer BIOS: {why}", Freshness.Unknown, "Can't check");
     }
 
     /// <summary>
@@ -216,14 +220,14 @@ public static class UpdateCheck
                     && Version.TryParse(match.Groups["version"].Value, out var newest))
                 {
                     if (newest <= have)
-                        return new Verdict("Newest driver from AMD", Freshness.Current);
+                        return new Verdict("Newest driver from AMD", Freshness.Current, "Newest");
 
                     // "261018" is 2026-10-18.
                     string when = DateTime.TryParseExact(match.Groups["date"].Value, "yyMMdd", CultureInfo.InvariantCulture,
                                                          DateTimeStyles.None, out var date)
                         ? $" ({date:yyyy-MM-dd})"
                         : string.Empty;
-                    return new Verdict($"Newer driver available: {newest}{when}", Behind(installedDate));
+                    return new Verdict($"Newer driver available: {newest}{when}", Behind(installedDate), "Update available");
                 }
             }
             else if (match.Success)
@@ -237,7 +241,7 @@ public static class UpdateCheck
         }
 
         return Age("Driver", installedDate, $" ({why})")
-               ?? new Verdict($"Could not check for a newer driver: {why}", Freshness.Unknown);
+               ?? new Verdict($"Could not check for a newer driver: {why}", Freshness.Unknown, "Can't check");
     }
 
     /// <summary>
@@ -277,7 +281,7 @@ public static class UpdateCheck
     public static Verdict Blocked(string what, string maker, DateTime? date)
         => Age(what, date, $" ({maker}'s website blocks automatic checks)")
            ?? new Verdict($"Can't check online: {maker}'s website blocks automatic checks - look on its site",
-                          Freshness.Unknown);
+                          Freshness.Unknown, "Can't check");
 
     /// <summary>
     /// How long Windows Update may take to answer. Longer than the others:
@@ -325,7 +329,7 @@ public static class UpdateCheck
         // The COM search can't be cancelled; on a timeout it is left to
         // finish on its own, and its answer goes nowhere.
         if (await Task.WhenAny(search, Task.Delay(WindowsTimeout)).ConfigureAwait(false) != search)
-            return new Verdict("Could not check for Windows updates: Windows Update took too long to answer", Freshness.Unknown);
+            return new Verdict("Could not check for Windows updates: Windows Update took too long to answer", Freshness.Unknown, "Can't check");
 
         try
         {
@@ -334,18 +338,18 @@ public static class UpdateCheck
             // Before the waiting list: until the restart, updates already
             // installed aren't in use, and some won't be offered again until then.
             if (restart)
-                return new Verdict("Restart to finish installing Windows updates", Freshness.Aging);
+                return new Verdict("Restart to finish installing Windows updates", Freshness.Aging, "Restart needed");
 
             return waiting.Count switch
             {
-                0 => new Verdict("Windows is up to date", Freshness.Current),
-                1 => new Verdict($"Windows update waiting: {waiting[0]}", Freshness.Aging),
-                _ => new Verdict($"{waiting.Count} Windows updates waiting, the first: {waiting[0]}", Freshness.Aging),
+                0 => new Verdict("Windows is up to date", Freshness.Current, "Up to date"),
+                1 => new Verdict($"Windows update waiting: {waiting[0]}", Freshness.Aging, "1 update"),
+                _ => new Verdict($"{waiting.Count} Windows updates waiting, the first: {waiting[0]}", Freshness.Aging, $"{waiting.Count} updates"),
             };
         }
         catch
         {
-            return new Verdict("Could not check for Windows updates: Windows Update did not answer", Freshness.Unknown);
+            return new Verdict("Could not check for Windows updates: Windows Update did not answer", Freshness.Unknown, "Can't check");
         }
     }
 
@@ -361,30 +365,60 @@ public static class UpdateCheck
 
         Type session = Type.GetTypeFromProgID("Microsoft.Update.Session")
                        ?? throw new InvalidOperationException("Windows Update is not available");
-        dynamic updateSession = Activator.CreateInstance(session)!;
-        dynamic result = updateSession.CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0 and Type='Software'");
 
-        foreach (dynamic update in result.Updates)
+        // Every COM object let go in the finally, not left to the finalizer:
+        // a search result holds every update's details, and the window can be
+        // opened many times in a session.
+        var held = new System.Collections.Generic.List<object>();
+        try
         {
-            string title = (string)update.Title;
+            dynamic updateSession = Keep(held, Activator.CreateInstance(session)!);
+            dynamic searcher = Keep(held, updateSession.CreateUpdateSearcher());
+            dynamic result = Keep(held, searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'"));
+            dynamic updates = Keep(held, result.Updates);
 
-            // Defender's virus definitions arrive several times a day and
-            // install themselves; listing them would make the line amber
-            // almost every time the window opens.
-            if (title.Contains("Security Intelligence Update", StringComparison.OrdinalIgnoreCase))
-                continue;
+            foreach (dynamic update in updates)
+            {
+                Keep(held, update);
+                string title = (string)update.Title;
 
-            waiting.Add(title);
+                // Defender's virus definitions arrive several times a day and
+                // install themselves; listing them would make the line amber
+                // almost every time the window opens.
+                if (title.Contains("Security Intelligence Update", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                waiting.Add(title);
+            }
+
+            bool restart = false;
+            if (Type.GetTypeFromProgID("Microsoft.Update.SystemInfo") is { } info)
+            {
+                dynamic systemInfo = Keep(held, Activator.CreateInstance(info)!);
+                restart = (bool)systemInfo.RebootRequired;
+            }
+
+            return (waiting, restart);
         }
-
-        bool restart = false;
-        if (Type.GetTypeFromProgID("Microsoft.Update.SystemInfo") is { } info)
+        finally
         {
-            dynamic systemInfo = Activator.CreateInstance(info)!;
-            restart = (bool)systemInfo.RebootRequired;
+            foreach (object com in held)
+            {
+                try
+                {
+                    if (System.Runtime.InteropServices.Marshal.IsComObject(com))
+                        System.Runtime.InteropServices.Marshal.FinalReleaseComObject(com);
+                }
+                catch { /* already released */ }
+            }
         }
+    }
 
-        return (waiting, restart);
+    /// <summary>Notes a COM object for the release in SearchWindowsUpdate's finally, and hands it back.</summary>
+    private static object Keep(System.Collections.Generic.List<object> held, object com)
+    {
+        held.Add(com);
+        return com;
     }
 
     /// <summary>"ASUSTeK COMPUTER INC." as Windows has it from the board.</summary>
@@ -474,9 +508,9 @@ public static class UpdateCheck
         // Yellow from three months, red from a year - see the two constants.
         int months = MonthsSince(date.Value);
         return months >= OldAfterMonths
-            ? new Verdict($"{what} is {months} months old - look for an update{suffix}", Freshness.Old)
+            ? new Verdict($"{what} is {months} months old - look for an update{suffix}", Freshness.Old, $"{months} months old")
             : months >= AgingAfterMonths
-            ? new Verdict($"{what} is {months} months old - there may be an update{suffix}", Freshness.Aging)
+            ? new Verdict($"{what} is {months} months old - there may be an update{suffix}", Freshness.Aging, $"{months} months old")
             : null;
     }
 

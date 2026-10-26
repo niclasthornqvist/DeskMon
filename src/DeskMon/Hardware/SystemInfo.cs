@@ -4,6 +4,10 @@ using System.Globalization;
 using System.Linq;
 using System.Management;
 using Microsoft.Win32;
+// Sizes and speeds in Invariant(...): a full stop as the decimal mark whatever
+// the Windows language, like every other number in DeskMon - a Swedish PC
+// showed "4,2 GHz" and "1,8 TB" here, and Copy gave different text per PC.
+using static System.FormattableString;
 
 namespace DeskMon.Hardware;
 
@@ -68,8 +72,17 @@ public sealed class SystemInfo
     /// </summary>
     public enum Condition { Unknown, Good, Warning, Bad }
 
-    /// <summary>One line of a health check, e.g. "Dual channel".</summary>
-    public sealed record Check(string Text, Condition Level);
+    /// <summary>
+    /// One line of a health check, e.g. "Dual channel". <paramref name="Short"/>
+    /// is the word or two the hardware window shows beside its item ("No
+    /// errors", "EXPO on"); the full sentence stays for Copy, the tooltip and
+    /// - when something is wrong - the note under the item, where the advice
+    /// in it is the point.
+    /// </summary>
+    public sealed record Check(string Text, Condition Level, string? Short = null)
+    {
+        public string ShortText => Short ?? Text;
+    }
 
     /// <summary>Lines under the memory modules: channels, speed, errors. See ReadMemoryChecks.</summary>
     public IReadOnlyList<Check> MemoryChecks { get; private set; } = Array.Empty<Check>();
@@ -141,9 +154,9 @@ public sealed class SystemInfo
             if (cores > 0)
                 parts.Add(threads > cores ? $"{cores} cores / {threads} threads" : $"{cores} cores");
             if (mhz > 0)
-                parts.Add($"{mhz / 1000d:0.##} GHz base");   // 4201 MHz reads 4.2, not 4.201
+                parts.Add(Invariant($"{mhz / 1000d:0.##} GHz base"));   // 4201 MHz reads 4.2, not 4.201
             if (l3Kb > 0)
-                parts.Add($"{l3Kb / 1024d:0.#} MB L3");
+                parts.Add(Invariant($"{l3Kb / 1024d:0.#} MB L3"));
 
             CpuDetail = parts.Count > 0 ? string.Join("  ·  ", parts) : null;
         }
@@ -174,8 +187,9 @@ public sealed class SystemInfo
             "*[System[Provider[@Name='Microsoft-Windows-WHEA-Logger'] and (EventID=18 or EventID=19) " +
             "and TimeCreated[timediff(@SystemTime) <= 2592000000]]]");
         checks.Add(errors > 0
-            ? new Check($"{errors} CPU hardware error{(errors == 1 ? "" : "s")} in the last 30 days - an overclock or undervolt may be unstable", Condition.Bad)
-            : new Check("No CPU hardware errors logged in the last 30 days", Condition.Good));
+            ? new Check($"{errors} CPU hardware error{(errors == 1 ? "" : "s")} in the last 30 days - an overclock or undervolt may be unstable", Condition.Bad,
+                        $"{errors} error{(errors == 1 ? "" : "s")}")
+            : new Check("No CPU hardware errors logged in the last 30 days", Condition.Good, "No errors"));
 
         if (RaptorLakeCheck() is { } microcode)
             checks.Add(microcode);
@@ -220,9 +234,13 @@ public sealed class SystemInfo
                         : baseName is not null ? $"custom, based on {baseName}"
                         : "custom";
 
+            // The plan's own name when Windows knows it, else what it was
+            // copied from - "High performance" says more than "custom".
+            string shortName = KnownPlans.TryGetValue(scheme, out var knownShort) ? knownShort : baseName ?? "Custom";
+
             return basedOn == 0
-                ? new Check($"Power plan: {name} - it holds the CPU back; Balanced or better for games", Condition.Warning)
-                : new Check($"Power plan: {name}", Condition.Good);
+                ? new Check($"Power plan: {name} - it holds the CPU back; Balanced or better for games", Condition.Warning, "Power saver plan")
+                : new Check($"Power plan: {name}", Condition.Good, $"{shortName} plan");
         }
         catch
         {
@@ -282,8 +300,8 @@ public sealed class SystemInfo
             // Eight bytes; on Intel the revision is the upper half.
             uint revision = BitConverter.ToUInt32(bytes, 4);
             return revision >= 0x12B
-                ? new Check($"Has Intel's fix for the 13th/14th gen instability (microcode 0x{revision:X})", Condition.Good)
-                : new Check($"Missing Intel's fix for the 13th/14th gen instability (microcode 0x{revision:X}, needs 0x12B) - update the BIOS", Condition.Bad);
+                ? new Check($"Has Intel's fix for the 13th/14th gen instability (microcode 0x{revision:X})", Condition.Good, "Microcode fixed")
+                : new Check($"Missing Intel's fix for the 13th/14th gen instability (microcode 0x{revision:X}, needs 0x12B) - update the BIOS", Condition.Bad, "Microcode fix missing");
         }
         catch
         {
@@ -346,7 +364,7 @@ public sealed class SystemInfo
         if (key.GetValue("HardwareInformation.qwMemorySize") is long bytes && bytes > 0)
         {
             double gb = bytes / (1024d * 1024 * 1024);
-            parts.Add(gb >= 1 ? $"{gb:0.#} GB VRAM" : $"{bytes / (1024 * 1024)} MB VRAM");
+            parts.Add(gb >= 1 ? Invariant($"{gb:0.#} GB VRAM") : $"{bytes / (1024 * 1024)} MB VRAM");
         }
 
         string? driver = DriverVersionForPeople(desc, key);
@@ -680,8 +698,8 @@ public sealed class SystemInfo
     /// </summary>
     private static string DriveSize(ulong bytes)
         => bytes >= 1_000_000_000_000
-            ? $"{bytes / 1e12:0.#} TB"
-            : $"{bytes / 1e9:0} GB";
+            ? Invariant($"{bytes / 1e12:0.#} TB")
+            : Invariant($"{bytes / 1e9:0} GB");
 
     /// <summary>
     /// MSFT_NetAdapter rather than .NET's NetworkInterface, because only it
@@ -745,11 +763,12 @@ public sealed class SystemInfo
     {
         // NdisPhysicalMedium 9 is native 802.11 - Wi-Fi.
         if (medium == 9)
-            return new Check($"Wi-Fi at {LinkSpeed(speed)} - a cable gives a steadier ping in games", Condition.Unknown);
+            return new Check($"Wi-Fi at {LinkSpeed(speed)} - a cable gives a steadier ping in games", Condition.Unknown, $"Wi-Fi at {LinkSpeed(speed)}");
 
         return speed >= 1_000_000_000
-            ? new Check($"Cable linked at {LinkSpeed(speed)}", Condition.Good)
-            : new Check($"Cable linked at only {LinkSpeed(speed)} - usually a damaged cable or loose plug; it should be 1 Gbit/s or more", Condition.Warning);
+            ? new Check($"Cable linked at {LinkSpeed(speed)}", Condition.Good, $"linked at {LinkSpeed(speed)}")
+            : new Check($"Cable linked at only {LinkSpeed(speed)} - usually a damaged cable or loose plug; it should be 1 Gbit/s or more", Condition.Warning,
+                        $"only {LinkSpeed(speed)}");
     }
 
     /// <summary>Lines under the network adapters: the link of each one in use. Ping is measured by the window - see NetworkCheck.</summary>
@@ -757,8 +776,8 @@ public sealed class SystemInfo
 
     private static string LinkSpeed(ulong bitsPerSecond)
         => bitsPerSecond >= 1_000_000_000
-            ? $"{bitsPerSecond / 1e9:0.#} Gbit/s"
-            : $"{bitsPerSecond / 1e6:0} Mbit/s";
+            ? Invariant($"{bitsPerSecond / 1e9:0.#} Gbit/s")
+            : Invariant($"{bitsPerSecond / 1e6:0} Mbit/s");
 
     /// <summary>
     /// Windows mirrors the SMBIOS tables here, so this is the same data the
@@ -812,7 +831,10 @@ public sealed class SystemInfo
                 "SELECT Manufacturer, PartNumber, Capacity, Speed, ConfiguredClockSpeed, " +
                 "DeviceLocator, BankLabel FROM Win32_PhysicalMemory");
 
-            var modules = new List<string>();
+            // Each stick as its description (name, size, speed) and its slot,
+            // kept apart so matching sticks can be told apart from their slots
+            // and folded into one line below.
+            var modules = new List<(string Description, string? Slot)>();
             ulong totalBytes = 0;
 
             // For the checks under the modules: what each runs at, what its
@@ -865,18 +887,16 @@ public sealed class SystemInfo
                     var parts = new List<string>();
                     string? name = Join(vendor, part);
                     if (name is not null) parts.Add(name);
-                    if (capacity > 0) parts.Add($"{capacity / (1024d * 1024 * 1024):0.#} GB");
+                    if (capacity > 0) parts.Add(Invariant($"{capacity / (1024d * 1024 * 1024):0.#} GB"));
                     if (speed > 0) parts.Add($"{speed} MT/s");
-                    if (slot is not null) parts.Add(slot);
-
-                    if (parts.Count > 0)
-                        modules.Add(string.Join("  ·  ", parts));
+                    if (parts.Count > 0 || slot is not null)
+                        modules.Add((string.Join("  ·  ", parts), slot));
                 }
             }
 
-            MemoryModules = modules;
+            MemoryModules = GroupModules(modules);
             if (totalBytes > 0)
-                MemoryTotal = $"{totalBytes / (1024d * 1024 * 1024):0.#} GB in {modules.Count} " +
+                MemoryTotal = Invariant($"{totalBytes / (1024d * 1024 * 1024):0.#} GB in {modules.Count} ") +
                               (modules.Count == 1 ? "module" : "modules");
 
             var checks = new List<Check>();
@@ -894,6 +914,30 @@ public sealed class SystemInfo
     }
 
     /// <summary>
+    /// A matched kit as one line - "2 × Corsair … · 16 GB · 6000 MT/s" - rather
+    /// than the same stick twice with only the slot told apart, each with its
+    /// own copy of the maker's logo. The slots go from a grouped line: the
+    /// channel check under the modules already says whether they sit right.
+    /// A lone stick keeps its slot, and sticks that differ stay one line each,
+    /// since there the slot is what tells them apart. In first-seen order, so
+    /// a mixed set lists the way the board numbers its slots.
+    /// </summary>
+    private static List<string> GroupModules(List<(string Description, string? Slot)> modules)
+    {
+        var lines = new List<string>();
+        foreach (var group in modules.GroupBy(m => m.Description))
+        {
+            int count = group.Count();
+            string? slot = group.First().Slot;
+            lines.Add(count > 1 && group.Key.Length > 0 ? $"{count} × {group.Key}"
+                    : group.Key.Length == 0 ? slot ?? string.Empty
+                    : slot is null ? group.Key
+                    : $"{group.Key}  ·  {slot}");
+        }
+        return lines;
+    }
+
+    /// <summary>
     /// One module, or every module on one channel, halves the memory
     /// bandwidth - the CPU reads from the channels side by side. Games notice:
     /// it shows in the 1% lows more than the average. Null when the board
@@ -902,12 +946,13 @@ public sealed class SystemInfo
     private static Check? ChannelCheck(int modules, int channels)
     {
         if (modules == 1)
-            return new Check("One module - single channel. A second, matching one would double the memory bandwidth", Condition.Warning);
+            return new Check("One module - single channel. A second, matching one would double the memory bandwidth", Condition.Warning, "single channel");
         if (channels == 0)
             return null;
         if (channels == 1)
-            return new Check("All modules on one channel - moving one to the other channel's slot doubles the bandwidth (see the board's manual)", Condition.Warning);
-        return new Check(channels == 2 ? "Dual channel" : $"{channels} channels", Condition.Good);
+            return new Check("All modules on one channel - moving one to the other channel's slot doubles the bandwidth (see the board's manual)", Condition.Warning, "one channel");
+        return new Check(channels == 2 ? "Dual channel" : $"{channels} channels", Condition.Good,
+                         channels == 2 ? "dual channel" : $"{channels} channels");
     }
 
     /// <summary>
@@ -925,8 +970,8 @@ public sealed class SystemInfo
         uint standard = rated.Max();
 
         return running > standard
-            ? new Check($"EXPO/XMP on - running at {running} MT/s, above the standard {standard}", Condition.Good)
-            : new Check($"Running at the standard {running} MT/s - if the kit is rated faster, turn on EXPO/XMP in the BIOS", Condition.Unknown);
+            ? new Check($"EXPO/XMP on - running at {running} MT/s, above the standard {standard}", Condition.Good, "EXPO/XMP on")
+            : new Check($"Running at the standard {running} MT/s - if the kit is rated faster, turn on EXPO/XMP in the BIOS", Condition.Unknown, "EXPO/XMP off");
     }
 
     /// <summary>
@@ -947,16 +992,17 @@ public sealed class SystemInfo
             "*[System[Provider[@Name='Microsoft-Windows-WHEA-Logger'] and EventID=47 " +
             "and TimeCreated[timediff(@SystemTime) <= 2592000000]]]");
         checks.Add(corrected > 0
-            ? new Check($"{corrected} corrected memory error{(corrected == 1 ? "" : "s")} in the last 30 days - a module may be failing, or EXPO/XMP is unstable", Condition.Bad)
-            : new Check("No memory errors logged by Windows in the last 30 days", Condition.Good));
+            ? new Check($"{corrected} corrected memory error{(corrected == 1 ? "" : "s")} in the last 30 days - a module may be failing, or EXPO/XMP is unstable", Condition.Bad,
+                        $"{corrected} error{(corrected == 1 ? "" : "s")}")
+            : new Check("No memory errors logged by Windows in the last 30 days", Condition.Good, "No errors"));
 
         var (id, when) = LastEvent(
             "*[System[Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'] and (EventID=1201 or EventID=1202)]]");
         checks.Add(id switch
         {
-            1201 => new Check($"Passed Windows Memory Diagnostic on {when:yyyy-MM-dd}", Condition.Good),
-            1202 => new Check($"Windows Memory Diagnostic found errors on {when:yyyy-MM-dd} - a module may be failing", Condition.Bad),
-            _ => new Check("Never tested - Windows Memory Diagnostic (mdsched in Start) checks it at the next restart", Condition.Unknown),
+            1201 => new Check($"Passed Windows Memory Diagnostic on {when:yyyy-MM-dd}", Condition.Good, "test passed"),
+            1202 => new Check($"Windows Memory Diagnostic found errors on {when:yyyy-MM-dd} - a module may be failing", Condition.Bad, "test failed"),
+            _ => new Check("Never tested - Windows Memory Diagnostic (mdsched in Start) checks it at the next restart", Condition.Unknown, "never tested"),
         });
 
         return checks;
@@ -1108,8 +1154,10 @@ public sealed class SystemInfo
             // Speed is coded 1-5 for PCIe 1.0 to 5.0.
             string generation = maxSpeed is uint s and >= 1 and <= 6 ? $", PCIe {s}.0" : string.Empty;
             GpuLink = w >= max
-                ? new Check($"Full PCIe link: x{w}{generation}", Condition.Good)
-                : new Check($"PCIe link only x{w} of its x{max} - is it in the top slot? A riser cable can do this too", Condition.Warning);
+                ? new Check($"Full PCIe link: x{w}{generation}", Condition.Good,
+                            maxSpeed is uint g and >= 1 and <= 6 ? $"PCIe {g}.0 x{w}" : $"PCIe x{w}")
+                : new Check($"PCIe link only x{w} of its x{max} - is it in the top slot? A riser cable can do this too", Condition.Warning,
+                            $"PCIe x{w} of x{max}");
         }
         catch
         {
@@ -1158,7 +1206,10 @@ public sealed class SystemInfo
         try
         {
             var names = MonitorNames();
-            var displays = new List<Display>();
+
+            // Name, mode and best rate per screen, put into lines once all are
+            // in - so matching screens can share one (see GroupDisplays).
+            var screens = new List<(string Name, string Setting, uint Current, uint Best)>();
 
             for (uint i = 0; ; i++)
             {
@@ -1185,25 +1236,63 @@ public sealed class SystemInfo
                 // The monitor's own name ("ROG XG27AQ") from its EDID, matched
                 // by device path; Windows' own string is "Generic PnP Monitor".
                 var monitor = new DisplayDevice { Size = System.Runtime.InteropServices.Marshal.SizeOf<DisplayDevice>() };
-                string name = EnumDisplayDevicesW(device.Name, 0, ref monitor, 1)   // EDD_GET_DEVICE_INTERFACE_NAME
-                              && names.FirstOrDefault(n => MonitorPath(monitor.Id).Length > 0
-                                                         && n.Key.StartsWith(MonitorPath(monitor.Id) + "_", StringComparison.OrdinalIgnoreCase)).Value is { } known
+                string path = EnumDisplayDevicesW(device.Name, 0, ref monitor, 1)   // EDD_GET_DEVICE_INTERFACE_NAME
+                    ? MonitorPath(monitor.Id)
+                    : string.Empty;
+                string name = path.Length > 0
+                              && names.FirstOrDefault(n => n.Key.StartsWith(path + "_", StringComparison.OrdinalIgnoreCase)).Value is { } known
                     ? known
-                    : $"Display {displays.Count + 1}";
+                    : $"Display {screens.Count + 1}";
+
+                // The maker in front, since the EDID name is often the model
+                // alone - "XV272 X" says nothing to anyone who doesn't know
+                // it's an Acer. It is also what the row's logo is found by.
+                // Left off when the name already says it ("DELL S2721DGF").
+                if (MonitorMaker(path) is { } maker && !name.Contains(maker, StringComparison.OrdinalIgnoreCase))
+                    name = $"{maker} {name}";
 
                 string setting = $"{current.Width} × {current.Height}  ·  {current.Frequency} Hz";
-                var refresh = current.Frequency >= best
-                    ? new Check($"At its highest refresh rate, {current.Frequency} Hz", Condition.Good)
-                    : new Check($"Can run at {best} Hz, but is set to {current.Frequency} - Settings > Display > Advanced display", Condition.Warning);
-                displays.Add(new Display($"{name}  ·  {setting}", refresh));
+                screens.Add((name, setting, current.Frequency, best));
             }
 
-            Displays = displays;
+            Displays = GroupDisplays(screens);
         }
         catch
         {
             // No display rows.
         }
+    }
+
+    /// <summary>
+    /// Matching screens - same model, same mode, same best rate - as one line,
+    /// "2 × XV272 X · 1920 × 1080 · 240 Hz", with one refresh line for them
+    /// all: two identical rows and two identical checks under them only made
+    /// the reader compare them to find there was no difference. Screens that
+    /// differ in any of those stay a line each, since then the difference is
+    /// the news - one of a pair left at 60 Hz shows on its own. Unnamed
+    /// screens are numbered apart, so they never fold together.
+    /// </summary>
+    private static List<Display> GroupDisplays(List<(string Name, string Setting, uint Current, uint Best)> screens)
+    {
+        var displays = new List<Display>();
+        foreach (var group in screens.GroupBy(s => s))
+        {
+            int count = group.Count();
+            var (name, setting, current, best) = group.Key;
+
+            // "Both" for a pair, "All 3" past that, so the line still reads as
+            // a sentence about every screen it stands for.
+            string who = count == 2 ? "Both" : $"All {count}";
+            var refresh = current >= best
+                ? new Check(count == 1 ? $"At its highest refresh rate, {current} Hz"
+                                       : $"{who} at their highest refresh rate, {current} Hz", Condition.Good, "Max Hz")
+                : new Check(count == 1 ? $"Can run at {best} Hz, but is set to {current} - Settings > Display > Advanced display"
+                                       : $"{who} can run at {best} Hz, but are set to {current} - Settings > Display > Advanced display",
+                            Condition.Warning, $"{current} of {best} Hz");
+
+            displays.Add(new Display(count == 1 ? $"{name}  ·  {setting}" : $"{count} × {name}  ·  {setting}", refresh));
+        }
+        return displays;
     }
 
     /// <summary>
@@ -1235,6 +1324,45 @@ public sealed class SystemInfo
             // Named "Display 1" and so on instead.
         }
         return names;
+    }
+
+    /// <summary>
+    /// The monitor's maker from the three-letter code its EDID starts with -
+    /// the "GSM" in "DISPLAY\GSM5B7F\…" is LG. Only the makers of screens
+    /// people buy: a laptop's built-in panel reports whoever made the panel
+    /// (AU Optronics, BOE), which isn't the brand on the lid, so those get
+    /// nothing rather than a name that would read as wrong.
+    /// </summary>
+    private static string? MonitorMaker(string path)
+    {
+        string[] parts = path.Split('\\');
+        if (parts.Length < 2 || parts[1].Length < 3)
+            return null;
+
+        return parts[1][..3].ToUpperInvariant() switch
+        {
+            "ACR" => "Acer",
+            "ACI" or "AUS" => "ASUS",
+            "SAM" or "SEC" => "Samsung",
+            "GSM" => "LG",
+            "DEL" => "Dell",
+            "HWP" or "HPN" => "HP",
+            "LEN" => "Lenovo",
+            "MSI" => "MSI",
+            "AOC" => "AOC",
+            "BNQ" => "BenQ",
+            "PHL" => "Philips",
+            "SNY" => "Sony",
+            "VSC" => "ViewSonic",
+            "IVM" => "iiyama",
+            "GBT" => "Gigabyte",
+            "XMI" => "Xiaomi",
+            "HWV" => "Huawei",
+            "EIZ" => "EIZO",
+            "NEC" => "NEC",
+            "APP" => "Apple",
+            _ => null,
+        };
     }
 
     /// <summary>"\\?\DISPLAY#GSM5B7F#5&amp;2c03a83e&amp;0&amp;UID4352#{…}" to "DISPLAY\GSM5B7F\5&amp;2c03a83e&amp;0&amp;UID4352".</summary>
@@ -1304,35 +1432,35 @@ public sealed class SystemInfo
 
         // Missing means never changed, and Game Mode is on by default.
         checks.Add(RegistryInt(Registry.CurrentUser, @"Software\Microsoft\GameBar", "AutoGameModeEnabled") == 0
-            ? new Check("Game Mode off - Windows gives games less priority over background work", Condition.Warning)
-            : new Check("Game Mode on", Condition.Good));
+            ? new Check("Game Mode off - Windows gives games less priority over background work", Condition.Warning, "Game Mode off")
+            : new Check("Game Mode on", Condition.Good, "Game Mode"));
 
         // 2 on, 1 off; missing is Windows' default, which depends on the card
         // and driver - so said as such rather than guessed.
         checks.Add(RegistryInt(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode") switch
         {
-            2 => new Check("Hardware-accelerated GPU scheduling on", Condition.Good),
-            1 => new Check("Hardware-accelerated GPU scheduling off - DLSS and FSR frame generation need it", Condition.Warning),
-            _ => new Check("Hardware-accelerated GPU scheduling left at Windows' default", Condition.Unknown),
+            2 => new Check("Hardware-accelerated GPU scheduling on", Condition.Good, "GPU scheduling"),
+            1 => new Check("Hardware-accelerated GPU scheduling off - DLSS and FSR frame generation need it", Condition.Warning, "GPU scheduling off"),
+            _ => new Check("Hardware-accelerated GPU scheduling left at Windows' default", Condition.Unknown, "GPU scheduling: default"),
         });
 
         // Dim either way: it is a security trade-off, not a fault. Microsoft's
         // own advice for gaming PCs is that turning it off can help.
         checks.Add(RegistryInt(Registry.LocalMachine,
                                @"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity", "Enabled") == 1
-            ? new Check("Memory integrity on - safer, but can cost a few % in some games (Windows Security > Device security)", Condition.Unknown)
-            : new Check("Memory integrity off", Condition.Unknown));
+            ? new Check("Memory integrity on - safer, but can cost a few % in some games (Windows Security > Device security)", Condition.Unknown, "Memory integrity on")
+            : new Check("Memory integrity off", Condition.Unknown, "Memory integrity off"));
 
         // Missing means a legacy BIOS without Secure Boot at all.
         checks.Add(RegistryInt(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\SecureBoot\State", "UEFISecureBootEnabled") == 1
-            ? new Check("Secure Boot on", Condition.Good)
-            : new Check("Secure Boot off - some games' anti-cheat won't start without it (Valorant, Battlefield 6, Call of Duty)", Condition.Warning));
+            ? new Check("Secure Boot on", Condition.Good, "Secure Boot")
+            : new Check("Secure Boot off - some games' anti-cheat won't start without it (Valorant, Battlefield 6, Call of Duty)", Condition.Warning, "Secure Boot off"));
 
         checks.Add(TpmVersion() switch
         {
-            2 => new Check("TPM 2.0 on", Condition.Good),
-            1 => new Check("TPM 1.2 - anti-cheat that needs a TPM wants 2.0", Condition.Warning),
-            _ => new Check("No TPM found - turn on fTPM (AMD) or PTT (Intel) in the BIOS; some anti-cheat needs it", Condition.Warning),
+            2 => new Check("TPM 2.0 on", Condition.Good, "TPM 2.0"),
+            1 => new Check("TPM 1.2 - anti-cheat that needs a TPM wants 2.0", Condition.Warning, "TPM 1.2"),
+            _ => new Check("No TPM found - turn on fTPM (AMD) or PTT (Intel) in the BIOS; some anti-cheat needs it", Condition.Warning, "No TPM"),
         });
 
         GamingChecks = checks;
@@ -1407,10 +1535,12 @@ public sealed class SystemInfo
 
         Stability = blueScreens > 0
             ? new Check($"{total} unexpected shutdown{(total == 1 ? "" : "s")} {period}, " +
-                        $"{blueScreens} of them blue screen{(blueScreens == 1 ? "" : "s")}", Condition.Bad)
+                        $"{blueScreens} of them blue screen{(blueScreens == 1 ? "" : "s")}", Condition.Bad,
+                        $"{total} crash{(total == 1 ? "" : "es")}")
             : shutdowns > 0
-            ? new Check($"{shutdowns} unexpected shutdown{(shutdowns == 1 ? "" : "s")} {period} - a crash, a freeze, the power button held, or a power cut. Right-click to start counting from now", Condition.Warning)
-            : new Check($"No crashes or unexpected shutdowns {period}", Condition.Good);
+            ? new Check($"{shutdowns} unexpected shutdown{(shutdowns == 1 ? "" : "s")} {period} - a crash, a freeze, the power button held, or a power cut. Right-click to start counting from now", Condition.Warning,
+                        $"{shutdowns} shutdown{(shutdowns == 1 ? "" : "s")}")
+            : new Check($"No crashes or unexpected shutdowns {period}", Condition.Good, "no crashes");
     }
 
     private static ulong ToUlong(object? value)
