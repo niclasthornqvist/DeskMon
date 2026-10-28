@@ -606,6 +606,13 @@ public sealed class AppSettings
     public bool GameStartCheck { get; set; } = true;
 
     /// <summary>
+    /// When a game quits and its session is logged, a small card by the widget
+    /// asks for a note, which goes at the end of the game's notes. Closes by
+    /// itself after 20 s if left alone. See SessionNotePrompt.
+    /// </summary>
+    public bool AskNoteAfterGame { get; set; } = true;
+
+    /// <summary>
     /// What a kWh costs, for the LOG window's Cost column. 0 hides the column.
     /// Worked out when shown, not stored with the session, so a new price
     /// applies to every session at once.
@@ -685,6 +692,7 @@ public sealed class AppSettings
     /// "Needs optimising" against 240 while running perfectly. By game name;
     /// set by right-clicking the SCORE card in the sessions window.
     /// </summary>
+    /// <remarks>Replaced whole, never changed in place: scores read it on worker threads - see PerformanceScore.TargetFor.</remarks>
     public Dictionary<string, double> GameTargetFps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>What the chart's bars measure: "avg", "length", "score" or a peak's "Label|Unit".</summary>
@@ -937,8 +945,18 @@ public sealed class AppSettings
         if (mine is null)
             return;
 
-        AtomicFile.Later(() => WriteMerged(mine, edited));
+        int sequence = System.Threading.Interlocked.Increment(ref _saveSequence);
+        AtomicFile.Later(() => WriteMerged(mine, edited, sequence, attempt: 1));
     }
+
+    /// <summary>
+    /// Counts saves, so one waiting to try again (see WriteMerged) gives way
+    /// to a newer one: landing after it, it would put older values back.
+    /// </summary>
+    private static int _saveSequence;
+
+    /// <summary>How often a save waits for a settings.json it couldn't read - see WriteMerged.</summary>
+    private const int ReadAttempts = 3;
 
     /// <summary>
     /// <see cref="Save"/>, waiting until it is on disk - for opening the file in
@@ -951,11 +969,31 @@ public sealed class AppSettings
     }
 
     /// <summary>The file part of <see cref="Save"/>, on the writer thread.</summary>
-    private static void WriteMerged(JsonObject mine, string[] edited)
+    private static void WriteMerged(JsonObject mine, string[] edited, int sequence, int attempt)
     {
+        // A retry overtaken by a newer save: that one has the newer values,
+        // and the keys this one edited are still marked for it to write.
+        if (attempt > 1 && sequence != System.Threading.Volatile.Read(ref _saveSequence))
+            return;
+
         try
         {
-            var target = ReadFileAsJson();
+            var target = ReadFileAsJson(out bool unreadable);
+
+            // There but held by something - a backup tool, an antivirus scan -
+            // so it can't be told what it holds. Written in full now, every hand
+            // edit made since DeskMon started would go, since what is in memory
+            // is what was loaded then. Tried again a moment later instead, and
+            // given up on after a few goes: the next save merges as usual.
+            if (unreadable)
+            {
+                if (attempt < ReadAttempts)
+                    System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(1))
+                        .ContinueWith(_ => AtomicFile.Later(() => WriteMerged(mine, edited, sequence, attempt + 1)));
+                else
+                    App.Log("saving settings.json", "The file couldn't be read, so this save was skipped rather than written over it.");
+                return;
+            }
 
             if (target is null)
             {
@@ -994,14 +1032,29 @@ public sealed class AppSettings
     /// settings.json as it is on disk this moment, or null when there is no
     /// file or it cannot be parsed.
     /// </summary>
-    private static JsonObject? ReadFileAsJson()
+    /// <param name="unreadable">
+    /// True when the file is there but couldn't be read at all - not the same
+    /// as a file that doesn't parse, and WriteMerged mustn't treat it so.
+    /// </param>
+    private static JsonObject? ReadFileAsJson(out bool unreadable)
     {
+        unreadable = false;
+        string text;
         try
         {
             if (!File.Exists(FilePath))
                 return null;
+            text = File.ReadAllText(FilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            unreadable = true;
+            return null;
+        }
 
-            return JsonNode.Parse(File.ReadAllText(FilePath), documentOptions: new JsonDocumentOptions
+        try
+        {
+            return JsonNode.Parse(text, documentOptions: new JsonDocumentOptions
             {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,

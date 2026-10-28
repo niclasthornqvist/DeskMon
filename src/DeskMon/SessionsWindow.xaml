@@ -100,7 +100,7 @@
                      Saves rather than opens a window, so no ↗ mark. The format
                      in the label, so it is clear before clicking what comes out. -->
                 <Button x:Name="ExportButton" Style="{StaticResource ToolButton}"
-                        ToolTip="Save this game&apos;s sessions as a CSV file&#x0a;For a spreadsheet - every session in the table, with its averages and peaks."
+                        ToolTip="Save the sessions as a CSV file&#x0a;For a spreadsheet - every session in the table, with its averages, score and peaks.&#x0a;Under All games, every game&apos;s sessions in one file."
                         Click="Export_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -197,17 +197,41 @@
                  itself has no background, so only they take the click. -->
             <Grid x:Name="GameTitle"
                   VerticalAlignment="Bottom" HorizontalAlignment="Right"
-                  Height="76" Margin="8,6,16,4" Opacity="0">
+                  Height="96" Margin="8,6,16,4" Opacity="0">
                 <Grid.Effect>
                     <DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.9" Color="Black" />
                 </Grid.Effect>
-                <Image x:Name="GameLogo" MaxWidth="190" MaxHeight="76" Stretch="Uniform"
+                <!-- The badge in its own column, left of the logo: the hand
+                     cursor and the hover grow only showed it was a button once
+                     the mouse was already on it. In a column rather than a
+                     negative margin, so it takes room of its own and can't
+                     overlap the chart heading beside it. -->
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <!-- On top (ZIndex) and kept clear by more than the hover grow:
+                     the logo grows leftward from its right edge, and a wide one
+                     grew over the badge and hid it just as it was wanted. -->
+                <Border x:Name="GameLinkBadge" Grid.Column="0" Width="20" Height="20" CornerRadius="10"
+                        BorderThickness="1" Margin="0,0,18,2" Opacity="0.75" Panel.ZIndex="1"
+                        VerticalAlignment="Bottom" Visibility="Collapsed"
+                        MouseEnter="GameTitle_MouseEnter" MouseLeave="GameTitle_MouseLeave"
+                        MouseLeftButtonUp="GameTitle_Click">
+                    <Path x:Name="GameLinkIcon" Width="10" Height="10" Stretch="None"
+                          StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Data="M1.5,8.5 L8.5,1.5 M3.5,1.5 H8.5 V6.5" />
+                </Border>
+                <!-- 240 x 96, up from 190 x 76: the logo is what names the game
+                     here, and at the old size a wide one was a thin strip. -->
+                <Image x:Name="GameLogo" Grid.Column="1" MaxWidth="240" MaxHeight="96" Stretch="Uniform"
                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
                        RenderOptions.BitmapScalingMode="HighQuality"
                        RenderTransformOrigin="1,1"
                        MouseEnter="GameTitle_MouseEnter" MouseLeave="GameTitle_MouseLeave"
                        MouseLeftButtonUp="GameTitle_Click" />
-                <StackPanel x:Name="GameNamePanel" VerticalAlignment="Bottom"
+                <StackPanel x:Name="GameNamePanel" Grid.Column="1" VerticalAlignment="Bottom"
                             RenderTransformOrigin="1,1" Background="Transparent"
                             MouseEnter="GameTitle_MouseEnter" MouseLeave="GameTitle_MouseLeave"
                             MouseLeftButtonUp="GameTitle_Click">
@@ -264,24 +288,36 @@
                              the figures in DrawChart.
 
                              The average over the bars drawn, so the chart can be read
-                             as one figure without adding the bars up by eye. Its key
-                             is a short line, not a square: it is drawn as a line
-                             across the chart, not as a bar. -->
+                             as one figure without adding the bars up by eye. Each chip
+                             has a small icon in its mark's colour - the average's is a
+                             dashed line, as it is drawn across the chart, not a bar. -->
                         <Border x:Name="AverageChip" Margin="0,0,0,0" Padding="9,3,10,3"
+                                ToolTip="The average of the sessions in the chart - the dashed green line across it.&#x0a;For Average FPS weighted by how long each session ran, as the AVERAGE card is."
                                 CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
-                                <Border x:Name="AverageSwatch" Width="12" Height="2" CornerRadius="1"
-                                        Margin="0,0,7,0" VerticalAlignment="Center" />
+                                <!-- A wavy line with a dashed level through it: the bars
+                                     going up and down, and the average line the chart
+                                     draws across them. Coloured in code, as the line is. -->
+                                <Grid Width="12" Height="12" Margin="0,0,7,0" VerticalAlignment="Center">
+                                    <Path x:Name="AverageIconWave" StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Data="M0.5,8.5 C2.5,2.5 4,2.5 6,6 S9.5,9.5 11.5,3.5" />
+                                    <Path x:Name="AverageIconLine" StrokeThickness="1" StrokeDashArray="2,1.5"
+                                          Data="M0,6 H12" />
+                                </Grid>
                                 <TextBlock x:Name="AverageText" VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
                         <!-- The key for the one bar drawn in another colour, so the
                              colour is explained where it is seen, not in a tooltip. -->
                         <Border x:Name="HighestChip" Margin="8,0,0,0" Padding="9,3,10,3"
+                                ToolTip="The highest session in the chart - its bar is drawn in this colour."
                                 CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
-                                <Border x:Name="HighestSwatch" Width="9" Height="9" CornerRadius="2.5"
-                                        Margin="0,0,7,0" VerticalAlignment="Center" />
+                                <!-- A trend line climbing to an arrowhead: the best
+                                     session. In the highest bar's own colour. -->
+                                <Path x:Name="HighestIcon" Width="12" Height="12" Margin="0,0,7,0" VerticalAlignment="Center"
+                                      StrokeThickness="1.4" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M0.5,10.5 L4,6.5 L6.5,8.5 L11,3.5 M7.5,3.5 H11 V7" />
                                 <TextBlock x:Name="HighestText" VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
@@ -289,10 +325,14 @@
                              from the highest: with one session, or every bar level,
                              there is no lowest to point out. -->
                         <Border x:Name="LowestChip" Margin="8,0,0,0" Padding="9,3,10,3"
+                                ToolTip="The lowest session in the chart - its bar is drawn in this colour."
                                 CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
-                                <Border x:Name="LowestSwatch" Width="9" Height="9" CornerRadius="2.5"
-                                        Margin="0,0,7,0" VerticalAlignment="Center" />
+                                <!-- The same falling: the worst session, in the lowest
+                                     bar's colour. -->
+                                <Path x:Name="LowestIcon" Width="12" Height="12" Margin="0,0,7,0" VerticalAlignment="Center"
+                                      StrokeThickness="1.4" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M0.5,2.5 L4,6.5 L6.5,4.5 L11,9.5 M7.5,9.5 H11 V6" />
                                 <TextBlock x:Name="LowestText" VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
@@ -309,6 +349,27 @@
                     Margin="12,0,12,0" ClipToBounds="True"
                     Background="Transparent"
                     SizeChanged="Chart_SizeChanged" />
+
+            <!-- One picked session over time, under the chart of every
+                 session: where the chart says a session ran at 49 fps, this
+                 says when. Shown with exactly one session picked - see
+                 SessionsWindow.Timeline.cs. A panel rather than the tooltip,
+                 so the line can be followed with the mouse. -->
+            <StackPanel x:Name="TimelinePanel" DockPanel.Dock="Top" Margin="12,14,12,0" Visibility="Collapsed">
+                <DockPanel>
+                    <TextBlock x:Name="TimelineTitle" Text="SESSION TIMELINE" Margin="2,0,10,0" VerticalAlignment="Center" />
+                    <StackPanel x:Name="TimelineToggles" DockPanel.Dock="Right" Orientation="Horizontal" />
+                    <TextBlock x:Name="TimelineCaption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+                <Canvas x:Name="TimelineChart" Height="120" Margin="0,6,0,0" ClipToBounds="True"
+                        Background="Transparent"
+                        SizeChanged="TimelineChart_SizeChanged"
+                        MouseMove="TimelineChart_MouseMove" MouseLeave="TimelineChart_MouseLeave" />
+            </StackPanel>
+
+            <!-- All games: this week against last, and a calendar of the days
+                 played - filled in SessionsWindow.Week.cs. -->
+            <Grid x:Name="WeekPanel" DockPanel.Dock="Top" Margin="12,12,12,0" Visibility="Collapsed" />
 
             <!-- Between the chart and the table: a thin line in the accent,
                  strongest in the middle and fading out at both ends, so the
@@ -333,10 +394,14 @@
             <!-- How to pick sessions, under the table: Ctrl+click was only in
                  Delete's tooltip, so picking several went unfound. Before the
                  scroller, which fills what is left. Shown for one game's
-                 sessions only - see ShowRows. -->
+                 sessions only - see ShowRows. The arrow keys second, right
+                 after clicking: switching the chart's reading by key would go
+                 unfound like Ctrl+click did, and in a narrow window the end of
+                 the line is cut off - the tooltip has all of it. -->
             <TextBlock x:Name="PickHint" DockPanel.Dock="Bottom" Margin="14,0,12,8"
                        TextTrimming="CharacterEllipsis"
-                       Text="Click a session to select it  ·  Ctrl+click to select more  ·  Delete removes the selected" />
+                       Text="Click a session or its bar to select it  ·  ← → switch the chart's reading  ·  Ctrl+click to select more  ·  Delete removes the selected"
+                       ToolTip="Click a row in the table, or a bar in the chart, to select that session.&#x0a;← / → switch the chart to the reading before or after - Average FPS, Minutes played and the rest.&#x0a;Ctrl+click selects more than one.&#x0a;Delete presses DELETE (press it again to confirm)." />
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           Margin="12,2,4,10" Focusable="False">

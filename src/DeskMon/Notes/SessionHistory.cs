@@ -54,8 +54,39 @@ public sealed class SessionHistory
     /// be read. Strictly this game's own log: a session is only ever shown
     /// under the game it was played in.
     /// </summary>
+    /// <remarks>
+    /// Only the last line is parsed. This runs on the UI thread on every
+    /// switch of the notes and as a game quits, and parsing the whole log
+    /// with all its regexes to keep one line grew with every session played.
+    /// The others are only counted, for the session's ID, with the same test
+    /// Parse starts with.
+    /// </remarks>
     public SessionRecord? LastSession(string game)
-        => Sessions(game).LastOrDefault();
+    {
+        try
+        {
+            int count = 0;
+            string? last = null;
+            foreach (string line in Lines(PathFor(game)))
+            {
+                if (!SessionRecord.StartsLikeSession(line))
+                    continue;
+                count++;
+                last = line;
+            }
+
+            if (last is null || SessionRecord.Parse(last) is not { } session)
+                return null;
+
+            session.Id = count;
+            session.Game = game;
+            return session;
+        }
+        catch
+        {
+            return null;   // a footnote, as in Sessions
+        }
+    }
 
     /// <summary>
     /// Every session in this game's log, oldest first - the order they were
@@ -228,12 +259,53 @@ public sealed class SessionHistory
             // File.Delete is quiet about a file that is already gone, which
             // is the outcome asked for anyway.
             File.Delete(PathFor(game));
+            // The timelines go with it: kept, they would turn up again under
+            // whatever session next starts in the same minute - never, but
+            // a folder of orphans is clutter either way.
+            SessionTimeline.DeleteAll(PathFor(game));
             return null;
         }
         catch (Exception ex)
         {
             return ex.Message;
         }
+    }
+
+    /// <summary>
+    /// The timelines of sessions deleted from the history window. Not part of
+    /// Delete itself: that also takes back the line written when a game quit
+    /// and then came back (DeleteLater), and that session carries on - its
+    /// timeline with it.
+    /// </summary>
+    public void DeleteTimelines(string game, IEnumerable<SessionRecord> sessions)
+        => SessionTimeline.Delete(PathFor(game), sessions.Select(s => s.Start).ToList());
+
+    /// <summary>The timeline of the session that started at <paramref name="start"/>, or null - see SessionTimeline.Load.</summary>
+    public SessionTimeline? Timeline(string game, DateTime start) => SessionTimeline.Load(PathFor(game), start);
+
+    /// <summary>
+    /// Writes the open session's timeline on AtomicFile's writer, as the
+    /// session lines are: the text is taken here, on the tick, and the disk is
+    /// left to the writer, so a busy disk can't freeze the windows. Written
+    /// whole each time - at the checkpoint and at the end - so a crash keeps
+    /// all but the last minute, as with the line.
+    /// </summary>
+    public void SaveTimelineLater(string game, SessionTimeline timeline)
+    {
+        string path = SessionTimeline.PathFor(PathFor(game), timeline.Start);
+        string text = timeline.ToText();
+        AtomicFile.Later(() =>
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                AtomicFile.WriteAllText(path, text);
+            }
+            catch (Exception ex)
+            {
+                App.Log("writing a session timeline", ex);
+            }
+        });
     }
 
     /// <summary>Every line as it is, heading and blanks too - for rewriting the file without losing any.</summary>
@@ -283,6 +355,38 @@ public sealed class SessionHistory
                 App.Log("taking back a session line", error);
             if (done is not null)
                 ui?.BeginInvoke(done);
+        });
+    }
+
+    /// <summary>
+    /// The history window's DELETE: the sessions, and once their lines are
+    /// gone their timelines, on the writer thread behind every line still
+    /// queued. Done on the UI thread after a Flush that could time out, a
+    /// busy disk let the rewrite race an append still being written - and the
+    /// line just appended was dropped. <paramref name="done"/> gets the error,
+    /// or null, on the UI thread.
+    /// </summary>
+    public void DeleteForUser(string game, IReadOnlyCollection<SessionRecord> sessions, Action<string?> done)
+    {
+        var ui = System.Windows.Application.Current?.Dispatcher;
+        AtomicFile.Later(() =>
+        {
+            string? error = Delete(game, sessions);
+            // Not before: a delete that failed would leave sessions without their curves.
+            if (error is null)
+                DeleteTimelines(game, sessions);
+            ui?.BeginInvoke(() => done(error));
+        });
+    }
+
+    /// <summary>DELETE ALL on the writer thread, for <see cref="DeleteForUser"/>'s reason.</summary>
+    public void DeleteAllForUser(string game, Action<string?> done)
+    {
+        var ui = System.Windows.Application.Current?.Dispatcher;
+        AtomicFile.Later(() =>
+        {
+            string? error = DeleteAll(game);
+            ui?.BeginInvoke(() => done(error));
         });
     }
 

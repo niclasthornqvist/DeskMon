@@ -71,7 +71,10 @@ internal sealed class PingMonitor : IDisposable
         {
             var reply = await _ping.SendPingAsync(host, TimeoutMs);
             if (host == _host)
+            {
                 Latest = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
+                Count(reply.Status == IPStatus.Success ? reply.RoundtripTime : null);
+            }
         }
         catch
         {
@@ -84,9 +87,80 @@ internal sealed class PingMonitor : IDisposable
         }
     }
 
+    // --- Running counts, for a session's ping quality -----------------------------
+    //
+    // The session log kept only the highest ping, which one spike decides. These
+    // say how the connection was over the whole session: the average, the
+    // jitter (how far each ping is from the one before - what makes a game
+    // feel uneven) and the share lost. Counted from start; a session takes the
+    // difference between its start and end, see PingTotals.Since.
+
+    private readonly object _countGate = new();
+    private long _sent, _lost, _deltas;
+    private double _rttSum, _deltaSum;
+    private double? _previous;
+
+    /// <summary>
+    /// A ping that went out and got an answer, or none. An exception - no
+    /// network, a name that won't resolve - isn't counted: nothing was sent,
+    /// and counting it would read as a lossy line rather than an unplugged one.
+    /// </summary>
+    private void Count(double? rtt)
+    {
+        lock (_countGate)
+        {
+            _sent++;
+            if (rtt is not double ms)
+            {
+                _lost++;
+                _previous = null;   // the next answer's change isn't from this gap
+                return;
+            }
+
+            _rttSum += ms;
+            if (_previous is double before)
+            {
+                _deltaSum += Math.Abs(ms - before);
+                _deltas++;
+            }
+            _previous = ms;
+        }
+    }
+
+    /// <summary>The counts so far; read on the UI thread while the timer adds to them.</summary>
+    public PingTotals Totals
+    {
+        get
+        {
+            lock (_countGate)
+                return new PingTotals(_sent, _lost, _rttSum, _deltaSum, _deltas);
+        }
+    }
+
     public void Dispose()
     {
         _timer.Dispose();
         _ping.Dispose();
     }
+}
+
+/// <summary>A ping's running counts - see PingMonitor.Totals - and what a stretch of them comes to.</summary>
+internal readonly record struct PingTotals(long Sent, long Lost, double RttSum, double DeltaSum, long Deltas)
+{
+    /// <summary>What was counted after <paramref name="start"/> - a session's own share of the counts.</summary>
+    public PingTotals Since(PingTotals start)
+        => new(Sent - start.Sent, Lost - start.Lost, RttSum - start.RttSum, DeltaSum - start.DeltaSum, Deltas - start.Deltas);
+
+    public double? AverageMs => Sent - Lost > 0 ? RttSum / (Sent - Lost) : null;
+    public double? JitterMs => Deltas > 0 ? DeltaSum / Deltas : null;
+    public double LossPercent => Sent > 0 ? Lost * 100.0 / Sent : 0;
+
+    /// <summary>
+    /// "ping 18 ms ±6 loss 0.4 %" for the log, or null with too few pings to
+    /// say anything - under a minute's worth at one every 2 s.
+    /// </summary>
+    public string? ToLogPart()
+        => Sent < 30 || AverageMs is not double average
+            ? null
+            : System.FormattableString.Invariant($"ping {average:0} ms ±{JitterMs ?? 0:0} loss {LossPercent:0.#} %");
 }

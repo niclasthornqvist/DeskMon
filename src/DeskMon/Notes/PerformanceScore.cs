@@ -67,6 +67,10 @@ public static class PerformanceScore
     /// the sessions window, or <see cref="Target"/>. A game locked to 60 can't
     /// earn full marks against a 240 Hz monitor however well it runs.
     /// </summary>
+    /// <remarks>
+    /// Asked on worker threads too. Safe because GameTargetFps is only ever
+    /// replaced whole, never changed in place - see SessionsWindow.TargetMenu.
+    /// </remarks>
     public static double TargetFor(string? game)
         => game is not null && _settings?.GameTargetFps.TryGetValue(game, out double own) == true && double.IsFinite(own)
             ? Math.Max(10, own)
@@ -169,6 +173,28 @@ public static class PerformanceScore
         double weights = recent.Sum(x => Math.Max(1, x.Session.Length.TotalMinutes));
         double total = recent.Sum(x => x.Result!.Score * Math.Max(1, x.Session.Length.TotalMinutes));
         return (int)Math.Round(total / weights);
+    }
+
+    /// <summary>
+    /// A target to offer <paramref name="game"/> when its recent sessions sat at
+    /// one frame cap below the target it is scored against - Factorio's 60
+    /// against Settings' 240, which marked a perfectly running game Poor
+    /// until a target was set by hand. Most of its last five measured
+    /// sessions, and at least two, must agree, so one session in a menu
+    /// doesn't decide it. Null once the game has a target of its own: it was
+    /// chosen, so it isn't second-guessed.
+    /// </summary>
+    public static int? SuggestedCap(string game, IEnumerable<SessionRecord> sessions)
+    {
+        if (HasOwnTarget(game))
+            return null;
+
+        var recent = sessions.Where(s => s.AverageFps is not null).TakeLast(5).ToList();
+        var common = recent.Where(s => s.CapFps is not null).GroupBy(s => s.CapFps!.Value).MaxBy(g => g.Count());
+        if (common is null || common.Count() < Math.Max(2, recent.Count * 0.6))
+            return null;
+
+        return common.Key < TargetFor(game) * 0.9 ? common.Key : null;
     }
 
     /// <summary>A word for the score, for the card and the tooltips.</summary>

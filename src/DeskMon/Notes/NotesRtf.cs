@@ -62,6 +62,87 @@ public static class NotesRtf
     }
 
     /// <summary>
+    /// A blank line, a heading in <paramref name="headingColour"/> and bold,
+    /// then <paramref name="lines"/>, added at the end of a notes file's RTF -
+    /// for a session note going into notes that aren't on screen.
+    ///
+    /// Done on the bytes rather than by loading the notes into a document:
+    /// that builds every screenshot in them on the UI thread, twice with the
+    /// switch back, and froze the widget as the note was saved. Each paragraph
+    /// is a group of its own with \plain, so it takes nothing from the text
+    /// before it. Null when the bytes don't look like RTF, so nothing is
+    /// written over a file this can't read.
+    /// </summary>
+    /// <param name="rtf">The file as it is, or null for notes that have none yet.</param>
+    /// <param name="sizeDips">The notes' text size in WPF units, so the entry matches the rest.</param>
+    public static byte[]? WithParagraphsAdded(byte[]? rtf, string heading, Color headingColour,
+                                              System.Collections.Generic.IEnumerable<string> lines, double sizeDips)
+    {
+        try
+        {
+            string text = rtf is { Length: > 0 }
+                ? Encoding.ASCII.GetString(rtf)
+                : @"{\rtf1\ansi\ansicpg1252\uc1\deff0{\fonttbl{\f0 Segoe UI;}}{\colortbl;}}";
+            if (!text.StartsWith(@"{\rtf", StringComparison.Ordinal))
+                return null;
+
+            // The heading's colour as one more entry in the colour table; none
+            // when there is no table, rather than guessing where to put one.
+            int colour = -1;
+            var table = Regex.Match(text, @"\\colortbl(?<body>[^}]*)\}");
+            if (table.Success)
+            {
+                string body = table.Groups["body"].Value;
+                if (!body.EndsWith(';'))
+                    body += ";";
+                colour = body.Split(';').Length - 1;   // slots are counted from nought, the empty "auto" one too
+                string entry = $@"\red{headingColour.R}\green{headingColour.G}\blue{headingColour.B};";
+                text = text[..table.Groups["body"].Index] + body + entry + text[(table.Groups["body"].Index + table.Groups["body"].Length)..];
+            }
+
+            // The document's own closing brace: everything goes in before it.
+            int end = text.LastIndexOf('}');
+            if (end < 0)
+                return null;
+
+            // Half-points, as RTF counts sizes; WPF's units are 96ths of an inch.
+            int size = (int)Math.Round(sizeDips * 72 / 96 * 2);
+            var added = new StringBuilder();
+            added.Append($@"{{\pard\plain\fs{size}\par}}");
+            added.Append($@"{{\pard\plain\fs{size}\b{(colour >= 0 ? $@"\cf{colour}" : string.Empty)} ").Append(Escape(heading)).Append(@"\par}");
+            foreach (string line in lines)
+                added.Append($@"{{\pard\plain\fs{size} ").Append(Escape(line)).Append(@"\par}");
+
+            return Encoding.ASCII.GetBytes(text.Insert(end, added.ToString()));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Text as RTF: its three special characters escaped, anything past ASCII
+    /// as \u with "?" for a reader that can't show it - RTF itself is 7-bit.
+    /// </summary>
+    private static string Escape(string value)
+    {
+        var escaped = new StringBuilder(value.Length);
+        foreach (char c in value)
+        {
+            if (c is '\\' or '{' or '}')
+                escaped.Append('\\').Append(c);
+            else if (c is '\r' or '\n')
+                continue;
+            else if (c < 0x80)
+                escaped.Append(c);
+            else
+                escaped.Append(@"\u").Append((short)c).Append('?');   // signed, as RTF reads it
+        }
+        return escaped.ToString();
+    }
+
+    /// <summary>
     /// Which slot of the <c>\colortbl</c> holds <paramref name="wanted"/>, or
     /// -1. Entries are separated by semicolons and numbered from zero, and an
     /// empty first entry - RTF's "automatic" colour - counts as a slot.

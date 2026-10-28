@@ -350,13 +350,11 @@ public partial class SessionsWindow : PanelWindow
     private static string Whole(double? value)
         => value is double v ? v.ToString("0", CultureInfo.InvariantCulture) : "–";
 
-    /// <summary>"0.31" - watt-hours as kWh, to two places, since a session is rarely a whole one.</summary>
-    /// <summary>"3 min", "40 s" - how often a stutter came, for the tooltip.</summary>
-    private static string Every(TimeSpan gap)
-        => gap.TotalMinutes >= 1 ? $"{gap.TotalMinutes:0} min" : $"{Math.Max(1, gap.TotalSeconds):0} s";
+    // The shared tooltip's, so the table's columns and the tooltip can't
+    // write the same figure two ways - see Ui/SessionTip.
+    private static string Every(TimeSpan gap) => Ui.SessionTip.Every(gap);
 
-    private static string Kwh(double? wh)
-        => wh is double v ? (v / 1000).ToString("0.00", CultureInfo.InvariantCulture) : "–";
+    private static string Kwh(double? wh) => Ui.SessionTip.Kwh(wh);
 
     /// <summary>
     /// The price per kWh and currency the Cost column works with - the
@@ -395,12 +393,7 @@ public partial class SessionsWindow : PanelWindow
     private const double ColumnGap = 10;
 
     /// <summary>A score in the widget's own green, amber or red - good, fair, needs work.</summary>
-    private Brush ScoreBrush(int score) => PerformanceScore.Band(score) switch
-    {
-        0 => _theme.Normal,
-        1 => _theme.Warn,
-        _ => _theme.Crit,
-    };
+    private Brush ScoreBrush(int score) => Ui.SessionTip.ScoreBrush(_theme, score);
 
     /// <summary>The entry at the top of the game picker; a type of its own so no game's name can collide with it.</summary>
     private sealed class AllGamesEntry
@@ -440,6 +433,7 @@ public partial class SessionsWindow : PanelWindow
 
         InitializeComponent();
         ApplyTheme();
+        PreviewKeyDown += Window_PreviewKeyDown;
 
         // The cards, the table and the chart are drawn in the theme's colours,
         // so they are drawn again - from what is already read, not the files.
@@ -665,14 +659,29 @@ public partial class SessionsWindow : PanelWindow
             // the UI thread it froze every DeskMon window while it went through
             // the list. Total only reads; nothing here writes the settings.
             List<GameTotal> totals;
+            List<PlaySpan> played;
             try
             {
-                totals = await System.Threading.Tasks.Task.Run(() => (games ?? _history.Games()).Select(Total).OfType<GameTotal>().ToList());
+                // Each log read once, for the totals and the weekly report both.
+                (totals, played) = await System.Threading.Tasks.Task.Run(() =>
+                {
+                    var found = new List<GameTotal>();
+                    var spans = new List<PlaySpan>();
+                    foreach (string name in games ?? _history.Games())
+                    {
+                        var log = _history.Sessions(name);
+                        if (Total(name, log) is { } total)
+                            found.Add(total);
+                        spans.AddRange(log.Select(s => new PlaySpan(name, s.Start, s.End)));
+                    }
+                    return (found, spans);
+                });
             }
             catch (Exception ex)
             {
                 App.Log("totalling all games", ex);
                 totals = new List<GameTotal>();
+                played = new List<PlaySpan>();
             }
 
             // Another game picked, or another refresh, while this was read.
@@ -680,6 +689,7 @@ public partial class SessionsWindow : PanelWindow
                 return;
 
             _games = totals;
+            _played = played;
             ShowAllGamesSummary();
         }
         else
@@ -707,6 +717,7 @@ public partial class SessionsWindow : PanelWindow
 
             _games = Array.Empty<GameTotal>();
             _sessions = sessions;
+            _played = Array.Empty<PlaySpan>();
             _changes = ChangesIn(_sessions);
             ShowSummary(game);
         }
@@ -943,27 +954,51 @@ public partial class SessionsWindow : PanelWindow
 
         // A link only for a game: the All games collage has no one page.
         bool link = !_allGames && !string.IsNullOrEmpty(name);
-        foreach (var title in new FrameworkElement[] { GameLogo, GameNamePanel })
+        foreach (var title in new FrameworkElement[] { GameLogo, GameNamePanel, GameLinkBadge })
         {
             title.Cursor = link ? Cursors.Hand : null;
             title.ToolTip = link ? $"Open {name} on the Steam store" : null;
         }
+        // The badge says "link" before the mouse gets there; with no link it
+        // would promise a click that does nothing.
+        GameLinkBadge.Visibility = link ? Visibility.Visible : Visibility.Collapsed;
+        LightTitle(false);
     }
 
     /// <summary>
-    /// Grows the logo a little under the mouse - with the hand cursor, what
-    /// says it is a button: on its own it reads as part of the picture.
+    /// Grows the logo a little under the mouse, tints its shadow into an
+    /// accent glow and lights the badge - with the hand cursor, what says it
+    /// is a button: on its own it reads as part of the picture. The badge and
+    /// the logo light together whichever of the two the mouse is on, so they
+    /// read as one button.
     /// </summary>
     private void GameTitle_MouseEnter(object sender, MouseEventArgs e)
     {
         if (sender is FrameworkElement title && title.Cursor == Cursors.Hand)
-            ScaleTitle(title, 1.06);
+            LightTitle(true);
     }
 
-    private void GameTitle_MouseLeave(object sender, MouseEventArgs e)
+    private void GameTitle_MouseLeave(object sender, MouseEventArgs e) => LightTitle(false);
+
+    /// <summary>The hover look on or off - see GameTitle_MouseEnter.</summary>
+    private void LightTitle(bool on)
     {
-        if (sender is FrameworkElement title)
-            ScaleTitle(title, 1);
+        bool logo = GameLogo.Visibility == Visibility.Visible;
+        ScaleTitle(logo ? GameLogo : GameNamePanel, on ? 1.06 : 1);
+        // The hidden one back to size too, or a game picked mid-hover keeps it grown.
+        ScaleTitle(logo ? GameNamePanel : GameLogo, 1);
+
+        var time = TimeSpan.FromMilliseconds(on ? 120 : 200);
+        GameLinkBadge.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(on ? 1 : 0.75, time));
+        // Filled with the accent when lit, its arrow white so it stays readable on it.
+        GameLinkBadge.Background = on ? _theme.AccentAt(0x99) : _theme.Popup;
+        GameLinkIcon.Stroke = on ? Brushes.White : _theme.Accent;
+
+        // A glow in the accent instead of the black shadow: reads as "lit up"
+        // over any art, where a bigger logo alone was easy to miss.
+        if (GameTitle.Effect is System.Windows.Media.Effects.DropShadowEffect shadow && !shadow.IsFrozen)
+            shadow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.ColorProperty,
+                new System.Windows.Media.Animation.ColorAnimation(on ? _theme.AccentColor : Colors.Black, time));
     }
 
     private static void ScaleTitle(FrameworkElement title, double to)
@@ -1041,9 +1076,9 @@ public partial class SessionsWindow : PanelWindow
     }
 
     /// <summary>Null for a game whose log has no sessions left in it - it would only be a row of dashes.</summary>
-    private GameTotal? Total(string game)
+    /// <param name="sessions">Its log, read by the caller - which keeps the sessions for the weekly report too, rather than reading every log twice.</param>
+    private GameTotal? Total(string game, IReadOnlyList<SessionRecord> sessions)
     {
-        var sessions = _history.Sessions(game);
         if (sessions.Count == 0)
             return null;
 
@@ -1084,6 +1119,7 @@ public partial class SessionsWindow : PanelWindow
         Stats.Children.Clear();
         Dates.Children.Clear();
         ClearLastSession();
+        ShowWeek();   // hides it: the weekly report is All games' own
 
         if (game is null || _sessions.Count == 0)
         {
@@ -1127,8 +1163,9 @@ public partial class SessionsWindow : PanelWindow
         // Both in one form, date and time, without the weekday: the two read
         // as a pair, and "Sun" made the second chip wider for nothing.
         const string When = "d MMM yyyy  ·  HH:mm";
-        Dates.Children.Add(SummaryChip("First played", first.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, dot: false));
-        Dates.Children.Add(SummaryChip("Last played", last.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, dot: true));
+        Dates.Children.Add(DatesCard(
+            ("First played", first.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, false),
+            ("Last played", last.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, true)));
 
         ShowLastSession(_sessions[^1]);
     }
@@ -1207,15 +1244,14 @@ public partial class SessionsWindow : PanelWindow
                                       "M8.5,2.5 H10.5 V3.5 A2,2 0 0 1 8.3,5.5 M6,7 V9 M3.5,10.5 H8.5 M4.5,10.5 V9.5 H7.5 V10.5";
 
     /// <summary>
-    /// One of the chips under the cards - first and last played for a game,
-    /// most and last played for All games: an icon, a small caption and the
+    /// One of the chips under the cards - now LAST SESSION's; the dates moved
+    /// to <see cref="DatesCard"/>: an icon, a small caption and the
     /// figure, in the theme's accent, made like the chart's average / highest
     /// / lowest chips so the two rows match. They were one dim line of small
     /// text that was easy to miss.
     /// </summary>
-    /// <param name="dot">Fills in a day on the calendar, so first and last played differ at a glance.</param>
     /// <param name="valueBrush">The figure's colour when it carries meaning - a score's green, amber or red.</param>
-    private Border SummaryChip(string caption, string value, string iconData, bool dot = false, Brush? valueBrush = null)
+    private Border SummaryChip(string caption, string value, string iconData, Brush? valueBrush = null)
     {
         var icon = new System.Windows.Shapes.Path
         {
@@ -1231,13 +1267,6 @@ public partial class SessionsWindow : PanelWindow
         };
         var art = new Grid { Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
         art.Children.Add(icon);
-        if (dot)
-            art.Children.Add(new Border
-            {
-                Width = 2.5, Height = 2.5, Background = _theme.Accent,
-                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(6.5, 6.8, 0, 0),
-            });
 
         // At most 240 wide, cut short with "…": a long game's name under Most
         // played widened the whole column of chips, which took the room from
@@ -1273,6 +1302,111 @@ public partial class SessionsWindow : PanelWindow
     }
 
     /// <summary>
+    /// First and last played (or most and last played under All games) on
+    /// one card instead of two look-alike chips: two separate pills with the
+    /// same icon, colour and weight had to be read word by word to tell
+    /// apart. Now they share one background, captions in a column of their
+    /// own so the figures line up, and the older row is quiet - dim icon and
+    /// text - while the latest is in the accent and bright, so the eye lands
+    /// on "when did I last play" first.
+    /// </summary>
+    /// <param name="rows">Caption, figure, icon, and whether it is the bright (latest) row.</param>
+    private Border DatesCard(params (string Caption, string Value, string Icon, bool Latest)[] rows)
+    {
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var card = new Border
+        {
+            Margin = new Thickness(0, 0, 0, 6),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(10, 5, 11, 5),
+            CornerRadius = new CornerRadius(9),
+            BorderThickness = new Thickness(1),
+            Child = grid,
+        };
+        // The chips' fill and outline, so the card matches the chart's chips;
+        // the text StyleChip colours is reset per row below.
+        StyleChip(card, new TextBlock(), _theme.Accent);
+
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var (caption, value, iconData, latest) = rows[i];
+
+            // A hairline between the rows, so the two read as entries of
+            // one list rather than one long line wrapped.
+            if (i > 0)
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var rule = new Border { Height = 1, Background = _theme.Separator, Margin = new Thickness(0, 4, 0, 4) };
+                Grid.SetRow(rule, grid.RowDefinitions.Count - 1);
+                Grid.SetColumnSpan(rule, 3);
+                grid.Children.Add(rule);
+            }
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            int row = grid.RowDefinitions.Count - 1;
+
+            var icon = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse(iconData),
+                Stroke = latest ? _theme.Accent : _theme.Label,
+                StrokeThickness = 1.2,
+                StrokeLineJoin = PenLineJoin.Round,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Width = 12,
+                Height = 12,
+            };
+            var art = new Grid { Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
+            art.Children.Add(icon);
+            // The filled-in day on the latest row's calendar, as the chips had.
+            if (latest)
+                art.Children.Add(new Border
+                {
+                    Width = 2.5, Height = 2.5, Background = _theme.Accent,
+                    HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(6.5, 6.8, 0, 0),
+                });
+
+            var label = new TextBlock
+            {
+                Text = caption.ToUpperInvariant(),
+                Foreground = latest ? _theme.Section : _theme.Label,
+                FontSize = Math.Max(8, SmallFont - 1),
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 10, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            // At most 240 wide, cut short with "…", for SummaryChip's reason:
+            // a long game name widened the whole column. Full text in the tooltip.
+            var text = new TextBlock
+            {
+                Text = value,
+                Foreground = latest ? _theme.NotesText : _theme.Label,
+                FontWeight = latest ? FontWeights.SemiBold : FontWeights.Normal,
+                FontSize = UiTheme.PanelFontSize,
+                MaxWidth = 240,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = $"{caption}: {value}",
+            };
+
+            Grid.SetColumn(label, 1);
+            Grid.SetColumn(text, 2);
+            foreach (var cell in new UIElement[] { art, label, text })
+            {
+                Grid.SetRow(cell, row);
+                grid.Children.Add(cell);
+            }
+        }
+
+        return card;
+    }
+
+    /// <summary>
     /// The target under SCORE's figure - "Target 144 fps ▾" - and a left click
     /// that opens the target menu too. The menu was only on a right-click,
     /// which nothing on screen hinted at, so the per-game target went unfound.
@@ -1292,6 +1426,18 @@ public partial class SessionsWindow : PanelWindow
             FontSize = SmallFont - 1,
             Margin = new Thickness(0, 1, 0, 0),
         });
+
+        // The cap the game sits at, offered where the target is set: a target
+        // above it can't be met, and finding that out took a Poor score and a
+        // trip to the menu. In the accent, as the window's other actions are.
+        if (PerformanceScore.SuggestedCap(game, _sessions) is int cap)
+            content.Children.Add(new TextBlock
+            {
+                Text = $"Looks capped at {cap} fps - click to use it",
+                Foreground = _theme.Accent,
+                FontSize = SmallFont - 1,
+                Margin = new Thickness(0, 1, 0, 0),
+            });
 
         border.Cursor = Cursors.Hand;
         border.MouseLeftButtonUp += (_, _) =>
@@ -1322,12 +1468,28 @@ public partial class SessionsWindow : PanelWindow
 
         void Pick(double? fps)
         {
+            // A new dictionary put in place of the old, never the old one
+            // changed: scores are worked out on worker threads too (All games'
+            // totals, the export), and a Dictionary read while it is written
+            // can throw or, rarely, spin for good. A reader keeps whichever
+            // whole one it took.
+            var targets = new Dictionary<string, double>(_settings.GameTargetFps, StringComparer.OrdinalIgnoreCase);
             if (fps is double value)
-                _settings.GameTargetFps[game] = value;
+                targets[game] = value;
             else
-                _settings.GameTargetFps.Remove(game);
+                targets.Remove(game);
+            _settings.GameTargetFps = targets;
             _settings.Save();
             ShowSelection(GamePicker.SelectedItem, null);
+        }
+
+        // The cap first, the choice the card's hint points at - see ShowTargetOnCard.
+        if (PerformanceScore.SuggestedCap(game, _sessions) is int cap)
+        {
+            var capped = new MenuItem { Header = $"{cap} fps for {game} - it looks capped there" };
+            capped.Click += (_, _) => Pick(cap);
+            menu.Items.Add(capped);
+            menu.Items.Add(new Separator());
         }
 
         var settings = new MenuItem
@@ -1462,6 +1624,7 @@ public partial class SessionsWindow : PanelWindow
         Stats.Children.Clear();
         Dates.Children.Clear();
         ClearLastSession();   // one game's; All games has no single last session to show
+        ShowWeek();
 
         if (_games.Count == 0)
         {
@@ -1493,8 +1656,9 @@ public partial class SessionsWindow : PanelWindow
         AddStat("GAMES", _games.Count.ToString(CultureInfo.InvariantCulture), iconData: GamesCardIcon);
 
         // As chips, like one game's first and last played in the same place.
-        Dates.Children.Add(SummaryChip("Most played", $"{most.Name}  ·  {GamePlaytime.Describe(most.Playtime.Time)}", TrophyIcon));
-        Dates.Children.Add(SummaryChip("Last played", latest.Name, CalendarIcon, dot: true));
+        Dates.Children.Add(DatesCard(
+            ("Most played", $"{most.Name}  ·  {GamePlaytime.Describe(most.Playtime.Time)}", TrophyIcon, false),
+            ("Last played", latest.Name, CalendarIcon, true)));
     }
 
     private void AddSummary(string text, bool bright = false)
@@ -1516,618 +1680,6 @@ public partial class SessionsWindow : PanelWindow
     {
         SummaryText.Inlines.Clear();
         SummaryText.Visibility = Visibility.Collapsed;
-    }
-
-    // --- Chart -----------------------------------------------------------------
-
-    private void Chart_SizeChanged(object sender, SizeChangedEventArgs e) => DrawChart();
-
-    private ChartMeasure SelectedMeasure
-        => ChartMeasures[Math.Clamp(ChartPicker.SelectedIndex, 0, ChartMeasures.Length - 1)];
-
-    private void ChartPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        _settings.SessionsChart = SelectedMeasure.Key;
-        _settings.Save();
-        DrawChart();
-    }
-
-    /// <summary>
-    /// The picked reading per session, as bars, oldest on the left - for "did
-    /// that patch or driver change anything?". Bars rather than a line because
-    /// sessions are separate evenings, not a continuous measurement, and a
-    /// line would draw a trend through the days in between.
-    ///
-    /// One value axis starting at zero, so bar heights compare honestly, with
-    /// faint gridlines at round numbers. Every bar has a tooltip, and its
-    /// hover area is the full height of the chart rather than the bar alone,
-    /// so a short bar is as easy to point at as a tall one.
-    /// </summary>
-    /// <summary>Whether the last draw showed the empty chart's picture - see ChartEmptyState.</summary>
-    private bool _chartEmptyShown;
-
-    /// <summary>
-    /// What the chart shows when no session recorded the picked reading: a
-    /// small drawn chart with empty, dashed bars, a title and what to do
-    /// about it - the same kind of picture the pictures window shows with no
-    /// pictures, where one dim line of small text was easy to take for a
-    /// broken chart. Drawn, not an image file, so it is sharp and in the
-    /// theme's colours (by reference, so it follows a theme change).
-    /// It never takes a click, so the chart's own tooltips stay reachable.
-    /// </summary>
-    private FrameworkElement ChartEmptyState(string reading, double width, double height, bool arriving)
-    {
-        var art = new Canvas { Width = 100, Height = 66, HorizontalAlignment = HorizontalAlignment.Center };
-
-        System.Windows.Shapes.Rectangle Box(double left, double top, double w, double h, double radius,
-                                            string? fill, string? stroke, double thickness = 1.2, bool dashed = false)
-        {
-            var box = new System.Windows.Shapes.Rectangle
-            {
-                Width = w, Height = h, RadiusX = radius, RadiusY = radius, StrokeThickness = thickness,
-            };
-            if (fill is not null) box.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, fill);
-            if (stroke is not null) box.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, stroke);
-            if (dashed) box.StrokeDashArray = new DoubleCollection { 2, 2 };
-            Canvas.SetLeft(box, left);
-            Canvas.SetTop(box, top);
-            art.Children.Add(box);
-            return box;
-        }
-
-        // The card, its baseline, and three bars of different heights drawn
-        // as dashed outlines: a chart whose bars are missing.
-        Box(0, 0, 88, 58, 7, "Theme.Ov.0A", "Theme.Ov.2B");
-        Box(12, 47, 64, 1.2, 0, "Theme.Ov.33", null, 0);
-        Box(18, 31, 12, 15, 2, null, "Theme.Ov.4D", dashed: true);
-        Box(36, 17, 12, 29, 2, null, "Theme.Ov.4D", dashed: true);
-        Box(54, 24, 12, 22, 2, null, "Theme.Ov.4D", dashed: true);
-
-        // A badge on the corner with a dash in it: "nothing here".
-        Box(72, 40, 26, 26, 13, "Theme.Popup", "Theme.Accent.99", 1.5);
-        var dash = new System.Windows.Shapes.Path
-        {
-            Data = Geometry.Parse("M80.5,53 H89.5"),
-            StrokeThickness = 1.8,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-        };
-        dash.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "Theme.Accent");
-        art.Children.Add(dash);
-
-        var stack = new StackPanel { Width = width, IsHitTestVisible = false };
-        stack.Children.Add(art);
-        stack.Children.Add(new TextBlock
-        {
-            Text = "Not recorded in these sessions",
-            Foreground = _theme.Section,
-            FontSize = UiTheme.PanelFontSize + 2,
-            FontWeight = FontWeights.SemiBold,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 10, 0, 3),
-        });
-        stack.Children.Add(new TextBlock
-        {
-            Text = $"{reading} wasn't logged for any of them - pick another reading above.",
-            Foreground = _theme.Label,
-            FontSize = SmallFont,
-            TextAlignment = TextAlignment.Center,
-            TextWrapping = TextWrapping.Wrap,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            MaxWidth = 380,
-        });
-
-        // Centred in the chart by its own measured height, which depends on
-        // the font and whether the line wraps.
-        stack.Measure(new Size(width, double.PositiveInfinity));
-        Canvas.SetTop(stack, Math.Max(0, (height - stack.DesiredSize.Height) / 2));
-
-        if (arriving)
-        {
-            // The pictures window's fade and rise, shorter and with a shorter
-            // wait: the chart is part of a window already on screen. Once,
-            // and still after that, since this window can be open over a game.
-            var shift = new TranslateTransform(0, 12);
-            stack.RenderTransform = shift;
-            stack.Opacity = 0;
-            var delay = TimeSpan.FromMilliseconds(120);
-            var duration = new Duration(TimeSpan.FromMilliseconds(400));
-            var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
-            stack.BeginAnimation(OpacityProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(0, 1, duration) { BeginTime = delay, EasingFunction = ease });
-            shift.BeginAnimation(TranslateTransform.YProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(12, 0, duration) { BeginTime = delay, EasingFunction = ease });
-        }
-
-        return stack;
-    }
-
-    private void DrawChart()
-    {
-        Chart.Children.Clear();
-
-        // Shown whenever there are sessions, even if none recorded the picked
-        // reading - hiding the picker along with the bars would leave no way
-        // to pick something else.
-        bool any = !_allGames && _sessions.Count > 0;
-        ChartTitle.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
-        Chart.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
-        // Its line goes with it: under All games, with no chart, it would
-        // separate the cards from the table for no reason.
-        ChartRule.Visibility = Chart.Visibility;
-
-        double width = Chart.ActualWidth;
-        double height = Chart.ActualHeight;
-        if (!any || width <= 0 || height <= 0)
-        {
-            _chartEmptyShown = false;
-            return;
-        }
-
-        var measure = SelectedMeasure;
-        var shown = _sessions.Skip(Math.Max(0, _sessions.Count - ChartSessions)).ToList();
-
-        // The bars that will be drawn: a session that didn't record the
-        // reading, or recorded nothing, has none, so it can't be the lowest.
-        var values = shown.Select(s => measure.Value(s)).OfType<double>().Where(v => v > 0).ToList();
-        bool anyBar = values.Count > 0;
-
-        // The key only for what there is a bar to explain. A lowest only when
-        // it differs from the highest - with one bar, or every bar level, the
-        // same bar would be both.
-        double lowest = anyBar ? values.Min() : 0;
-        bool markLowest = anyBar && lowest < values.Max();
-
-        HighestChip.Visibility = anyBar ? Visibility.Visible : Visibility.Collapsed;
-        LowestChip.Visibility = markLowest ? Visibility.Visible : Visibility.Collapsed;
-        AverageChip.Visibility = HighestChip.Visibility;
-        // The heading only over figures: with no bars the chart says why itself.
-        ChartTitleText.Visibility = HighestChip.Visibility;
-
-        // The figures beside their keys: the colour alone only said which bar
-        // was highest, and finding its value meant hovering it or reading it
-        // off the axis. Taken from the bars drawn, so they match what is seen.
-        // The average outside the block: the chart draws its line too.
-        double average = 0;
-        if (anyBar)
-        {
-            // Average FPS weighted by session length, as the AVG FPS card is:
-            // a plain mean let short menu sessions at 300+ fps pull it far
-            // above the card's figure. The other readings are a plain mean -
-            // weighting minutes played by minutes played would favour long ones.
-            average = measure.Key == "avg" && WeightedFps(shown) is double weighted
-                ? weighted
-                : values.Average();
-            SetChip(AverageText, "Average", BarValue(average));
-            SetChip(HighestText, "Highest", BarValue(values.Max()));
-            SetChip(LowestText, "Lowest", BarValue(lowest));
-        }
-
-        // Fades in only when it first appears: the chart is redrawn on every
-        // resize and refresh, and arriving again each time would flicker.
-        bool arriving = !anyBar && !_chartEmptyShown;
-        _chartEmptyShown = !anyBar;
-
-        if (!anyBar)
-        {
-            Chart.Children.Add(ChartEmptyState(measure.Name, width, height, arriving));
-            return;
-        }
-
-        const double AxisWidth = 30;   // room for the value labels
-        const double LabelRoom = 16;   // a bar's value label above the tallest bar
-        const double Gap = 2;          // surface gap between bars
-
-        double highest = shown.Max(s => measure.Value(s) ?? 0);
-        double plotLeft = AxisWidth;
-        double plotWidth = width - AxisWidth;
-        double plotTop = LabelRoom;
-        // Room under the baseline for the lower half of the "0" label, which is
-        // centred on its gridline like the others. With only 1 px there, the
-        // chart's clipping cut the 0 off at the bottom.
-        const double ZeroRoom = 8;
-        // Under that, each bar's session ID - the number in the table's ID
-        // column - so a bar can be found in the table without hovering it.
-        double idSize = Math.Max(8, SmallFont - 2);
-        double idRoom = idSize + 4;
-        double plotHeight = height - LabelRoom - ZeroRoom - idRoom;
-        double baseline = plotTop + plotHeight;
-
-        // The top of the scale high enough that the tallest bar's value label
-        // fits under the top gridline, not just the bar: rounding 57 up to 60
-        // put the bar right under the line and its "57" across and above it.
-        // The bar may reach at most the plot's height less one label's room.
-        double fits = plotHeight > LabelRoom ? highest * plotHeight / (plotHeight - LabelRoom) : highest;
-        double top = NiceCeiling(fits);
-
-        // Gridlines at a quarter steps of a round top value; labels on the left
-        // in the muted text colour, so the axis stays out of the bars' way.
-        for (int step = 0; step <= 4; step++)
-        {
-            double value = top * step / 4;
-            double y = Math.Round(baseline - plotHeight * step / 4) + 0.5;
-
-            // Fully qualified: Shapes also has a Path, which would collide with System.IO's.
-            Chart.Children.Add(new System.Windows.Shapes.Line
-            {
-                X1 = plotLeft, X2 = width, Y1 = y, Y2 = y,
-                Stroke = step == 0 ? _theme.Border : _theme.Separator,
-                StrokeThickness = 1,
-            });
-
-            var label = new TextBlock
-            {
-                Text = value.ToString("0", CultureInfo.InvariantCulture),
-                Foreground = _theme.Header,
-                FontSize = SmallFont - 1,
-                Width = AxisWidth - 6,
-                TextAlignment = TextAlignment.Right,
-            };
-            Canvas.SetLeft(label, 0);
-            Canvas.SetTop(label, y - 7);
-            Chart.Children.Add(label);
-        }
-
-        // Slots spread over the whole width, but never wider than an eighth of
-        // it: a game with three sessions would otherwise draw three slabs.
-        // Neon bars: thin, at most 11 px, so the glow around them is what fills
-        // the slot - wide bars with a glow merged into one bright block.
-        double slot = plotWidth / Math.Max(shown.Count, 8);
-        double barWidth = Math.Min(NeonBarWidth, Math.Max(2, Math.Min(slot * 0.6, slot - Gap)));
-
-        // The sessions picked in the table: a faint accent column behind each
-        // one's slot, so they can be found in the chart without counting IDs.
-        // Behind the glow and bars, and drawn even without a bar, so a session
-        // that didn't record this reading still shows where it would be.
-        var picked = new HashSet<int>(_selected.Select(p => shown.FindIndex(s => ReferenceEquals(s, p))).Where(i => i >= 0));
-        foreach (int i in picked)
-        {
-            var column = new Border
-            {
-                Width = slot,
-                Height = plotHeight + ZeroRoom,
-                Background = _theme.AccentAt(0x26),
-                CornerRadius = new CornerRadius(Math.Min(4, slot / 2)),
-                IsHitTestVisible = false,
-            };
-            Canvas.SetLeft(column, plotLeft + i * slot);
-            Canvas.SetTop(column, plotTop);
-            Chart.Children.Add(column);
-        }
-
-        // With one picked its value and ID are always shown; with several,
-        // forced labels on neighbouring bars would run into each other.
-        int onlyPicked = picked.Count == 1 ? picked.First() : -1;
-
-        // The glow: a copy of every bar in one layer behind them, blurred as a
-        // whole. One effect for the chart instead of one per bar - each WPF
-        // effect renders its element off-screen, and forty of them is real GPU
-        // work in a window that can sit over a game. A copy rather than a
-        // DropShadowEffect so each glow keeps its own bar's colour.
-        var glow = new Canvas
-        {
-            IsHitTestVisible = false,
-            Effect = new System.Windows.Media.Effects.BlurEffect
-            {
-                Radius = 10,
-                RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance,
-            },
-        };
-        Chart.Children.Add(glow);
-
-        // The bars' value labels in a layer of their own, added last so they
-        // sit over the average line, with the window-coloured halo round them:
-        // where the green dashes ran through a number it was hard to read.
-        // One effect on the layer, not one per label, for the glow's reason.
-        var valueLabels = new Canvas { IsHitTestVisible = false, Effect = _theme.TextHalo };
-
-        // Every bar's value above it when the slots are wide enough for the
-        // widest of them - a few sessions, or a wide window. Squeezed, only the
-        // highest and lowest keep theirs: forty numbers run together read as
-        // none, and the rest are a hover away in the tooltip.
-        double labelSize = Math.Max(8, SmallFont - 1);
-        bool labelAll = values.Max(v => ValueWidth(BarValue(v), labelSize)) <= slot - 2;
-
-        // Every ID when they fit side by side, else every second, fifth or
-        // tenth - counted from the newest, so the latest session always has
-        // its number. Run together they would read as one long number.
-        double idWidth = ValueWidth(shown[^1].Id.ToString(CultureInfo.InvariantCulture), idSize) + 4;
-        int idEvery = new[] { 1, 2, 5, 10 }.FirstOrDefault(n => n * slot >= idWidth, 10);
-
-        for (int i = 0; i < shown.Count; i++)
-        {
-            var session = shown[i];
-            double x = plotLeft + i * slot + (slot - barWidth) / 2;
-
-            var hover = new Border
-            {
-                Width = slot,
-                Height = plotHeight,
-                Background = Brushes.Transparent,
-            };
-            string? headline = null;
-            Brush? headlineBrush = null;
-            LazyTip(hover, () => SessionTip(session, headline, headlineBrush));
-            Canvas.SetLeft(hover, plotLeft + i * slot);
-            Canvas.SetTop(hover, plotTop);
-
-            if (measure.Value(session) is double value && value > 0)
-            {
-                double barHeight = Math.Max(2, plotHeight * Math.Min(1, value / top));
-
-                // Every bar that ties for highest or lowest, not just the
-                // first: picking one of two equal sessions would claim a
-                // difference there isn't.
-                bool isHighest = value >= highest;
-                bool isLowest = markLowest && value <= lowest;
-                var (normal, lit) = isHighest ? MarkedBar(HighestFoot, HighestTip, HighestBrush, HighestHover, barHeight, plotHeight)
-                                  : isLowest ? MarkedBar(LowestFoot, LowestTip, LowestBrush, LowestHover, barHeight, plotHeight)
-                                  : PlainBar(barHeight, plotHeight);
-
-                // The picked session's bar stays in its hover colour, so it
-                // stands out of the column as well as being inside it.
-                bool isPicked = picked.Contains(i);
-                if (isPicked)
-                    normal = lit;
-
-                // Rounded at both ends, a lit tube rather than a block standing
-                // on the baseline - the neon look.
-                var bar = new Border
-                {
-                    Width = barWidth,
-                    Height = barHeight,
-                    Background = normal,
-                    CornerRadius = new CornerRadius(barWidth / 2),
-                    IsHitTestVisible = false,
-                };
-                Canvas.SetLeft(bar, x);
-                Canvas.SetTop(bar, baseline - barHeight);
-                Chart.Children.Add(bar);
-
-                // Its glow: 2 px wider so the blur has more colour to spread
-                // and still shows beside a 2 px bar on a squeezed chart.
-                var halo = new Border
-                {
-                    Width = barWidth + 2,
-                    Height = barHeight,
-                    Background = normal,
-                    CornerRadius = new CornerRadius(barWidth / 2 + 1),
-                };
-                Canvas.SetLeft(halo, x - 1);
-                Canvas.SetTop(halo, baseline - barHeight);
-                glow.Children.Add(halo);
-
-                // The picked one always has its number, even squeezed: having
-                // picked it, its value is what you came to the chart for.
-                if (labelAll || isHighest || isLowest || i == onlyPicked)
-                {
-                    // In the bar's own colour when it is a marked one, so the
-                    // number says which mark it is; dim otherwise.
-                    string text = BarValue(value);
-                    double textWidth = ValueWidth(text, labelSize);
-                    var label = new TextBlock
-                    {
-                        Text = text,
-                        FontSize = labelSize,
-                        Foreground = isHighest ? HighestBrush : isLowest ? LowestBrush : _theme.Label,
-                        IsHitTestVisible = false,
-                    };
-                    // Centred over the bar, but kept inside the plot at the ends.
-                    double left = Math.Clamp(x + barWidth / 2 - textWidth / 2, plotLeft, width - textWidth);
-                    Canvas.SetLeft(label, left);
-                    Canvas.SetTop(label, baseline - barHeight - labelSize - 4);
-                    valueLabels.Children.Add(label);
-                }
-
-                // Not "Highest {name}": the peak measures are already named
-                // "Highest CPU °C", and it would say it twice. In the bar's
-                // own colour, so the tooltip says which mark it is.
-                if (isHighest)
-                    (headline, headlineBrush) = ($"Highest in the chart: {value:0}", HighestBrush);
-                else if (isLowest)
-                    (headline, headlineBrush) = ($"Lowest in the chart: {value:0}", LowestBrush);
-
-                // The glow lights up with its bar, or the hovered bar would
-                // sit brighter than its own halo.
-                hover.MouseEnter += (_, _) => bar.Background = halo.Background = lit;
-                hover.MouseLeave += (_, _) => bar.Background = halo.Background = normal;
-            }
-
-            // A new driver or Windows build: a small accent triangle under the
-            // bar, in the room the 0 label leaves below the baseline - clear of
-            // the value labels above. Whether or not the session has a bar, so
-            // the change still shows on a reading it didn't record.
-            if (_changes.ContainsKey(session))
-            {
-                double middle = plotLeft + i * slot + slot / 2;
-                Chart.Children.Add(new System.Windows.Shapes.Polygon
-                {
-                    Points = new PointCollection { new(middle - 3.5, baseline + 7), new(middle + 3.5, baseline + 7), new(middle, baseline + 2) },
-                    Fill = _theme.Accent,
-                    IsHitTestVisible = false,
-                });
-            }
-
-            // Below the change triangle's row, whether or not there is a bar.
-            // A picked session's ID in the accent. A lone pick's always, and a
-            // neighbour's that would run into it gives way, or the two read as
-            // one number.
-            bool idPicked = picked.Contains(i);
-            bool crowdsPicked = onlyPicked >= 0 && i != onlyPicked && Math.Abs(i - onlyPicked) * slot < idWidth;
-            if (i == onlyPicked || ((shown.Count - 1 - i) % idEvery == 0 && !crowdsPicked))
-            {
-                string id = session.Id.ToString(CultureInfo.InvariantCulture);
-                double idTextWidth = ValueWidth(id, idSize);
-                var idLabel = new TextBlock
-                {
-                    Text = id,
-                    FontSize = idSize,
-                    Foreground = idPicked ? _theme.Accent : _theme.Header,
-                    FontWeight = idPicked ? FontWeights.SemiBold : FontWeights.Normal,
-                    IsHitTestVisible = false,
-                };
-                Canvas.SetLeft(idLabel, Math.Clamp(plotLeft + i * slot + slot / 2 - idTextWidth / 2, plotLeft, width - idTextWidth));
-                Canvas.SetTop(idLabel, baseline + ZeroRoom);
-                Chart.Children.Add(idLabel);
-            }
-
-            Chart.Children.Add(hover);
-        }
-
-        // After the bars, so the line stays visible where it crosses them.
-        // Dashed, so it reads as a level rather than as one more gridline.
-        // Not hit-testable: the bars' tooltips under it must still work.
-        double averageY = Math.Round(baseline - plotHeight * Math.Min(1, average / top)) + 0.5;
-        Chart.Children.Add(new System.Windows.Shapes.Line
-        {
-            X1 = plotLeft, X2 = width, Y1 = averageY, Y2 = averageY,
-            Stroke = AverageBrush,
-            StrokeThickness = 1.5,
-            StrokeDashArray = new DoubleCollection { 4, 3 },
-            IsHitTestVisible = false,
-            // Toned down: at full strength the bright green drew the eye
-            // away from the bars, which are what the chart is about.
-            Opacity = AverageOpacity,
-        });
-        Chart.Children.Add(valueLabels);
-    }
-
-    /// <summary>
-    /// One of the average / highest / lowest chips over the chart: the
-    /// window's own colour with a little of the chip's mixed in, mostly
-    /// opaque so it reads over the game's art as well as over the panel, and
-    /// an outline in the chip's colour. The figure in the theme's text colour
-    /// rather than the chip's, which would be faint on a light theme.
-    /// </summary>
-    private void StyleChip(Border chip, TextBlock text, Brush colour)
-    {
-        // The accent brush may not be a plain colour in every theme; the
-        // accent's own colour stands in for it then.
-        Color c = colour is SolidColorBrush solid ? solid.Color : _theme.AccentColor, w = _theme.WindowColor;
-        byte Mix(byte window, byte tint) => (byte)Math.Round(window * 0.82 + tint * 0.18);
-
-        var fill = new SolidColorBrush(Color.FromArgb(0xD9, Mix(w.R, c.R), Mix(w.G, c.G), Mix(w.B, c.B)));
-        fill.Freeze();
-        var edge = new SolidColorBrush(Color.FromArgb(0x70, c.R, c.G, c.B));
-        edge.Freeze();
-
-        chip.Background = fill;
-        chip.BorderBrush = edge;
-        text.Foreground = _theme.NotesText;
-        text.FontSize = UiTheme.PanelFontSize;
-    }
-
-    /// <summary>
-    /// A chip's words: the caption small and dim, the figure larger and
-    /// bold, so the number is what the eye lands on.
-    /// </summary>
-    private void SetChip(TextBlock text, string caption, string value)
-    {
-        text.Inlines.Clear();
-        // No caption run at all for an icon-only chip - see ShowLastSession -
-        // or its two spaces would pad the figure on the left.
-        if (caption.Length > 0)
-            text.Inlines.Add(new System.Windows.Documents.Run(caption + "  ")
-        {
-            Foreground = _theme.Label,
-            FontSize = SmallFont,
-        });
-        text.Inlines.Add(new System.Windows.Documents.Run(value) { FontWeight = FontWeights.SemiBold });
-    }
-
-    /// <summary>The average line's opacity, which its key in the legend shares so the two still match.</summary>
-    private const double AverageOpacity = 0.55;
-
-    /// <summary>The chart's neon bars at their widest - see DrawChart.</summary>
-    private const double NeonBarWidth = 11;
-
-    /// <summary>
-    /// An unmarked bar's colour and its hover: the blue, or with BarGradient on
-    /// the settings' gradient rising from the baseline. The gradient spans the
-    /// whole plot height rather than the bar, so like the widget's bars only a
-    /// tall one reaches the end colour. The highest and lowest keep their
-    /// orange and red, which is what makes them findable.
-    /// </summary>
-    private (Brush Normal, Brush Lit) PlainBar(double barHeight, double plotHeight)
-    {
-        if (!_settings.BarGradient)
-            return (BarBrush, BarHover);
-
-        return GradientBar(_theme.BarGradientStart, _theme.BarGradientEnd, barHeight, plotHeight);
-    }
-
-    /// <summary>
-    /// The highest or lowest bar: its own gradient when the plain bars have
-    /// one, laid out the same way so all bars agree, else its solid colour.
-    /// </summary>
-    private (Brush Normal, Brush Lit) MarkedBar(Color foot, Color tip, Brush solid, Brush solidLit,
-                                                double barHeight, double plotHeight)
-        => _settings.BarGradient ? GradientBar(foot, tip, barHeight, plotHeight) : (solid, solidLit);
-
-    /// <summary>A bar's gradient from <paramref name="start"/> at its foot, and the lighter one for its hover.</summary>
-    private (Brush Normal, Brush Lit) GradientBar(Color start, Color end, double barHeight, double plotHeight)
-    {
-        // In the bar's own pixels: its foot is at barHeight, the plot's top
-        // plotHeight above that - or, with BarGradientSpan "bar", the bar's
-        // own top, so every bar shows the whole gradient as the widget's do.
-        var foot = new Point(0, barHeight);
-        var top = new Point(0, _theme.GradientAcrossBar ? 0 : barHeight - plotHeight);
-        return (UiTheme.MakeGradient(start, end, foot, top),
-                UiTheme.MakeGradient(UiTheme.Lighten(start, 0.35), UiTheme.Lighten(end, 0.35), foot, top));
-    }
-
-    /// <summary>The target the scores on screen were worked out for, so a new one re-scores them.</summary>
-    private double _scoredFor = PerformanceScore.Target;
-
-    /// <summary>
-    /// For a settings change: the chart reads its colours from the theme only
-    /// while drawing. A new target frame rate changes every score - in the
-    /// cards, the table and a chart of scores - so it shows the lot again;
-    /// only then, since this runs on every keystroke in the settings window.
-    /// </summary>
-    public void RedrawChart()
-    {
-        if (!IsLoaded)
-            return;
-
-        if (_scoredFor != PerformanceScore.Target)
-        {
-            _scoredFor = PerformanceScore.Target;
-            ShowSelection(GamePicker.SelectedItem, null);
-        }
-        else
-            DrawChart();
-
-        // A new energy price or currency: the Cost column comes, goes or
-        // changes - only then, for the same every-keystroke reason.
-        if (_energyPrice != _settings.EnergyPrice || _energyCurrency != (_settings.EnergyCurrency?.Trim() ?? string.Empty))
-        {
-            FitColumns();
-            ShowRows();
-        }
-    }
-
-    /// <summary>A bar's value as its label says it: whole, with a decimal only under 10 where it matters.</summary>
-    private static string BarValue(double value)
-        => value.ToString(value < 10 ? "0.#" : "0", CultureInfo.InvariantCulture);
-
-    /// <summary>How wide <paramref name="text"/> is drawn in the window's font, for whether labels fit.</summary>
-    private double ValueWidth(string text, double size)
-        => new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                             new Typeface(FontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
-                             size, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace;
-
-    /// <summary>
-    /// A round number at or above <paramref name="value"/> that divides into
-    /// four tidy gridlines: 60, 120, 240 rather than 217.
-    /// </summary>
-    private static double NiceCeiling(double value)
-    {
-        foreach (double nice in new double[] { 20, 40, 60, 80, 120, 160, 200, 240, 300, 400, 600, 800, 1000 })
-            if (value <= nice)
-                return nice;
-
-        return Math.Ceiling(value / 200) * 200;
     }
 
     // --- Table -----------------------------------------------------------------
@@ -2258,12 +1810,27 @@ public partial class SessionsWindow : PanelWindow
         // every click, which grew slow as a game's history did.
         foreach (var changed in before.Concat(_selected).Distinct())
             if (_sessionRows.TryGetValue(changed, out var row))
-                row.Background = _selected.Contains(changed) ? SelectedBrush : Brushes.Transparent;
+                row.Background = _selected.Contains(changed) ? SelectedBrush : RowRest(row);
         DeleteButton.IsEnabled = !_allGames && _selected.Count > 0;
 
-        // The chart marks the picked session too - see DrawChart.
-        DrawChart();
+        // The chart marks the picked session too - only those marks redrawn,
+        // not the whole chart and its blurred glow on every click; see
+        // DrawChartPicks. The timeline follows the pick as DrawChart has it.
+        DrawChartPicks();
+        ShowTimeline();
     }
+
+    /// <summary>Room above and below each row's figures - see ShowTable.</summary>
+    private const double RowPad = 5;
+
+    /// <summary>
+    /// A row's background when it isn't picked: its stripe, every other row,
+    /// or nothing. One place for it, so a pick let go of in Select gives the
+    /// row its stripe back rather than leaving a gap in the bands. From the
+    /// theme's faint overlay, as the hover is, so it reads on a light theme too.
+    /// </summary>
+    private Brush RowRest(FrameworkElement row)
+        => row.Tag is true && TryFindResource("Theme.Ov.0F") is Brush stripe ? stripe : Brushes.Transparent;
 
     /// <summary>
     /// Each session's row in the table as last built, so a click can repaint
@@ -2308,18 +1875,23 @@ public partial class SessionsWindow : PanelWindow
 
         Rows.Children.Clear();
         _sessionRows.Clear();
-        bool firstRow = true;
+        int index = 0;
         foreach (var item in Sorted(items, sortBy, sort.Descending))
         {
-            // The lit blue the widget's toolbar uses for "this one is open":
-            // the same meaning, picked rather than merely pointed at.
-            Brush rest = selected?.Invoke(item) == true ? SelectedBrush : Brushes.Transparent;
+            // Every other row on a faint stripe, in place of the hairline that
+            // ran between them: across a dozen columns and their gaps the eye
+            // lost its row, and a band is easier to follow than a line.
+            // Counted in the order shown, so the stripes stay even after a sort.
+            bool striped = index++ % 2 == 1;
 
             var row = new Grid
             {
-                Background = rest,
+                Tag = striped,   // for RowRest, when a pick repaints it
                 Cursor = open is null ? null : Cursors.Hand,
             };
+            // The lit blue the widget's toolbar uses for "this one is open":
+            // the same meaning, picked rather than merely pointed at.
+            row.Background = selected?.Invoke(item) == true ? SelectedBrush : RowRest(row);
             LazyTip(row, () => tooltip(item));
             AddColumns(row, columns);
             if (item is SessionRecord record)
@@ -2335,25 +1907,29 @@ public partial class SessionsWindow : PanelWindow
             Grid.SetColumnSpan(hover, columns.Count + 1);
             row.Children.Add(hover);
 
-            // A thin line between rows, so a session's date, time and length
-            // read as one line across the gaps between the columns.
-            if (!firstRow)
-            {
-                var rule = new Border { Height = 1, VerticalAlignment = VerticalAlignment.Top, Background = _theme.Separator, IsHitTestVisible = false };
-                Grid.SetColumnSpan(rule, columns.Count + 1);
-                row.Children.Add(rule);
-            }
-            firstRow = false;
-
             for (int i = 0; i < columns.Count; i++)
             {
+                string value = columns[i].Text(item);
+                string key = columns[i].Key;
+
+                // Quieter where there is nothing to read: a missing value's dash
+                // and the ID, which is for finding a row rather than reading it,
+                // in the dimmest text colour. The score and the average a little
+                // heavier instead, as the figures most rows are looked at for.
+                Brush foreground = columns[i].Score?.Invoke(item) is int score ? ScoreBrush(score)
+                                 : value == "–" || key == "id" ? _theme.Header
+                                 : i == 0 ? _theme.Label
+                                 : _theme.NotesText;
+
                 var cell = new TextBlock
                 {
-                    Text = columns[i].Text(item),
-                    Foreground = columns[i].Score?.Invoke(item) is int score ? ScoreBrush(score)
-                               : i == 0 ? _theme.Label : _theme.NotesText,
+                    Text = value,
+                    Foreground = foreground,
+                    FontWeight = key is "score" or "avg" && value != "–" ? FontWeights.SemiBold : FontWeights.Normal,
                     TextAlignment = columns[i].Number ? TextAlignment.Right : TextAlignment.Left,
-                    Margin = new Thickness(columns[i].Number || i == 0 ? 0 : ColumnGap, 3, columns[i].Number ? 10 : 0, 3),
+                    // 5 above and below, not 3: at 3 the rows' figures crowded
+                    // the ones above and below them.
+                    Margin = new Thickness(columns[i].Number || i == 0 ? 0 : ColumnGap, RowPad, columns[i].Number ? 10 : 0, RowPad),
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 };
 
@@ -2671,18 +2247,6 @@ public partial class SessionsWindow : PanelWindow
            "\nClick to see its sessions";
 
     /// <summary>
-    /// A session in full, for tooltips: the day as a heading, then the time,
-    /// length and average on a dim line, then every peak as a table grouped by
-    /// widget section - the whole log line, readable.
-    ///
-    /// It used to be text: a line per section with the readings strung along
-    /// it, so each line's CPU, GPU... started wherever the one before ended,
-    /// and nothing lined up. As a table, every reading has a column of its
-    /// own, so the first of each line - CPU, CPU, FPS - sits under the others,
-    /// as in the notes window's last session.
-    /// </summary>
-    /// <param name="headline">A line above it all, in <paramref name="headlineBrush"/>: the chart's "Highest in the chart: 142".</param>
-    /// <summary>
     /// A tooltip made when it is about to show, not when its row is. The table
     /// can hold hundreds of sessions and is rebuilt on every sort; making each
     /// row's card up front would build hundreds that are never seen.
@@ -2697,165 +2261,15 @@ public partial class SessionsWindow : PanelWindow
         element.ToolTipOpening += (_, _) => element.ToolTip = make();
     }
 
+    /// <summary>
+    /// A session in full - the shared one, see Ui/SessionTip - with this
+    /// window's driver and Windows changes, which only it works out.
+    /// </summary>
+    /// <param name="headline">A line above it all, in <paramref name="headlineBrush"/>: the chart's "Highest in the chart: 142".</param>
     private ToolTip SessionTip(SessionRecord session, string? headline = null, Brush? headlineBrush = null)
-    {
-        var card = new StackPanel();
-
-        if (headline is not null)
-            card.Children.Add(new TextBlock
-            {
-                Text = headline,
-                Foreground = headlineBrush ?? _theme.NotesText,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 5),
-            });
-
-        card.Children.Add(new TextBlock
-        {
-            Text = $"Session ID {session.Id}  ·  " + session.Start.ToString("dddd d MMMM yyyy", CultureInfo.InvariantCulture),
-            Foreground = _theme.NotesText,
-            FontWeight = FontWeights.SemiBold,
-        });
-
-        string when = $"{session.Start:HH:mm}–{session.End:HH:mm}  ·  {SessionRecord.Describe(session.Length)}";
-        if (session.AverageFps is double fps)
-            when += $"  ·  {fps:0} fps average";
-        if (session.OnePercentLow is double low)
-            when += $"  ·  1% low {low:0}";
-        card.Children.Add(new TextBlock { Text = when, Foreground = _theme.Label, Margin = new Thickness(0, 1, 0, 0) });
-
-        // The stutters as a rate as well as a count - "37" alone says little
-        // without the length beside it - and the energy with what it covers.
-        var extra = new List<string>();
-        if (session.Stutters is long stutters)
-        {
-            string rate = stutters > 0 && session.Length.TotalMinutes > 0
-                ? $" - about 1 every {Every(session.Length / stutters)}"
-                : string.Empty;
-            extra.Add(stutters == 1 ? $"1 stutter{rate}" : $"{stutters} stutters{rate}");
-        }
-        if (session.EnergyWh is double wh)
-        {
-            string cost = _energyPrice > 0 ? $" ({Cost(wh)})" : string.Empty;
-            extra.Add($"CPU+GPU {Kwh(wh)} kWh{cost} - the whole PC draws more");
-        }
-        if (extra.Count > 0)
-            card.Children.Add(new TextBlock { Text = string.Join("  ·  ", extra), Foreground = _theme.Label, Margin = new Thickness(0, 1, 0, 0) });
-
-        // In the accent, as in the table: the update to line an FPS change up with.
-        if (_changes.TryGetValue(session, out var changes))
-            foreach (var change in changes)
-                card.Children.Add(new TextBlock { Text = change.Detail, Foreground = _theme.Accent, Margin = new Thickness(0, 3, 0, 0) });
-
-        var sections = session.PeaksBySection().ToList();
-        if (sections.Count > 0)
-        {
-            card.Children.Add(new Border { Height = 1, Background = _theme.Separator, Margin = new Thickness(0, 7, 0, 5) });
-
-            var table = new Grid();
-            int readings = sections.Max(s => s.Peaks.Count);
-            for (int i = 0; i < 1 + readings * 2; i++)
-                table.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            void Cell(string text, Brush brush, int row, int column, double right)
-            {
-                var cell = new TextBlock { Text = text, Foreground = brush, Margin = new Thickness(0, 1, right, 1) };
-                Grid.SetRow(cell, row);
-                Grid.SetColumn(cell, column);
-                table.Children.Add(cell);
-            }
-
-            for (int row = 0; row < sections.Count; row++)
-            {
-                var (section, peaks) = sections[row];
-                table.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-                Cell(section, _theme.Header, row, 0, 14);
-                for (int i = 0; i < peaks.Count; i++)
-                {
-                    Cell(peaks[i].Label, _theme.Label, row, 1 + i * 2, 5);
-                    Cell(peaks[i].Text, _theme.NotesText, row, 2 + i * 2, 16);
-                }
-            }
-
-            card.Children.Add(table);
-            card.Children.Add(new TextBlock
-            {
-                Text = "The worst each reached:  ↑ highest   ↓ lowest",
-                Foreground = _theme.Header,
-                FontSize = 11,
-                Margin = new Thickness(0, 5, 0, 0),
-            });
-        }
-
-        // The score, and what it was made of: which part cost the points is
-        // what says where to look - the frame rate, the dips, or the heat.
-        if (PerformanceScore.For(session) is { } result)
-        {
-            card.Children.Add(new Border { Height = 1, Background = _theme.Separator, Margin = new Thickness(0, 7, 0, 5) });
-            card.Children.Add(new TextBlock
-            {
-                Text = $"Performance score {result.Score} - {PerformanceScore.Grade(result.Score)}",
-                Foreground = ScoreBrush(result.Score),
-                FontWeight = FontWeights.SemiBold,
-            });
-
-            var parts = new Grid { Margin = new Thickness(0, 3, 0, 0) };
-            for (int i = 0; i < 3; i++)
-                parts.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            for (int row = 0; row < result.Parts.Count; row++)
-            {
-                var part = result.Parts[row];
-                parts.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-                // Points as earned of what the part is worth, right-aligned so they line up.
-                var cells = new (string Text, Brush Brush, TextAlignment Align, double Right)[]
-                {
-                    (part.Name, _theme.Label, TextAlignment.Left, 14),
-                    ($"{part.Points:0} / {part.Of:0}", _theme.NotesText, TextAlignment.Right, 14),
-                    (part.Detail, _theme.Header, TextAlignment.Left, 0),
-                };
-                for (int column = 0; column < cells.Length; column++)
-                {
-                    var cell = new TextBlock
-                    {
-                        Text = cells[column].Text,
-                        Foreground = cells[column].Brush,
-                        TextAlignment = cells[column].Align,
-                        Margin = new Thickness(0, 1, cells[column].Right, 1),
-                    };
-                    Grid.SetRow(cell, row);
-                    Grid.SetColumn(cell, column);
-                    parts.Children.Add(cell);
-                }
-            }
-            card.Children.Add(parts);
-
-            if (result.Partial)
-                card.Children.Add(new TextBlock
-                {
-                    Text = "Frame rate and thermals only: logged before DeskMon measured a session's lows and frame times.",
-                    Foreground = _theme.Header,
-                    FontSize = 11,
-                    Margin = new Thickness(0, 4, 0, 0),
-                });
-        }
-
-        // "cut short, DeskMon closed" in the warning colour, since it changes
-        // what every number above means; anything else on the line plainly.
-        if (session.Note is { } note)
-            card.Children.Add(new TextBlock
-            {
-                Text = note,
-                Foreground = session.CutShort ? _theme.Warn : _theme.Label,
-                Margin = new Thickness(0, 6, 0, 0),
-            });
-
-        // Wider than the tooltip style's 340, which suits a sentence: a table
-        // doesn't wrap, and a long Game line would be cut off at the edge.
-        return new ToolTip { Content = card, MaxWidth = 640 };
-    }
+        => Ui.SessionTip.Make(_theme, _settings, session,
+                              _changes.TryGetValue(session, out var changes) ? changes.Select(c => c.Detail).ToList() : null,
+                              headline, headlineBrush);
 
     // --- Chrome ------------------------------------------------------------------
 
@@ -2878,19 +2292,52 @@ public partial class SessionsWindow : PanelWindow
         FillPicker(GamePicker.SelectedItem);
     }
 
+    /// <summary>
+    /// ← / → switch the chart to the reading before or after it in its
+    /// picker - Average FPS, Minutes played and so on - wrapping round at the
+    /// ends, so going through every reading for a game is a row of key
+    /// presses rather than a trip to the drop-down each time. Delete presses
+    /// DELETE, so its click-twice still guards it. Left to a drop-down or text
+    /// box that has the keyboard, where the keys already mean something.
+    /// </summary>
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_allGames || _sessions.Count == 0 || e.OriginalSource is TextBox or ComboBox or ComboBoxItem
+            || Keyboard.Modifiers != ModifierKeys.None)
+            return;
+
+        if (e.Key is Key.Left or Key.Right && ChartPicker.Items.Count > 0)
+        {
+            // Through the picker, so its own SelectionChanged saves the choice
+            // and redraws the chart, as picking it with the mouse does.
+            int count = ChartPicker.Items.Count;
+            int step = e.Key == Key.Left ? -1 : 1;
+            ChartPicker.SelectedIndex = ((Math.Max(0, ChartPicker.SelectedIndex) + step) % count + count) % count;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete && _selected.Count > 0)
+        {
+            Delete_Click(DeleteButton, new RoutedEventArgs());
+            e.Handled = true;
+        }
+    }
+
     private void Delete_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected.Count == 0 || GamePicker.SelectedItem is not string game)
+        // Off while a delete is under way (see StartDelete) - the Delete key
+        // comes here without going through the button.
+        if (_selected.Count == 0 || GamePicker.SelectedItem is not string game || !DeleteButton.IsEnabled)
             return;
 
         if (!Arm(DeleteButton, DeleteText, $"CLICK AGAIN TO DELETE {PickedName()}"))
             return;
 
         DisarmDelete();
-        // Session lines are now written on AtomicFile's writer (M1); any
-        // still queued land first, or the rewrite below could drop them.
-        AtomicFile.Flush(TimeSpan.FromSeconds(3));
-        FinishDelete(game, _history.Delete(game, _selected), _selected.Count == 1 ? "the session" : "the sessions");
+        // On the writer, behind any session line still queued - see
+        // SessionHistory.DeleteForUser - and the window told when it is done.
+        var picked = _selected.ToList();
+        StartDelete();
+        _history.DeleteForUser(game, picked, error => FinishDelete(game, error, picked.Count == 1 ? "the session" : "the sessions"));
     }
 
     /// <summary>
@@ -2900,7 +2347,7 @@ public partial class SessionsWindow : PanelWindow
     /// </summary>
     private void DeleteAll_Click(object sender, RoutedEventArgs e)
     {
-        if (_allGames || _sessions.Count == 0 || GamePicker.SelectedItem is not string game)
+        if (_allGames || _sessions.Count == 0 || GamePicker.SelectedItem is not string game || !DeleteAllButton.IsEnabled)
             return;
 
         // The count in the warning, so it says what is about to go.
@@ -2908,8 +2355,20 @@ public partial class SessionsWindow : PanelWindow
             return;
 
         DisarmDelete();
-        AtomicFile.Flush(TimeSpan.FromSeconds(3));   // a queued line would otherwise bring the log back
-        FinishDelete(game, _history.DeleteAll(game), "the sessions");
+        // On the writer, behind any queued line, which would otherwise bring the log back.
+        StartDelete();
+        _history.DeleteAllForUser(game, error => FinishDelete(game, error, "the sessions"));
+    }
+
+    /// <summary>
+    /// Both delete buttons off while a delete waits on the writer, so a third
+    /// click can't queue the same delete again - which would then fail with
+    /// "no longer in the log".
+    /// </summary>
+    private void StartDelete()
+    {
+        DeleteButton.IsEnabled = false;
+        DeleteAllButton.IsEnabled = false;
     }
 
     /// <summary>
@@ -2937,6 +2396,9 @@ public partial class SessionsWindow : PanelWindow
     {
         if (error is not null)
         {
+            // Back on, as ShowRows would set them: StartDelete turned them off.
+            DeleteButton.IsEnabled = !_allGames && _selected.Count > 0;
+            DeleteAllButton.IsEnabled = !_allGames && _sessions.Count > 0;
             AddSummary(SummaryText.Inlines.Count > 0
                 ? $"\nCouldn't delete {what}: {error}"
                 : $"Couldn't delete {what}: {error}");
@@ -2990,9 +2452,13 @@ public partial class SessionsWindow : PanelWindow
     /// Only what the log keeps - each session's averages and peaks. There is
     /// no second-by-second record to export.
     /// </summary>
-    private void Export_Click(object sender, RoutedEventArgs e)
+    private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (GamePicker.SelectedItem is not string game || _sessions.Count == 0)
+        // Under All games every game's sessions in one file, with a Game
+        // column - the button did nothing there, though "every session I have"
+        // is just what a spreadsheet of my own is wanted for.
+        string? game = GamePicker.SelectedItem as string;
+        if (_allGames ? _games.Count == 0 : game is null || _sessions.Count == 0)
             return;
 
         var dialog = new Microsoft.Win32.SaveFileDialog
@@ -3001,7 +2467,7 @@ public partial class SessionsWindow : PanelWindow
             Filter = "CSV file (*.csv)|*.csv",
             DefaultExt = ".csv",
             // A game's name can hold characters a file name can't.
-            FileName = string.Concat($"{game} sessions".Split(Path.GetInvalidFileNameChars())) + ".csv",
+            FileName = string.Concat($"{(_allGames ? "All games" : game)} sessions".Split(Path.GetInvalidFileNameChars())) + ".csv",
             InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         };
 
@@ -3010,9 +2476,16 @@ public partial class SessionsWindow : PanelWindow
 
         try
         {
+            // Every log read on a worker, as All games' totals are - see ShowSelection.
+            var names = _games.Select(g => g.Name).ToList();
+            string csv = _allGames
+                ? await System.Threading.Tasks.Task.Run(() =>
+                      SessionsCsv(names.SelectMany(name => _history.Sessions(name)).ToList(), withGame: true))
+                : SessionsCsv(_sessions);
+
             // With a BOM: without one Excel reads the file as the local code
             // page and "°C" turns into "Â°C".
-            File.WriteAllText(dialog.FileName, SessionsCsv(_sessions), new System.Text.UTF8Encoding(true));
+            File.WriteAllText(dialog.FileName, csv, new System.Text.UTF8Encoding(true));
         }
         catch (Exception ex)
         {
@@ -3028,7 +2501,8 @@ public partial class SessionsWindow : PanelWindow
     /// form every spreadsheet's import understands. Swedish Excel opening it by
     /// double-click splits on semicolons instead, but Data > From Text reads it.
     /// </summary>
-    internal static string SessionsCsv(IReadOnlyList<SessionRecord> sessions)
+    /// <param name="withGame">A Game column first - for All games' export, where the sessions of every game share one file.</param>
+    internal static string SessionsCsv(IReadOnlyList<SessionRecord> sessions, bool withGame = false)
     {
         // One column per reading any session has, in the order they first
         // appear. Keyed with the unit, since CPU is both a load and a temperature.
@@ -3046,6 +2520,13 @@ public partial class SessionsWindow : PanelWindow
 
         var header = new List<string> { "ID", "Date", "Start", "End", "Length (min)", "Avg FPS", "1% low", "0.1% low", "Jitter (ms)",
                                         "Stutters", "CPU+GPU energy (Wh)" };
+        // The figures 1.73 added, which the table shows and the export didn't:
+        // the score, and what the loading screen and frame cap rules found.
+        header.InsertRange(header.IndexOf("Stutters") + 1, new[] { "Score", "Loading left out (s)", "Frame cap (fps)",
+                                                                   "Limited by", "GPU-limited (%)", "CPU-limited (%)",
+                                                                   "Ping (ms)", "Ping jitter (ms)", "Pings lost (%)" });
+        if (withGame)
+            header.Insert(0, "Game");
         if (costed)
             header.Add(costHeader);
         header.AddRange(peaks.Select(p => p.Unit.Length > 0 ? $"{p.Label} {p.Unit}" : p.Label));
@@ -3069,8 +2550,19 @@ public partial class SessionsWindow : PanelWindow
                 s.PointOnePercentLow?.ToString("0.0", inv) ?? string.Empty,
                 s.JitterMs?.ToString("0.00", inv) ?? string.Empty,
                 s.Stutters?.ToString(inv) ?? string.Empty,
+                PerformanceScore.For(s)?.Score.ToString(inv) ?? string.Empty,
+                s.LoadingLeftOut is TimeSpan loading ? ((int)loading.TotalSeconds).ToString(inv) : string.Empty,
+                s.CapFps?.ToString(inv) ?? string.Empty,
+                s.Limits is { Count: > 0 } limits ? Bottleneck.Verdict(limits) : string.Empty,
+                s.Limits?.GetValueOrDefault(Bottleneck.Kind.Gpu).ToString(inv) ?? string.Empty,
+                s.Limits?.GetValueOrDefault(Bottleneck.Kind.Cpu).ToString(inv) ?? string.Empty,
+                s.PingMs?.ToString("0", inv) ?? string.Empty,
+                s.PingJitterMs?.ToString("0", inv) ?? string.Empty,
+                s.PingLossPercent?.ToString("0.#", inv) ?? string.Empty,
                 s.EnergyWh?.ToString("0", inv) ?? string.Empty,
             };
+            if (withGame)
+                row.Insert(0, s.Game ?? string.Empty);
             if (costed)
                 row.Add(s.EnergyWh is double wh ? (wh / 1000 * _energyPrice).ToString("0.00", inv) : string.Empty);
 
@@ -3181,15 +2673,31 @@ public partial class SessionsWindow : PanelWindow
         LastSessionTitle.Foreground = ChartTitleText.Foreground;
         LastSessionTitle.FontSize = ChartTitleText.FontSize;
         LastSessionTitle.FontWeight = FontWeights.SemiBold;
-        AverageSwatch.Background = AverageBrush;
-        AverageSwatch.Opacity = AverageOpacity;
-        HighestSwatch.Background = HighestBrush;
-        LowestSwatch.Background = LowestBrush;
+        // And over the timeline, with its caption as dim as the chips' captions.
+        TimelineTitle.Foreground = ChartTitleText.Foreground;
+        TimelineTitle.FontSize = ChartTitleText.FontSize;
+        TimelineTitle.FontWeight = FontWeights.SemiBold;
+        TimelineCaption.Foreground = _theme.Label;
+        TimelineCaption.FontSize = SmallFont;
+        // The chips' icons in their marks' own colours, so each still keys the
+        // chart as the plain swatches did. The average's dashes at the line's
+        // own strength; the wave a little stronger, so it reads at 12 px.
+        AverageIconWave.Stroke = AverageBrush;
+        AverageIconWave.Opacity = Math.Min(1, AverageOpacity + 0.3);
+        AverageIconLine.Stroke = AverageBrush;
+        AverageIconLine.Opacity = AverageOpacity;
+        HighestIcon.Stroke = HighestBrush;
+        LowestIcon.Stroke = LowestBrush;
         StyleChip(AverageChip, AverageText, AverageBrush);
         StyleChip(HighestChip, HighestText, HighestBrush);
         StyleChip(LowestChip, LowestText, LowestBrush);
         GameName.Foreground = Brushes.White;   // over a picture, not the panel: as bright as it gets
         GameNameBar.Background = BarBrush;
+        // The link badge: the popup colour so it stands off any art, outlined
+        // and drawn in the accent like the window's other buttons.
+        GameLinkBadge.Background = _theme.Popup;
+        GameLinkBadge.BorderBrush = _theme.Accent;
+        GameLinkIcon.Stroke = _theme.Accent;
 
         Foreground = _theme.NotesText;
         FontSize = UiTheme.PanelFontSize - 1;

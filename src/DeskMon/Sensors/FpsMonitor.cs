@@ -87,8 +87,9 @@ public sealed class FpsMonitor : IDisposable
         /// session, and the buffer holds only the last 3600 frames - so the
         /// totals are accumulated as frames arrive rather than derived later -
         /// with the lows and jitter over the whole of it, for the performance score.
+        /// The loading screen is left out - see FrameStats' "Loading left out".
         /// </summary>
-        public FrameStats Totals { get; } = new();
+        public FrameStats Totals { get; } = new(skipLoading: true);
 
         public DateTime LastFrameAt;
 
@@ -201,8 +202,30 @@ public sealed class FpsMonitor : IDisposable
     private Process? _process;
     private string? _exePath;
 
-    /// <summary>The swap-chain key of the last frame read - see OnOutputLine. Only touched by its output thread.</summary>
-    private string? _lastChain;
+    /// <summary>
+    /// One PresentMon run's reading of its output: where its columns are, the
+    /// last swap chain key, and the generation it belongs to. Its own object
+    /// per run, not fields shared by all: Start reset those under the lock on
+    /// the UI thread while the output thread read them without it, and a line
+    /// from the old run already on its way when Stop unhooked it could then
+    /// land in the new run's chains, read with the wrong columns.
+    /// </summary>
+    private sealed class OutputRun
+    {
+        public OutputRun(int generation) => Generation = generation;
+
+        public int Generation { get; }
+        public int SwapChainColumn = -1, FrameTimeColumn = -1, LatencyColumn = -1;
+
+        /// <summary>The swap-chain key of the last frame read - see OnOutputLine. Only touched by its output thread.</summary>
+        public string? LastChain;
+
+        /// <summary>The handler hooked to its process, kept so it can be unhooked again.</summary>
+        public DataReceivedEventHandler? Handler;
+    }
+
+    /// <summary>The run <see cref="_process"/> is reading. Under <see cref="_lock"/>.</summary>
+    private OutputRun? _run;
 
     /// <summary>
     /// How often the lows are worked out again. They sort the whole 3600-frame
@@ -214,9 +237,6 @@ public sealed class FpsMonitor : IDisposable
 
     /// <summary>The lows as last worked out, for which chain and when. Under <see cref="_lock"/>.</summary>
     private (DateTime At, SwapChain Chain, double? One, double? PointOne, int Frames)? _lows;
-    private int _swapChainColumn = -1;
-    private int _frameTimeColumn = -1;
-    private int _latencyColumn = -1;
     private DateTime _lastFrameAt;
 
     /// <summary>
@@ -325,7 +345,11 @@ public sealed class FpsMonitor : IDisposable
             if (now - chain.LastFrameAt > LiveWithin)
                 continue;
 
-            if (busiest is null || chain.Count > busiest.Count)
+            // Ties on Count broken by Seen: Count stops at the buffer's 3600,
+            // so a game and an overlay both presenting long enough were equal,
+            // and whichever the dictionary listed first won - the overlay too.
+            if (busiest is null || chain.Count > busiest.Count
+                || (chain.Count == busiest.Count && chain.Totals.Seen > busiest.Totals.Seen))
                 busiest = chain;
         }
 
@@ -358,10 +382,34 @@ public sealed class FpsMonitor : IDisposable
             {
                 SwapChain? main = null;
                 foreach (var chain in _chains.Values)
-                    if (main is null || chain.Totals.Frames > main.Totals.Frames)
+                    // Seen, not Frames: a game still on its loading screen holds
+                    // its frames back, and an overlay would win on Frames alone.
+                    if (main is null || chain.Totals.Seen > main.Totals.Seen)
                         main = chain;
 
                 return main is null ? new FrameStats() : main.Totals.Copy();
+            }
+        }
+    }
+
+    // Below SessionTotals rather than between its doc comment and it, where
+    // it had been put: that left SessionTotals undocumented and this with two.
+    /// <summary>
+    /// Whether the game's chain - the one <see cref="SessionTotals"/> would
+    /// take - is past its loading screen. Asked every tick for the timeline,
+    /// so without the copy SessionTotals makes.
+    /// </summary>
+    public bool SessionSettled
+    {
+        get
+        {
+            lock (_lock)
+            {
+                SwapChain? main = null;
+                foreach (var chain in _chains.Values)
+                    if (main is null || chain.Totals.Seen > main.Totals.Seen)
+                        main = chain;
+                return main?.Totals.Settled ?? false;
             }
         }
     }
@@ -443,9 +491,6 @@ public sealed class FpsMonitor : IDisposable
         {
             generation = ++_generation;
             _chains.Clear();
-            _swapChainColumn = -1;
-            _frameTimeColumn = -1;
-            _latencyColumn = -1;
             _lastFrameAt = DateTime.UtcNow;
         }
 
@@ -560,19 +605,41 @@ public sealed class FpsMonitor : IDisposable
             info.ArgumentList.Add(arg);
         }
 
+        var run = new OutputRun(generation);
+        run.Handler = (_, e) => OnOutputLine(run, e);
+
         var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-        process.OutputDataReceived += OnOutputLine;
+        process.OutputDataReceived += run.Handler;
         process.Exited += OnPresentMonExited;   // dying mid-game is noticed - see NeedsRestart
         process.ErrorDataReceived += (_, _) => { };   // drain, or the pipe can fill and block
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+
+        // A start that fails lets go of the process, handlers and all: Launch
+        // only reports the error, and each failed restart - up to three a
+        // game - used to leave one behind. One that started and then failed
+        // to be read is ended too, or it would run unread until the game closed.
+        bool started = false;
+        try
+        {
+            started = process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+        }
+        catch
+        {
+            process.OutputDataReceived -= run.Handler;
+            process.Exited -= OnPresentMonExited;
+            if (started)
+                try { process.Kill(entireProcessTree: true); } catch { }
+            process.Dispose();
+            throw;
+        }
 
         lock (_lock)
         {
             if (generation == _generation)
             {
                 _process = process;
+                _run = run;
                 _exePath = exe;
                 _starting = false;
             }
@@ -590,7 +657,7 @@ public sealed class FpsMonitor : IDisposable
         // Overtaken while it started - the game was left, or another took
         // over. Shut down here, before anything later on the queue can start
         // a run under the same session name.
-        StopRun(process, exe);
+        StopRun(process, exe, run.Handler);
     }
 
     /// <summary>
@@ -754,14 +821,18 @@ public sealed class FpsMonitor : IDisposable
     {
         Process? process;
         string? exe;
+        DataReceivedEventHandler? handler;
         lock (_lock)
         {
-            // A start still queued or under way sees this and gives up.
+            // A start still queued or under way sees this and gives up - and
+            // so does any line of the old run still on its way, see OnOutputLine.
             _generation++;
 
             process = _process;
             exe = _exePath;
+            handler = _run?.Handler;
             _process = null;
+            _run = null;
             _exePath = null;
 
             // Forgotten now rather than when the process is gone: the caller
@@ -780,26 +851,28 @@ public sealed class FpsMonitor : IDisposable
         // wait behind a start still checking PresentMon's signature, and the
         // lines the old run printed meanwhile landed in the chains just
         // cleared - the next run's, a game switched to or tabbed back into.
-        process.OutputDataReceived -= OnOutputLine;
+        if (handler is not null)
+            process.OutputDataReceived -= handler;
 
         // Off the UI thread, on the same queue as the starts. A clean shutdown
         // starts a helper process and waits for two processes to exit - up to
         // five seconds - and this runs every time you tab out of an
         // exclusive-fullscreen game.
-        _lifecycle = _lifecycle.ContinueWith(_ => StopRun(process, exe),
+        _lifecycle = _lifecycle.ContinueWith(_ => StopRun(process, exe, handler),
                                              System.Threading.CancellationToken.None,
                                              System.Threading.Tasks.TaskContinuationOptions.None,
                                              System.Threading.Tasks.TaskScheduler.Default);
     }
 
     /// <summary>Ends one PresentMon run and lets go of it. On the lifecycle queue.</summary>
-    private void StopRun(Process process, string? exe)
+    private void StopRun(Process process, string? exe, DataReceivedEventHandler? handler)
     {
         // Unhooked first, so lines PresentMon prints while it shuts down can't
         // refill the chains - those frames would otherwise be counted into the
         // session after it was meant to have stopped. Stop has usually done
         // this already; for a run overtaken while it started, this is the one.
-        process.OutputDataReceived -= OnOutputLine;
+        if (handler is not null)
+            process.OutputDataReceived -= handler;
 
         // Named for the freeze log - see Activity. Allowed its five seconds
         // of clean shutdown before it counts as slow.
@@ -871,23 +944,26 @@ public sealed class FpsMonitor : IDisposable
     /// header row, because which columns appear depends on the tracking flags
     /// and on the PresentMon version.
     /// </summary>
-    private void OnOutputLine(object sender, DataReceivedEventArgs e)
+    /// <param name="run">The run this line came from - see <see cref="OutputRun"/>.</param>
+    private void OnOutputLine(OutputRun run, DataReceivedEventArgs e)
     {
         string? line = e.Data;
         if (string.IsNullOrEmpty(line))
             return;
 
-        if (_frameTimeColumn < 0)
+        if (run.FrameTimeColumn < 0)
         {
             if (line.StartsWith("Application,", StringComparison.OrdinalIgnoreCase))
             {
                 var columns = line.Split(',');
-                _swapChainColumn = Array.FindIndex(columns, c => c.Equals("SwapChainAddress", StringComparison.OrdinalIgnoreCase));
-                _frameTimeColumn = Array.FindIndex(columns, c => c.Equals("FrameTime", StringComparison.OrdinalIgnoreCase));
+                run.SwapChainColumn = Array.FindIndex(columns, c => c.Equals("SwapChainAddress", StringComparison.OrdinalIgnoreCase));
+                run.FrameTimeColumn = Array.FindIndex(columns, c => c.Equals("FrameTime", StringComparison.OrdinalIgnoreCase));
 
-                _latencyColumn = FindLatencyColumn(columns);
+                run.LatencyColumn = FindLatencyColumn(columns);
 
-                if (_frameTimeColumn < 0)
+                // Only for the run still wanted: an old one's header must not
+                // put its error on the new run's tooltip.
+                if (run.FrameTimeColumn < 0 && IsCurrent(run.Generation))
                     Error = "PresentMon output has no FrameTime column";
             }
             return;
@@ -896,7 +972,7 @@ public sealed class FpsMonitor : IDisposable
         // Parsed by span, not Split: this runs once per presented frame, so at
         // 144 fps a string[] per line would be a few hundred KB of garbage a
         // second for two values.
-        if (!TryGetField(line, _frameTimeColumn, out var frameTimeText) ||
+        if (!TryGetField(line, run.FrameTimeColumn, out var frameTimeText) ||
             !double.TryParse(frameTimeText, NumberStyles.Float, CultureInfo.InvariantCulture, out double frameTime) ||
             frameTime <= 0)
             return;
@@ -904,13 +980,18 @@ public sealed class FpsMonitor : IDisposable
         // The last chain's key reused when the field is the same one, which it
         // nearly always is: made fresh, it was a new string for every frame.
         string swapChain = "0";
-        if (_swapChainColumn >= 0 && TryGetField(line, _swapChainColumn, out var swapChainText))
-            swapChain = _lastChain is { } last && swapChainText.SequenceEqual(last)
+        if (run.SwapChainColumn >= 0 && TryGetField(line, run.SwapChainColumn, out var swapChainText))
+            swapChain = run.LastChain is { } last && swapChainText.SequenceEqual(last)
                 ? last
-                : _lastChain = swapChainText.ToString();
+                : run.LastChain = swapChainText.ToString();
 
         lock (_lock)
         {
+            // A line of a run that has been stopped or replaced, already on its
+            // way when its handler was unhooked: not this run's frame.
+            if (run.Generation != _generation)
+                return;
+
             if (!_chains.TryGetValue(swapChain, out var chain))
             {
                 // A launcher came and went, or the game recreated its chain on
@@ -930,8 +1011,8 @@ public sealed class FpsMonitor : IDisposable
             // leaves the column blank, which TryGetField reports as missing -
             // and a zero would drag the average toward a latency that never
             // happened.
-            if (_latencyColumn >= 0 &&
-                TryGetField(line, _latencyColumn, out var latencyText) &&
+            if (run.LatencyColumn >= 0 &&
+                TryGetField(line, run.LatencyColumn, out var latencyText) &&
                 double.TryParse(latencyText, NumberStyles.Float, CultureInfo.InvariantCulture, out double latency) &&
                 latency > 0)
             {

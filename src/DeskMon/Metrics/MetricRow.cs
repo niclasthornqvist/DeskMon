@@ -821,7 +821,9 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
 
     private void Set<T>(ref T field, T value, string name)
     {
-        if (Equals(field, value)) return;
+        // The typed comparer, not object.Equals: that boxed every double and
+        // bool twice, several properties a row, every row, every tick.
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }

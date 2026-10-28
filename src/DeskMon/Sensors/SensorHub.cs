@@ -53,6 +53,8 @@ public sealed class SensorHub : IDisposable
     // Resolved once in the constructor; null means "this machine doesn't report it".
     private ISensor? _cpuTemp;
     private ISensor? _cpuPower;
+    /// <summary>The busiest core's load - see SensorSnapshot.CpuCoreMax.</summary>
+    private ISensor? _cpuCoreMax;
     private ISensor[] _cpuClocks = Array.Empty<ISensor>();
     private ISensor? _gpuTemp;
     private ISensor? _gpuLoad;
@@ -248,6 +250,7 @@ public sealed class SensorHub : IDisposable
                        ?? Hottest(cpu);
 
             _cpuPower = Find(cpu, SensorType.Power, "Package", "CPU Package", "CPU Cores");
+            _cpuCoreMax = Find(cpu, SensorType.Load, "CPU Core Max", "Core Max");
 
             _cpuClocks = Sensors(cpu)
                 .Where(s => s.SensorType == SensorType.Clock
@@ -341,6 +344,7 @@ public sealed class SensorHub : IDisposable
         snapshot.CpuTemp = hardware.CpuTemp;
         snapshot.CpuPower = hardware.CpuPower;
         snapshot.CpuClock = hardware.CpuClock;
+        snapshot.CpuCoreMax = hardware.CpuCoreMax;
         snapshot.GpuTemp = hardware.GpuTemp;
         snapshot.GpuLoad = hardware.GpuLoad;
         snapshot.GpuMemoryLoad = hardware.GpuMemoryLoad;
@@ -396,6 +400,7 @@ public sealed class SensorHub : IDisposable
                     CpuTemp = _cpuTemp?.Value,
                     CpuPower = _cpuPower?.Value,
                     CpuClock = HighestClock(),
+                    CpuCoreMax = _cpuCoreMax?.Value,
                     GpuTemp = _gpuTemp?.Value,
                     GpuLoad = _gpuLoad?.Value,
                     GpuMemoryLoad = _gpuMemoryLoad?.Value,
@@ -427,6 +432,7 @@ public sealed class SensorHub : IDisposable
         public double? CpuTemp { get; init; }
         public double? CpuPower { get; init; }
         public double? CpuClock { get; init; }
+        public double? CpuCoreMax { get; init; }
         public double? GpuTemp { get; init; }
         public double? GpuLoad { get; init; }
         public double? GpuMemoryLoad { get; init; }

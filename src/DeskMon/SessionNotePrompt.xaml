@@ -1,0 +1,43 @@
+<Window x:Class="DeskMon.SessionNotePrompt"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DeskMon - session note"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        ShowActivated="False" SizeToContent="Height" Width="340">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <!-- The card asked for a note as a game quits - see SessionNotePrompt.xaml.cs.
+         Not activated when shown: it must never take the keyboard from
+         whatever was opened right after the game. Clicked, it takes it. -->
+    <Border x:Name="Card" CornerRadius="8" BorderThickness="1" Padding="12,10,12,0" Margin="6">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.55" Color="Black" />
+        </Border.Effect>
+        <StackPanel>
+            <TextBlock x:Name="Summary" TextTrimming="CharacterEllipsis" />
+            <TextBlock x:Name="Question" Text="Anything to note?" Margin="0,6,0,4" />
+            <TextBox x:Name="NoteBox" Style="{StaticResource DarkTextBox}" MinHeight="26" MaxHeight="90"
+                     TextWrapping="Wrap" AcceptsReturn="False" VerticalScrollBarVisibility="Auto"
+                     PreviewKeyDown="NoteBox_PreviewKeyDown" TextChanged="NoteBox_TextChanged" />
+            <DockPanel Margin="0,8,0,8">
+                <TextBlock x:Name="Hint" VerticalAlignment="Center" Text="Enter saves  ·  Esc skips" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="SkipButton" Style="{StaticResource PanelButton}" Content="SKIP"
+                            Margin="0,0,6,0" Padding="10,3" Click="Skip_Click" />
+                    <Button x:Name="SaveButton" Style="{StaticResource AccentButton}" Content="SAVE"
+                            Padding="12,3" Click="Save_Click" />
+                </StackPanel>
+            </DockPanel>
+            <!-- How long before it closes by itself, shrinking to nothing. Gone
+                 once you start typing: from then it stays until you answer. -->
+            <Border x:Name="Countdown" Height="2" HorizontalAlignment="Left" CornerRadius="1" Margin="-12,0,0,0" />
+        </StackPanel>
+    </Border>
+</Window>

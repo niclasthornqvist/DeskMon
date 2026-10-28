@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 
 namespace DeskMon.Sensors;
 
@@ -39,11 +40,129 @@ public sealed class FrameStats
     private long _paced;
     private double _pacedMs, _squares;
 
+    // --- Loading left out ------------------------------------------------------
+    //
+    // Leaving out only frames of 100 ms or more wasn't enough. Factorio reading
+    // its mods draws its loading screen at 10-20 fps - frames of 50-100 ms - for
+    // half a minute or more, and that alone took a game holding 60 in play to
+    // an average of 49-57, a 1% low of 5-11, hundreds of "stutters" and a Poor
+    // score. So a run's frames only count once the game is playing: ten whole
+    // seconds in a row with no frame of 50 ms or more. Everything before that
+    // is the loading screen and is left out of every figure.
+    //
+    // A game that never gets there - one that hitches every few seconds, or
+    // simply runs at under 20 fps - would lose its whole session that way, so
+    // after three minutes without settling everything held back counts after
+    // all, as it did before. A session that ends before settling counts in
+    // full too, see Add(FrameStats).
+
+    /// <summary>Slower than this is a loading frame while the run hasn't settled: 20 fps.</summary>
+    private const double LoadingFrameMs = 50;
+
+    /// <summary>Whole clean seconds in a row that say the game is playing.</summary>
+    private const int SettleSeconds = 10;
+
+    /// <summary>How long to wait for that before counting everything anyway.</summary>
+    private const double GiveUpMs = 180_000;
+
+    /// <summary>Whether this one waits out the loading screen - only a live run's; see the constructor.</summary>
+    private readonly bool _skipLoading;
+    private bool _settled;
+
+    /// <summary>Held back while unsettled: the loading frames, the clean streak so far, and the second in progress.</summary>
+    private FrameStats? _loading, _streak, _second;
+    private int _cleanSeconds;
+    private bool _secondClean = true;
+
+    /// <param name="skipLoading">
+    /// Wait for the game to settle before counting - for a swap chain's live
+    /// frames. Off for totals that are only added together from runs, which
+    /// were each settled already.
+    /// </param>
+    public FrameStats(bool skipLoading = false)
+    {
+        _skipLoading = skipLoading;
+        _settled = !skipLoading;
+    }
+
     public void Add(double frameMs)
     {
         if (frameMs <= 0 || double.IsNaN(frameMs))
             return;
 
+        if (!_settled)
+        {
+            Hold(frameMs);
+            return;
+        }
+
+        Count(frameMs);
+    }
+
+    /// <summary>A frame while unsettled: into the second in progress, and each whole second judged on its own.</summary>
+    private void Hold(double frameMs)
+    {
+        _loading ??= new FrameStats();
+        _streak ??= new FrameStats();
+        _second ??= new FrameStats();
+
+        _second.Count(frameMs);
+        if (frameMs >= LoadingFrameMs)
+            _secondClean = false;
+
+        if (_second.TotalMs < 1000)
+            return;
+
+        if (_secondClean)
+        {
+            _streak.Add(_second);
+            _cleanSeconds++;
+        }
+        else
+        {
+            // A slow frame breaks the streak: it and the streak before it were
+            // still the loading screen.
+            _loading.Add(_streak);
+            _loading.Add(_second);
+            _streak = new FrameStats();
+            _cleanSeconds = 0;
+        }
+        _second = new FrameStats();
+        _secondClean = true;
+
+        if (_cleanSeconds >= SettleSeconds)
+        {
+            // Playing: the clean streak is play and counts, the loading is
+            // dropped - but its length kept, so the log can say how much was
+            // left out and a wrong guess shows.
+            Add(_streak);
+            LoadingMs += _loading.TotalMs;
+            Settle();
+        }
+        else if (_loading.TotalMs + _streak.TotalMs >= GiveUpMs)
+        {
+            // Never settled: count it all rather than lose the session.
+            Add(_loading);
+            Add(_streak);
+            Settle();
+        }
+    }
+
+    /// <summary>
+    /// The loading screen time left out of every figure, across every run
+    /// added in - for the log's "loading 38 s". Zero when nothing was cut,
+    /// or when a run never settled and so counted in full.
+    /// </summary>
+    public double LoadingMs { get; private set; }
+
+    private void Settle()
+    {
+        _settled = true;
+        _loading = _streak = _second = null;
+    }
+
+    private void Count(double frameMs)
+    {
         int bin = Math.Min(Bins, (int)(frameMs / BinMs));
         _counts[bin]++;
         _sums[bin] += frameMs;
@@ -77,7 +196,22 @@ public sealed class FrameStats
         _paced += other._paced;
         _pacedMs += other._pacedMs;
         _squares += other._squares;
+        LoadingMs += other.LoadingMs;
+
+        // A run that ended - or is read - before it settled hands over what
+        // it held back as well: a short session is all loading or all play,
+        // and either way dropping it would leave nothing to show.
+        if (!other._settled)
+            foreach (var held in new[] { other._loading, other._streak, other._second })
+                if (held is not null)
+                    Add(held);
     }
+
+    /// <summary>Whether the loading screen is over and frames count - for the timeline, which shades the part before.</summary>
+    public bool Settled => _settled;
+
+    /// <summary>Every frame added, counted or held back - for telling which chain is the game's.</summary>
+    public long Seen => Frames + (_loading?.Frames ?? 0) + (_streak?.Frames ?? 0) + (_second?.Frames ?? 0);
 
     public FrameStats Copy()
     {
@@ -139,20 +273,7 @@ public sealed class FrameStats
             if (Frames < OnePercentFloor)
                 return null;
 
-            // The median: the bin the middle frame falls in, by its frames'
-            // own average - within a quarter millisecond either way.
-            long half = (Frames + 1) / 2, seen = 0;
-            double median = 0;
-            for (int i = 0; i <= Bins; i++)
-            {
-                seen += _counts[i];
-                if (seen >= half)
-                {
-                    median = _counts[i] > 0 ? _sums[i] / _counts[i] : (i + 0.5) * BinMs;
-                    break;
-                }
-            }
-
+            double median = Median();
             double threshold = Math.Max(2.5 * median, median + 8);
 
             // Whole bins from the one the threshold starts in, short of the
@@ -162,6 +283,57 @@ public sealed class FrameStats
                 if (_counts[i] > 0 && _sums[i] / _counts[i] >= threshold)
                     stutters += _counts[i];
             return stutters;
+        }
+    }
+
+    /// <summary>
+    /// The median frame time: the bin the middle frame falls in, by its
+    /// frames' own average - within a quarter millisecond either way.
+    /// </summary>
+    private double Median()
+    {
+        long half = (Frames + 1) / 2, seen = 0;
+        for (int i = 0; i <= Bins; i++)
+        {
+            seen += _counts[i];
+            if (seen >= half)
+                return _counts[i] > 0 ? _sums[i] / _counts[i] : (i + 0.5) * BinMs;
+        }
+        return 0;
+    }
+
+    /// <summary>The usual frame caps and refresh rates a cap is snapped to - 59.6 is a 60 cap.</summary>
+    private static readonly int[] CommonCaps = { 30, 40, 45, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 170, 180, 200, 240, 280, 300, 360 };
+
+    /// <summary>
+    /// The frame rate the game was held at, when nearly every frame sat at
+    /// one rate: 80% or more within 4% of the median frame time. That is a
+    /// frame cap or V-Sync - Factorio's 60 - and a target above it can never
+    /// be met however well the game runs, so the session history offers it
+    /// as the game's own target. Snapped to a usual cap when within 3% of
+    /// one. Null when the frame rate moved about, as an uncapped game's does.
+    /// </summary>
+    public int? CapFps
+    {
+        get
+        {
+            if (Frames < OnePercentFloor)
+                return null;
+
+            double median = Median();
+            if (median <= 0)
+                return null;
+
+            long near = 0;
+            for (int i = 0; i < Bins; i++)
+                if (_counts[i] > 0 && Math.Abs(_sums[i] / _counts[i] - median) <= median * 0.04)
+                    near += _counts[i];
+            if (near < Frames * 0.8)
+                return null;
+
+            double fps = 1000 / median;
+            int nearest = CommonCaps.MinBy(c => Math.Abs(c - fps));
+            return Math.Abs(nearest - fps) <= nearest * 0.03 ? nearest : (int)Math.Round(fps);
         }
     }
 

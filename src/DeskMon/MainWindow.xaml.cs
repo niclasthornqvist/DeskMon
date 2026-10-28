@@ -165,6 +165,15 @@ public partial class MainWindow : Window
     /// </summary>
     private FrameStats _sessionStats = new();
 
+    /// <summary>The open session over time - see SessionTimeline. Null with no session open.</summary>
+    private SessionTimeline? _timeline;
+
+    /// <summary>What held the open session's frame rate back - see Bottleneck. Null with no session open.</summary>
+    private Bottleneck? _bottleneck;
+
+    /// <summary>The ping's counts when the session began, so it logs its own share - see PingTotals.</summary>
+    private PingTotals _pingAtStart;
+
     /// <summary>
     /// Sessions shorter than this are not written to the history. A game that
     /// was launched and quit, or a window briefly mistaken for one, should not
@@ -915,6 +924,29 @@ public partial class MainWindow : Window
                     snapshot.Ping = _ping.Latest;
                 }
 
+                // The session over time, for the history's timeline. The frame
+                // rate only from the session's own game, as HarvestFrames takes
+                // it - an overlay in front isn't the game - and flagged while
+                // its loading screen is still being left out, so the chart can
+                // shade what the figures don't count.
+                if (_sessionPid != 0 && _timeline is not null)
+                {
+                    bool ours = _inGame && _gamePid == _sessionPid;
+                    bool settled = ours && _fps.SessionSettled;
+
+                    // What held it back this moment - only once the loading
+                    // screen is over, which would read as "other" for minutes.
+                    var limit = settled
+                        ? Bottleneck.Judge(snapshot.Fps, PerformanceScore.TargetFor(_sessionGame),
+                                           snapshot.GpuLoad, snapshot.CpuCoreMax, snapshot.CpuLoad)
+                        : null;
+                    var now = DateTime.Now;
+                    _bottleneck?.Add(now, limit);
+
+                    _timeline.Sample(now, ours ? snapshot.Fps : null, ours ? snapshot.FpsOnePercentLow : null,
+                                     snapshot.CpuTemp, snapshot.GpuTemp, ours && !settled, _ping.Latest, limit);
+                }
+
                 if (!_detailsBuilt)
                     BuildDetailRows(snapshot);
 
@@ -1537,6 +1569,10 @@ public partial class MainWindow : Window
     /// every tick: SetSuffix only redraws when the text actually changed, which
     /// in tenths of an hour is every six minutes.
     /// </summary>
+    /// <summary>The heading as last built, for the game name and whole minute it was built for - see UpdateGameTitle.</summary>
+    private string? _titleFor, _titleText;
+    private long _titleMinute;
+
     private void UpdateGameTitle()
     {
         string title = NoGameTitle;
@@ -1547,9 +1583,25 @@ public partial class MainWindow : Window
             // is open - an overlay - rather than "(playtime: 0 min)": it has no
             // session of its own, so zero would be a made-up figure.
             // The name alone, too, while the playtime is still being looked up.
-            title = _sessionPid == _gamePid && _sessionPlayedKnown
-                ? $"{name} (playtime: {GamePlaytime.Describe(_sessionPlayedBefore + (DateTime.Now - _sessionStartedAt))})"
-                : name;
+            if (_sessionPid == _gamePid && _sessionPlayedKnown)
+            {
+                // Built again only when the minute moves - the finest the
+                // playtime is ever written in - rather than a new string
+                // every tick for a heading that changes every few minutes.
+                var played = _sessionPlayedBefore + (DateTime.Now - _sessionStartedAt);
+                long minute = (long)played.TotalMinutes;
+                if (!ReferenceEquals(name, _titleFor) || minute != _titleMinute || _titleText is null)
+                {
+                    _titleFor = name;
+                    _titleMinute = minute;
+                    _titleText = $"{name} (playtime: {GamePlaytime.Describe(played)})";
+                }
+                title = _titleText;
+            }
+            else
+            {
+                title = name;
+            }
         }
 
         foreach (var section in _gameSections)
@@ -1598,6 +1650,9 @@ public partial class MainWindow : Window
         _sessionGame = game;
         _sessionStartedAt = DateTime.Now;
         _sessionStats = new FrameStats();
+        _timeline = new SessionTimeline(_sessionStartedAt);
+        _bottleneck = new Bottleneck();
+        _pingAtStart = _ping.Totals;
         _sessionEnergyWh = null;
         _lastEnergyAt = default;
         _sessionDriver = _sessionBuild = null;
@@ -1815,6 +1870,9 @@ public partial class MainWindow : Window
 
         var frames = _sessionStats;
         var extras = SessionExtras();
+        var timeline = _timeline;
+        _timeline = null;
+        _bottleneck = null;
 
         _sessionProcess?.Dispose();
         _sessionProcess = null;
@@ -1839,6 +1897,10 @@ public partial class MainWindow : Window
 
         // Queued, not written here: this runs in the tick, and a busy disk
         // froze every window as the game quit. The windows redraw once it lands.
+        // The timeline first, so it is on disk by the time the line's
+        // RefreshAfterSession redraws the history and looks for it.
+        if (timeline is not null)
+            _sessions.SaveTimelineLater(game, timeline);
         _sessions.AppendLater(game, DescribeSession(started, ended, frames, extras, note), RefreshAfterSession);
     }
 
@@ -1877,6 +1939,11 @@ public partial class MainWindow : Window
         // Queued on the writer, off the tick - see FinishSession. Counted as
         // logged straight away: a write that fails after all is in error.log,
         // which beats the tick waiting on the disk to find out.
+        // The timeline as it stands - the game has gone, so nothing more
+        // comes in unless it is back within the grace and the session goes on.
+        if (_timeline is not null)
+            _sessions.SaveTimelineLater(_sessionGame, _timeline);
+
         _loggedLine = line;
         _sessions.AppendLater(_sessionGame, line, RefreshAfterSession);
 
@@ -1884,6 +1951,97 @@ public partial class MainWindow : Window
         // time the saved copy goes, so a crash in between can't lose it, and a
         // recovery after one can't add it twice.
         _sessions.ClearOpenSession();
+
+        AskForNote(_sessionGame, line);
+    }
+
+    /// <summary>The "Anything to note?" card on screen, if any - one at a time.</summary>
+    private SessionNotePrompt? _notePrompt;
+
+    /// <summary>
+    /// The card asking for a note on the session just logged - see
+    /// SessionNotePrompt. Here, where the line is written as the game quits,
+    /// so it comes while the evening is fresh, and only for a session long
+    /// enough to be logged. Not while another game has already taken the
+    /// screen: the card would sit over it.
+    /// </summary>
+    private void AskForNote(string game, string line)
+    {
+        if (!_settings.AskNoteAfterGame || (_inGame && _gamePid != _sessionPid))
+            return;
+        if (SessionRecord.Parse(line) is not { } session)
+            return;
+        session.Game = game;   // for its score, which may use the game's own target
+
+        string summary = $"{game}  ·  {SessionRecord.Describe(session.Length)}";
+        if (session.AverageFps is double fps)
+            summary += $"  ·  {fps:0} fps";
+        if (PerformanceScore.For(session) is { } score)
+            summary += $"  ·  score {score.Score}";
+
+        string heading = $"Session {session.Start.ToString("ddd d MMM, HH:mm", System.Globalization.CultureInfo.InvariantCulture)}" +
+                         $"–{session.End:HH:mm}  ·  {SessionRecord.Describe(session.Length)}";
+
+        SaveTypedSessionNote();   // a card still up with a note typed in it is not thrown away for the new one
+        _notePrompt?.Close();
+        var prompt = new SessionNotePrompt(_theme, summary, new Rect(Left, Top, ActualWidth, ActualHeight), async note =>
+        {
+            // Said in the tray when it fails: the card is gone by then, and
+            // a note typed and lost without a word would be worse than none.
+            // Through the notes window only when there is one: otherwise the
+            // file is all there is to write, and making the window for it
+            // would load the notes for nothing.
+            try
+            {
+                string? error = _notes is { } notes
+                    ? await notes.AppendSessionNoteAsync(game, heading, note)
+                    : await Task.Run(() => NotesWindow.AppendToFile(_notesStore, _theme.AccentColor, game, heading, note));
+                if (error is not null)
+                    _tray?.Notify("DeskMon", $"The session note couldn't be added to {game}'s notes: {error}.", warning: true);
+            }
+            catch (Exception ex)
+            {
+                App.Log("adding a session note", ex);
+                _tray?.Notify("DeskMon", $"The session note couldn't be added to {game}'s notes.", warning: true);
+            }
+        });
+        prompt.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_notePrompt, prompt))
+                _notePrompt = null;
+        };
+        _notePrompt = prompt;
+        _notePromptFor = (game, heading);
+        prompt.Show();
+    }
+
+    /// <summary>The game and heading the card on screen is for - see SaveTypedSessionNote.</summary>
+    private (string Game, string Heading) _notePromptFor;
+
+    /// <summary>
+    /// A note typed into the card but not saved yet, saved now - for DeskMon
+    /// going away, or a new card taking its place. It used to be closed with
+    /// the rest and the note lost without a word. Waits for the disk: on the
+    /// way out there is no later moment for a background write to finish in.
+    /// </summary>
+    private void SaveTypedSessionNote()
+    {
+        if (_notePrompt?.TakeTypedNote() is not { Length: > 0 } note)
+            return;
+
+        var (game, heading) = _notePromptFor;
+        try
+        {
+            string? error = _notes is { } notes
+                ? notes.AppendSessionNote(game, heading, note)
+                : NotesWindow.AppendToFile(_notesStore, _theme.AccentColor, game, heading, note);
+            if (error is not null)
+                App.Log("adding a session note", error);
+        }
+        catch (Exception ex)
+        {
+            App.Log("adding a session note", ex);
+        }
     }
 
     /// <summary>
@@ -1962,12 +2120,20 @@ public partial class MainWindow : Window
         string? note = _sessionExitedAt is null ? "cut short, DeskMon stopped unexpectedly" : null;
 
         _sessions.SaveOpenSession(_sessionGame, DescribeSession(_sessionStartedAt, ended, frames, SessionExtras(), note));
+
+        // The timeline with it, so a crash keeps the curve as well as the line.
+        if (_timeline is not null)
+            _sessions.SaveTimelineLater(_sessionGame, _timeline);
     }
 
     /// <summary>What the line carries besides the frames and peaks: the energy, the driver and the build.</summary>
-    private sealed record SessionExtrasInfo(double? EnergyWh, string? Driver, string? WindowsBuild);
+    /// <param name="Limits">The log's "limit gpu 72 cpu 18 ..." part, or null.</param>
+    /// <param name="Ping">The log's "ping 18 ms ±6 loss 0.4 %" part, or null.</param>
+    private sealed record SessionExtrasInfo(double? EnergyWh, string? Driver, string? WindowsBuild, string? Limits, string? Ping);
 
-    private SessionExtrasInfo SessionExtras() => new(_sessionEnergyWh, _sessionDriver, _sessionBuild);
+    private SessionExtrasInfo SessionExtras()
+        => new(_sessionEnergyWh, _sessionDriver, _sessionBuild,
+               _bottleneck?.ToLogPart(), _ping.Totals.Since(_pingAtStart).ToLogPart());
 
     /// <summary>
     /// Adds what PresentMon has counted so far to the session's running totals,
@@ -2042,7 +2208,14 @@ public partial class MainWindow : Window
         // Frame times, averaged and then inverted - not an average of rates;
         // the same reasoning as FpsMonitor's percentiles.
         if (frames.AverageFps is double average)
+        {
             line.Append($" · avg {average:0} fps");
+
+            // The loading screen the figures leave out (see FrameStats), even
+            // at 0 s: a wrong guess then shows in the log, and a line without
+            // it says it was logged before loading screens were left out.
+            line.Append(FormattableString.Invariant($" · loading {Math.Round(frames.LoadingMs / 1000):0} s"));
+        }
 
         // Over the whole session, unlike the LOW and WORST peaks further on,
         // which are the lowest the widget's last-25-seconds figure dipped to -
@@ -2058,6 +2231,18 @@ public partial class MainWindow : Window
         // The hitches the average and the lows can hide - see FrameStats.Stutters.
         if (frames.Stutters is long stutters)
             line.Append(FormattableString.Invariant($" · stutters {stutters}"));
+
+        // A frame cap the game sat at - see FrameStats.CapFps - for the session
+        // history to offer as the game's own target.
+        if (frames.CapFps is int cap)
+            line.Append(FormattableString.Invariant($" · cap {cap} fps"));
+
+        // What held the frame rate back, and how the connection was - see
+        // Bottleneck and PingTotals. Each left out when there was too little to say.
+        if (extras.Limits is { } limits)
+            line.Append($" · {limits}");
+        if (extras.Ping is { } ping)
+            line.Append($" · {ping}");
 
         // CPU and GPU only, not the PC from the wall - the LOG window says so.
         if (extras.EnergyWh is double energy)
@@ -3689,6 +3874,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void PrepareForShutdown()
     {
+        // First, while the notes window can still take it - see SaveTypedSessionNote.
+        SaveTypedSessionNote();
+        _notePrompt?.Close();
+
         if (_notes is not null)
         {
             _notes.SaveNow();
@@ -3768,6 +3957,11 @@ public partial class MainWindow : Window
         // chance to write it at all and losing the evening would be worse, but
         // the line says so: nothing measured it after this point.
         FinishSession("cut short, DeskMon closed");
+
+        // For a close that didn't come through PrepareForShutdown - Windows
+        // logging off. A no-op when it did.
+        SaveTypedSessionNote();
+        _notePrompt?.Close();
 
         if (_notes is not null)
         {

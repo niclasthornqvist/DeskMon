@@ -208,6 +208,7 @@ public static class SettingsCatalogue
             new Setting("PauseWhenFullscreen", "Hide during games", "Hide the widget completely while a game is in front."),
             new Setting("GameLayout", "Separate layout for games", "Sections folded in a game are remembered apart from the desktop's."),
             new Setting("GameStartCheck", "Check what runs beside a game", "After 20 s, warn about a heavy browser, Windows Update or a virus scan."),
+            new Setting("AskNoteAfterGame", "Ask for a note when a game quits", "A small card by the widget; the note goes at the end of the game's notes."),
             new Setting("PingHost", "Ping server", "Pinged every 2 s in games for the PING row. Empty pings nothing."),
             new Setting("NotGames", "Never treat as a game", "Fullscreen browsers and video players, for example.", Wide: true, Kind: EditorKind.ProgramList),
             new Setting("AlwaysGames", "Always treat as a game", "Games played in a window, which aren't noticed otherwise.", Wide: true, Kind: EditorKind.ProgramList)),

@@ -45,6 +45,30 @@ public sealed class SessionRecord
     public double? PointOnePercentLow { get; private init; }
     public double? JitterMs { get; private init; }
 
+    /// <summary>
+    /// The loading screen left out of the frame figures - see FrameStats.
+    /// Null before 1.73, whose figures still counted it: those sessions' lows
+    /// and score can read lower than the game ran, and their tooltip says so.
+    /// </summary>
+    public TimeSpan? LoadingLeftOut { get; private init; }
+
+    /// <summary>What held the frame rate back, as shares of play in percent - see Bottleneck. Null before 1.73.</summary>
+    public IReadOnlyDictionary<Bottleneck.Kind, int>? Limits { get; private init; }
+
+    /// <summary>
+    /// The connection over the session: average ping, jitter (ms) and the share
+    /// of pings lost - see PingTotals. Null before 1.73, or with no ping host set.
+    /// </summary>
+    public double? PingMs { get; private init; }
+    public double? PingJitterMs { get; private init; }
+    public double? PingLossPercent { get; private init; }
+
+    /// <summary>The frame cap the game sat at - see FrameStats.CapFps. Null when it wasn't held at one, or before 1.73.</summary>
+    public int? CapFps { get; private init; }
+
+    /// <summary>A measured session from before loading screens were left out - see <see cref="LoadingLeftOut"/>.</summary>
+    public bool CountedLoading => AverageFps is not null && LoadingLeftOut is null;
+
     /// <summary>How many frames were stutters - see FrameStats.Stutters. Null before 1.65.</summary>
     public long? Stutters { get; private init; }
 
@@ -134,6 +158,13 @@ public sealed class SessionRecord
 
     private static readonly Regex StutterPart = new(@"^stutters (?<n>\d+)$");
 
+    private static readonly Regex LoadingPart = new(@"^loading (?<s>\d+) s$");
+
+    private static readonly Regex CapPart = new(@"^cap (?<fps>\d+) fps$");
+
+    // Lower-case "ping", unlike the PING peak ("PING ↑17 ms"), which PeakPart reads.
+    private static readonly Regex PingPart = new(@"^ping (?<ms>[\d.]+) ms ±(?<jitter>[\d.]+) loss (?<loss>[\d.]+) %$");
+
     private static readonly Regex EnergyPart = new(@"^energy (?<wh>[\d.]+) Wh$");
 
     // Before PeakPart, which "driver 581.57" doesn't match anyway (no arrow) -
@@ -143,6 +174,21 @@ public sealed class SessionRecord
     private static readonly Regex WindowsPart = new(@"^windows (?<v>\S+)$");
 
     private static readonly Regex PeakPart =new(@"^(?<label>\S+) (?<dir>[↑↓])(?<value>[\d.]+)(?: (?<unit>\S+))?$");
+
+    /// <summary>
+    /// Whether Parse would take the line as a session: its first part a date
+    /// and times. For counting sessions without parsing all of each line -
+    /// see SessionHistory.LastSession. The same test Parse makes first.
+    /// </summary>
+    public static bool StartsLikeSession(string line)
+    {
+        int end = line.IndexOf(" · ", StringComparison.Ordinal);
+        var when = When.Match((end < 0 ? line : line[..end]).Trim());
+        return when.Success
+               && DateTime.TryParseExact($"{when.Groups["date"].Value} {when.Groups["from"].Value}",
+                                         "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
+               && TimeSpan.TryParseExact(when.Groups["to"].Value, @"hh\:mm", CultureInfo.InvariantCulture, out _);
+    }
 
     /// <summary>
     /// Reads a line as MainWindow.DescribeSession writes it. Null for a line
@@ -171,6 +217,10 @@ public sealed class SessionRecord
 
         double? average = null, onePercent = null, pointOnePercent = null, jitter = null, energy = null;
         long? stutters = null;
+        TimeSpan? loading = null;
+        int? cap = null;
+        IReadOnlyDictionary<Bottleneck.Kind, int>? limits = null;
+        double? ping = null, jitterPing = null, loss = null;
         string? driver = null, windows = null;
         TimeSpan? length = null;
         var peaks = new List<Peak>();
@@ -217,6 +267,35 @@ public sealed class SessionRecord
                 continue;
             }
 
+            if (LoadingPart.Match(part) is { Success: true } load
+                && int.TryParse(load.Groups["s"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds))
+            {
+                loading = TimeSpan.FromSeconds(seconds);
+                continue;
+            }
+
+            if (CapPart.Match(part) is { Success: true } capped
+                && int.TryParse(capped.Groups["fps"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int capFps))
+            {
+                cap = capFps;
+                continue;
+            }
+
+            if (Bottleneck.Parse(part) is { } shares)
+            {
+                limits = shares;
+                continue;
+            }
+
+            if (PingPart.Match(part) is { Success: true } net
+                && double.TryParse(net.Groups["ms"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double pingMs)
+                && double.TryParse(net.Groups["jitter"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double pingJitter)
+                && double.TryParse(net.Groups["loss"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double pingLoss))
+            {
+                (ping, jitterPing, loss) = (pingMs, pingJitter, pingLoss);
+                continue;
+            }
+
             if (EnergyPart.Match(part) is { Success: true } drawn
                 && double.TryParse(drawn.Groups["wh"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double wh))
             {
@@ -258,6 +337,12 @@ public sealed class SessionRecord
             PointOnePercentLow = pointOnePercent,
             JitterMs = jitter,
             Stutters = stutters,
+            LoadingLeftOut = loading,
+            CapFps = cap,
+            Limits = limits,
+            PingMs = ping,
+            PingJitterMs = jitterPing,
+            PingLossPercent = loss,
             EnergyWh = energy,
             Driver = driver,
             WindowsBuild = windows,

@@ -2529,6 +2529,101 @@ public partial class NotesWindow : PanelWindow
             : $"Insert a screenshot of the game\nIn a game, press {_settings.ScreenshotHotkey}.";
 
     /// <summary>
+    /// Adds a note written in the card shown as a game quits - see
+    /// SessionNotePrompt - to the end of that game's notes, under a heading
+    /// naming the session. At the end, like a journal, so the notes read in
+    /// the order they were played.
+    ///
+    /// Into the editor only when the notes on screen are that game's: written
+    /// to the file behind them, they would be lost on the window's next save.
+    /// Any other game's go straight into its file - see AppendToFile. That
+    /// used to switch the window to the game and back: two loads of notes
+    /// full of screenshots on the UI thread, freezing every window as the
+    /// note was saved, and the switch put the game that had just quit under
+    /// PLAYING NOW - or took an open window off the game that is running.
+    /// </summary>
+    /// <returns>Null when it went in, or why it couldn't.</returns>
+    public async Task<string?> AppendSessionNoteAsync(string game, string heading, string text)
+    {
+        if (ShowsNotesOf(game))
+            return AppendToEditor(heading, text);
+
+        string? error = await Task.Run(() => AppendToFile(_store, _theme.AccentColor, game, heading, text));
+
+        // Switched to this game while the file was written: it may have
+        // loaded the notes without the entry, and saving them would drop it.
+        // Loaded again - with nothing typed yet there is nothing to lose.
+        if (error is null && ShowsNotesOf(game) && !_dirty)
+            LoadGame(game);
+        return error;
+    }
+
+    /// <summary>
+    /// <see cref="AppendSessionNoteAsync"/> waiting for the disk, for the way
+    /// out - see MainWindow.SaveTypedSessionNote - where no later moment comes.
+    /// </summary>
+    public string? AppendSessionNote(string game, string heading, string text)
+        => ShowsNotesOf(game) ? AppendToEditor(heading, text) : AppendToFile(_store, _theme.AccentColor, game, heading, text);
+
+    /// <summary>Whether the editor holds <paramref name="game"/>'s notes, loaded and so the ones its next save writes.</summary>
+    private bool ShowsNotesOf(string game) => _saved is not null && SameNote(_currentGame, game);
+
+    /// <summary>The entry put into the notes on screen, and saved at once.</summary>
+    private string? AppendToEditor(string heading, string text)
+    {
+        var document = Editor.Document;
+
+        // A gap above the heading unless the notes are empty or already end
+        // in a blank line, so it reads as a new entry, not part of the last.
+        if (document.Blocks.LastBlock is Paragraph last && new TextRange(last.ContentStart, last.ContentEnd).Text.Trim().Length > 0)
+            document.Blocks.Add(new Paragraph());
+
+        // In the accent and bold, like a link stands out - set on the run, so
+        // it is saved in the RTF and the heading still stands out in WordPad.
+        document.Blocks.Add(new Paragraph(new Run(heading)
+        {
+            FontWeight = FontWeights.SemiBold,
+            Foreground = _theme.Accent,
+        }));
+        foreach (string line in NoteLines(text))
+            document.Blocks.Add(new Paragraph(new Run(line)));
+
+        MarkDirty();
+        SaveNow();
+        bool saved = !_dirty;
+
+        if (IsOpen)
+            ShowStatus(saved ? "Session note added at the end" : "Session note added - not saved yet", problem: !saved);
+        return saved ? null : "the notes couldn't be saved";
+    }
+
+    /// <summary>
+    /// The entry added to the end of a game's notes file, for notes that
+    /// aren't on screen - or with no notes window at all. On a worker, or on
+    /// the way out: file work only, no WPF. The file is backed up first, as
+    /// the window's own first save after a load does. Notes still in an old
+    /// .txt get it as their first lines, so the new .rtf - which is read in
+    /// its place from now on - keeps them.
+    /// </summary>
+    internal static string? AppendToFile(NotesStore store, Color accent, string game, string heading, string text)
+    {
+        byte[]? rtf = store.LoadRtf(game);
+        var lines = NoteLines(text);
+        if (rtf is not { Length: > 0 } && store.LoadLegacyText(game) is { Length: > 0 } legacy)
+            lines = NoteLines(legacy).Append(string.Empty).Concat(lines).ToArray();
+
+        if (NotesRtf.WithParagraphsAdded(rtf, heading, accent, lines, DefaultTextSize) is not { } added)
+            return "the notes file couldn't be read as RTF";
+
+        if (rtf is { Length: > 0 })
+            store.BackupLater(game, rtf);
+        return store.SaveRtf(game, added, hasContent: true);
+    }
+
+    /// <summary>A note's lines, however its line breaks were typed.</summary>
+    private static string[] NoteLines(string text) => text.Replace("\r\n", "\n").Split('\n');
+
+    /// <summary>
     /// Puts a screenshot into the notes: the preview, itself a link to the
     /// full-size file and with the time stamped in its corner (see
     /// Screenshot.StampTime), then an empty line to carry on typing under it.
@@ -3033,7 +3128,12 @@ public partial class NotesWindow : PanelWindow
             }
         }
 
-        SessionPeaks.ToolTip = "The worst each reading reached\n↑ highest   ↓ lowest";
+        // The session in full on hover, the same tooltip as the session
+        // history's (see Ui/SessionTip): the card only had room for the date,
+        // length and peaks, and the score, lows and stutters were a window
+        // away. One each - a ToolTip can only belong to one element.
+        SessionText.ToolTip = DeskMon.Ui.SessionTip.Make(_theme, _settings, session);
+        SessionPeaks.ToolTip = DeskMon.Ui.SessionTip.Make(_theme, _settings, session);
     }
 
     /// <summary>

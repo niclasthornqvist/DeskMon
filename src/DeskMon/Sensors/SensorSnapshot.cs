@@ -25,6 +25,13 @@ public sealed class SensorSnapshot
     public double? CpuClock { get; set; }    // MHz, highest active core
 
     /// <summary>
+    /// The busiest core's load, %. A game held back by its main thread shows
+    /// one core at 100% while the CPU as a whole reads 20%, so the total alone
+    /// can't tell a CPU-limited game - see Bottleneck.
+    /// </summary>
+    public double? CpuCoreMax { get; set; }
+
+    /// <summary>
     /// While the CPU is slowing itself down to cool off, the clock it managed
     /// before; null otherwise. See ThrottleWatch.
     /// </summary>

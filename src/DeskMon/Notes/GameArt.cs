@@ -62,7 +62,7 @@ public static class GameArt
         if (logo is null && online)
             logo = StoreFile(game, ref appId, ".logo.png", LogoUrls);
 
-        return new Art(picture, Load(logo, 600), appId);
+        return new Art(picture, Trimmed(Load(logo, 600)), appId);
     }
 
     /// <summary>
@@ -548,6 +548,66 @@ public static class GameArt
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The logo cut to what is actually drawn in it. Steam's logo.png files
+    /// carry their own transparent margins, more on some than others, so two
+    /// logos set to the same bottom-right corner stood at different heights
+    /// and distances from the edge - and a padded one came out smaller than
+    /// its box allowed. Trimmed, every logo's ink meets the same corner.
+    /// </summary>
+    private static ImageSource? Trimmed(ImageSource? source)
+    {
+        if (source is not BitmapSource bitmap)
+            return source;
+
+        try
+        {
+            var pixels32 = new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
+            int w = pixels32.PixelWidth, h = pixels32.PixelHeight, stride = w * 4;
+            var pixels = new byte[stride * h];
+            pixels32.CopyPixels(pixels, stride, 0);
+
+            // Nearly clear counts as clear: soft shadows fade out over many
+            // pixels at alpha 1-2, which would leave most of the margin.
+            const byte Clear = 8;
+            int left = w, right = -1, top = h, bottom = -1;
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * stride;
+                for (int x = 0; x < w; x++)
+                {
+                    if (pixels[row + x * 4 + 3] <= Clear)
+                        continue;
+                    if (x < left) left = x;
+                    if (x > right) right = x;
+                    if (y < top) top = y;
+                    if (y > bottom) bottom = y;
+                }
+            }
+
+            // Wholly clear, or nothing to cut: as it was.
+            if (right < 0 || (left == 0 && top == 0 && right == w - 1 && bottom == h - 1))
+                return source;
+
+            // Only the inked rectangle copied into a bitmap of its own. A
+            // CroppedBitmap kept the converted full-size logo - and the decoded
+            // one behind it - alive for as long as the art cache held it.
+            int width = right - left + 1, height = bottom - top + 1, cropStride = width * 4;
+            var cropped = new byte[cropStride * height];
+            for (int y = 0; y < height; y++)
+                Buffer.BlockCopy(pixels, (top + y) * stride + left * 4, cropped, y * cropStride, cropStride);
+
+            var trimmed = BitmapSource.Create(width, height, bitmap.DpiX, bitmap.DpiY, PixelFormats.Bgra32, null, cropped, cropStride);
+            trimmed.Freeze();
+            return trimmed;
+        }
+        catch
+        {
+            // An odd format it can't convert: the logo untrimmed beats none.
+            return source;
         }
     }
 
