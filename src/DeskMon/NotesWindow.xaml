@@ -160,7 +160,7 @@
                          button, which opens the list again and goes into the box. -->
                     <Button x:Name="SearchRailButton" DockPanel.Dock="Top" Style="{StaticResource ToolButton}"
                             HorizontalAlignment="Center" Margin="0,0,0,6" Visibility="Collapsed"
-                            ToolTip="Search all notes (Ctrl+F)" Click="SearchRail_Click">
+                            ToolTip="Search all notes (Ctrl+F)&#x0a;Finds a word in every game's notes as you type." Click="SearchRail_Click">
                         <Path Style="{StaticResource ToolIcon}"
                               Data="M1,4.5 A3.5,3.5 0 1 1 8,4.5 A3.5,3.5 0 1 1 1,4.5 M7,7 L10.5,10.5" />
                     </Button>
@@ -242,7 +242,7 @@
                 <!-- Only on a narrow window, where the list is folded away:
                      three lines, the usual "show the list" sign. -->
                 <ToggleButton x:Name="ListButton" Grid.Column="0" Style="{StaticResource ToolToggle}"
-                              Margin="6,0,0,0" VerticalAlignment="Center" Visibility="Collapsed"
+                              Margin="6,0,-2,0" VerticalAlignment="Center" Visibility="Collapsed"
                               ToolTip="Notes&#x0a;Show the list of notes." Click="ListButton_Click">
                     <Path Style="{StaticResource ToolIcon}" Data="M0.5,1.5 H10.5 M0.5,5.5 H10.5 M0.5,9.5 H10.5" />
                 </ToggleButton>
@@ -260,7 +260,7 @@
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- A camera: body with the bump on top, and the lens. -->
                     <Button x:Name="ScreenshotButton" Style="{StaticResource ToolButton}"
-                            ToolTip="Insert a screenshot of the game"
+                            ToolTip="Insert a screenshot&#x0a;Takes a picture of the game and puts it in the notes at the cursor."
                             ToolTipOpening="ScreenshotButton_ToolTipOpening"
                             Click="Screenshot_Click">
                         <Path Style="{StaticResource ToolIcon}"
@@ -328,26 +328,26 @@
                           ItemTemplate="{StaticResource FontPreviewItem}"
                           Width="124" FontSize="12" Margin="0,0,4,0"
                           Focusable="False" VerticalAlignment="Center"
-                          ToolTip="Font" SelectionChanged="FontPicker_SelectionChanged" />
+                          ToolTip="Font&#x0a;The typeface of the selected text, or of what you type next." SelectionChanged="FontPicker_SelectionChanged" />
                 <!-- 62, not 52: room for two digits and the arrow with space
                      to spare - 52 cut off the half of a size like 10.5. -->
                 <ComboBox x:Name="SizePicker" Style="{StaticResource DarkCombo}"
                           Width="62" FontSize="12"
                           Focusable="False" VerticalAlignment="Center"
-                          ToolTip="Font size (Ctrl+] / Ctrl+[)" SelectionChanged="SizePicker_SelectionChanged" />
+                          ToolTip="Font size (Ctrl+] / Ctrl+[)&#x0a;The size of the selected text, or of what you type next." SelectionChanged="SizePicker_SelectionChanged" />
 
                 <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
 
                 <Button x:Name="BoldButton" Style="{StaticResource PanelButton}"
-                        ToolTip="Bold (Ctrl+B)" Click="Bold_Click">
+                        ToolTip="Bold (Ctrl+B)&#x0a;Makes the selected text bold, or what you type next." Click="Bold_Click">
                     <TextBlock Text="B" FontWeight="Bold" />
                 </Button>
                 <Button x:Name="ItalicButton" Style="{StaticResource PanelButton}"
-                        ToolTip="Italic (Ctrl+I)" Click="Italic_Click">
+                        ToolTip="Italic (Ctrl+I)&#x0a;Makes the selected text italic, or what you type next." Click="Italic_Click">
                     <TextBlock Text="I" FontStyle="Italic" />
                 </Button>
                 <Button x:Name="UnderlineButton" Style="{StaticResource PanelButton}"
-                        ToolTip="Underline (Ctrl+U)" Click="Underline_Click">
+                        ToolTip="Underline (Ctrl+U)&#x0a;Underlines the selected text, or what you type next." Click="Underline_Click">
                     <TextBlock Text="U" TextDecorations="Underline" />
                 </Button>
                 <Button x:Name="StrikeButton" Style="{StaticResource PanelButton}"
@@ -360,11 +360,11 @@
                 <!-- Headings: no shortcut keys, since the usual Ctrl+Alt+1/2
                      are AltGr+1/2 on many keyboards - AltGr+2 types @ on a
                      Swedish one. -->
-                <Button Style="{StaticResource PanelButton}" Width="30"
+                <Button x:Name="Heading1Button" Style="{StaticResource PanelButton}" Width="30"
                         ToolTip="Heading&#x0a;The whole line large and bold. Click again for ordinary text." Click="Heading1_Click">
                     <TextBlock Text="H1" FontWeight="Bold" />
                 </Button>
-                <Button Style="{StaticResource PanelButton}" Width="30"
+                <Button x:Name="Heading2Button" Style="{StaticResource PanelButton}" Width="30"
                         ToolTip="Subheading&#x0a;The whole line a little larger and bold. Click again for ordinary text." Click="Heading2_Click">
                     <TextBlock Text="H2" FontWeight="Bold" />
                 </Button>
@@ -373,7 +373,7 @@
 
                 <!-- Drawn rather than using icon-font glyphs, which render as
                      boxes if the font isn't present. -->
-                <Button Style="{StaticResource PanelButton}" ToolTip="Align left (Ctrl+L)"
+                <Button x:Name="AlignLeftButton" Style="{StaticResource PanelButton}" ToolTip="Align left (Ctrl+L)&#x0a;Lines the paragraph up along the left edge."
                         Click="AlignLeft_Click">
                     <Canvas Width="14" Height="10">
                         <Rectangle Canvas.Left="0" Canvas.Top="0" Width="14" Height="2" Fill="{DynamicResource Theme.TextDim}" />
@@ -381,7 +381,7 @@
                         <Rectangle Canvas.Left="0" Canvas.Top="8" Width="12" Height="2" Fill="{DynamicResource Theme.TextDim}" />
                     </Canvas>
                 </Button>
-                <Button Style="{StaticResource PanelButton}" ToolTip="Align centre (Ctrl+E)"
+                <Button x:Name="AlignCenterButton" Style="{StaticResource PanelButton}" ToolTip="Align centre (Ctrl+E)&#x0a;Centres the paragraph."
                         Click="AlignCenter_Click">
                     <Canvas Width="14" Height="10">
                         <Rectangle Canvas.Left="0" Canvas.Top="0" Width="14" Height="2" Fill="{DynamicResource Theme.TextDim}" />
@@ -389,7 +389,7 @@
                         <Rectangle Canvas.Left="1" Canvas.Top="8" Width="12" Height="2" Fill="{DynamicResource Theme.TextDim}" />
                     </Canvas>
                 </Button>
-                <Button Style="{StaticResource PanelButton}" ToolTip="Align right (Ctrl+R)"
+                <Button x:Name="AlignRightButton" Style="{StaticResource PanelButton}" ToolTip="Align right (Ctrl+R)&#x0a;Lines the paragraph up along the right edge."
                         Click="AlignRight_Click">
                     <Canvas Width="14" Height="10">
                         <Rectangle Canvas.Left="0" Canvas.Top="0" Width="14" Height="2" Fill="{DynamicResource Theme.TextDim}" />
@@ -400,17 +400,17 @@
 
                 <Border Width="1" Margin="5,4" Background="{DynamicResource Theme.Ov.26}" />
 
-                <Button Style="{StaticResource PanelButton}" Width="30"
-                        ToolTip="Numbered list (Ctrl+Shift+N)" Click="Numbering_Click">
+                <Button x:Name="NumberingButton" Style="{StaticResource PanelButton}" Width="30"
+                        ToolTip="Numbered list (Ctrl+Shift+N)&#x0a;Turns the paragraph into a numbered list, or back into text." Click="Numbering_Click">
                     <TextBlock Text="1." />
                 </Button>
-                <Button Style="{StaticResource PanelButton}"
-                        ToolTip="Bulleted list (Ctrl+Shift+L)" Click="Bullets_Click">
+                <Button x:Name="BulletsButton" Style="{StaticResource PanelButton}"
+                        ToolTip="Bulleted list (Ctrl+Shift+L)&#x0a;Turns the paragraph into a bulleted list, or back into text." Click="Bullets_Click">
                     <TextBlock Text="&#x2022;" FontSize="16" />
                 </Button>
                 <!-- Drawn, like the alignment buttons: a ticked box. -->
                 <Button x:Name="TodoButton" Style="{StaticResource PanelButton}"
-                        ToolTip="To-do list" Click="Todo_Click">
+                        ToolTip="To-do list (Ctrl+Shift+T)&#x0a;Write a list item by item - with boxes to tick off, bullets or numbers - and put it in the notes at the cursor." Click="Todo_Click">
                     <Canvas Width="12" Height="12">
                         <Rectangle Width="12" Height="12" RadiusX="2" RadiusY="2"
                                    Stroke="{DynamicResource Theme.TextDim}" StrokeThickness="1.2" />
@@ -434,7 +434,7 @@
                      settings.json beside this; the picker replaced them, and
                      the way back to uncoloured text moved into it. -->
                 <Button x:Name="MoreColorsButton" Style="{StaticResource PanelButton}"
-                        ToolTip="Text colour" Click="MoreColors_Click">
+                        ToolTip="Text colour (Ctrl+Shift+C)&#x0a;Colours the selected text, or what you type next - or takes it back to plain." Click="MoreColors_Click">
                     <Border Width="12" Height="12" CornerRadius="3"
                             BorderThickness="1" BorderBrush="{DynamicResource Theme.Ov.33}">
                         <Border.Background>
@@ -489,7 +489,7 @@
                         <StackPanel Orientation="Horizontal" Margin="-5,0,0,8">
                             <RadioButton x:Name="TodoChecks" Style="{StaticResource ToolToggle}"
                                          GroupName="TodoStyle" IsChecked="True"
-                                         ToolTip="Click a box in the notes to tick it off"
+                                         ToolTip="Checkboxes&#x0a;Each item gets a box.&#x0a;Click a box in the notes to tick it off."
                                          Checked="TodoKind_Checked" Content="&#x2610; Checkboxes" />
                             <RadioButton x:Name="TodoBullets" Style="{StaticResource ToolToggle}"
                                          GroupName="TodoStyle"
@@ -513,7 +513,7 @@
                                        VerticalAlignment="Center" Margin="0,0,8,0"
                                        Text="Enter: next item · Enter on an empty one: done" />
                             <Button Grid.Column="1" Style="{StaticResource AccentButton}"
-                                    Content="Create" ToolTip="Put the list in the notes at the cursor (Ctrl+Enter)"
+                                    Content="Create" ToolTip="Create the list (Ctrl+Enter)&#x0a;Puts it in the notes at the cursor."
                                     Click="TodoCreate_Click" />
                         </Grid>
                     </StackPanel>
@@ -545,10 +545,10 @@
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                             <Button x:Name="LinkRemove" Style="{StaticResource PanelButton}"
                                     Width="Auto" Padding="10,0" Margin="0,0,6,0"
-                                    Content="Remove link" ToolTip="Remove the link but keep the text"
+                                    Content="Remove link" ToolTip="Remove the link&#x0a;The text stays, no longer a link."
                                     Click="LinkRemove_Click" />
                             <Button x:Name="LinkApply" Style="{StaticResource AccentButton}"
-                                    Content="Add" ToolTip="Add the link (Enter)"
+                                    Content="Add" ToolTip="Add the link (Enter)&#x0a;Makes the selected text a link to the address typed."
                                     Click="LinkApply_Click" />
                         </StackPanel>
                     </StackPanel>
@@ -606,7 +606,7 @@
                         <TextBlock x:Name="NewNoteHint" Margin="0,6,0,0" TextWrapping="Wrap" />
 
                         <Button Style="{StaticResource AccentButton}" HorizontalAlignment="Right"
-                                Margin="0,10,0,0" Content="Create" ToolTip="Create the note (Enter)"
+                                Margin="0,10,0,0" Content="Create" ToolTip="Create the note (Enter)&#x0a;Adds a note by this name to the list."
                                 Click="NewNoteCreate_Click" />
                     </StackPanel>
                 </Border>
@@ -728,7 +728,7 @@
                             </Border>
                             <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="▸ Last session"
                                        FontWeight="SemiBold" Margin="0,0,12,0"
-                                       ToolTip="Click to show or hide the readings" />
+                                       ToolTip="Last session&#x0a;The readings of this game's last session.&#x0a;Click to show or hide them." />
                             <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" />
                         </Grid>
                         <!-- A toggle like the widget's LOG, with the same clock:

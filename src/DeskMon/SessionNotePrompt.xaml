@@ -29,15 +29,19 @@
             <DockPanel Margin="0,8,0,8">
                 <TextBlock x:Name="Hint" VerticalAlignment="Center" Text="Enter saves  ·  Esc skips" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button x:Name="SkipButton" Style="{StaticResource PanelButton}" Content="SKIP"
+                    <!-- Width Auto: PanelButton is the toolbar's icon style,
+                         26 wide, which cut "SKIP" down to "S". -->
+                    <Button x:Name="SkipButton" Style="{StaticResource PanelButton}" Content="SKIP" Width="Auto"
                             Margin="0,0,6,0" Padding="10,3" Click="Skip_Click" />
                     <Button x:Name="SaveButton" Style="{StaticResource AccentButton}" Content="SAVE"
                             Padding="12,3" Click="Save_Click" />
                 </StackPanel>
             </DockPanel>
             <!-- How long before it closes by itself, shrinking to nothing. Gone
-                 once you start typing: from then it stays until you answer. -->
-            <Border x:Name="Countdown" Height="2" HorizontalAlignment="Left" CornerRadius="1" Margin="-12,0,0,0" />
+                 once you start typing: from then it stays until you answer.
+                 The card's full width, past its padding both sides; it shrinks
+                 by a scale from the left - see StartCountdown. -->
+            <Border x:Name="Countdown" Height="2" CornerRadius="1" Margin="-12,0,-12,0" />
         </StackPanel>
     </Border>
 </Window>

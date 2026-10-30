@@ -141,7 +141,7 @@ public partial class VersionsWindow : PanelWindow
             Background = Brushes.Transparent,   // the whole strip clicks, not just the letters
             Cursor = Cursors.Hand,
             Margin = new Thickness(4, 4, 4, 4),
-            ToolTip = "Show or hide this day's changes",
+            ToolTip = "This day's changes\nClick to show or hide them.",
         };
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });

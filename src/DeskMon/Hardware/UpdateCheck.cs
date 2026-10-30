@@ -81,6 +81,16 @@ public static class UpdateCheck
         @"amd-software-adrenalin-edition-(?<version>\d+\.\d+\.\d+)-minimalsetup-(?<date>\d{6})",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
+    // One chipset's page stands for all: every desktop chipset's page, AM4,
+    // AM5 and Threadripper alike, links the same "amd_chipset_software_
+    // 8.09.28.1124.exe" (checked 2026-10-30), so the board's chipset needn't
+    // be worked out first.
+    private const string AmdChipsets = "https://www.amd.com/en/support/downloads/drivers.html/chipsets/am5/b650.html";
+
+    private static readonly System.Text.RegularExpressions.Regex AmdChipsetInstaller = new(
+        @"amd_chipset_software_(?<version>\d+(\.\d+){1,3})\.exe",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     // ASUS's site search: a board's name in, its product ID (DataId) out.
     private const string AsusSearch =
         "https://odinapi.asus.com/recent-data/apiv2/SearchSuggestion" +
@@ -242,6 +252,51 @@ public static class UpdateCheck
 
         return Age("Driver", installedDate, $" ({why})")
                ?? new Verdict($"Could not check for a newer driver: {why}", Freshness.Unknown, "Can't check");
+    }
+
+    /// <summary>
+    /// Asks AMD's chipset page for the newest chipset software and compares,
+    /// with the same fallback to the age rule as the others.
+    /// </summary>
+    public static async Task<Verdict> AmdChipsetAsync(string? installed, DateTime? installedDate)
+    {
+        string why = "AMD could not be reached";
+        try
+        {
+            using var timeout = new CancellationTokenSource(CheckTimeout);
+            string page = await Http.GetStringAsync(AmdChipsets, timeout.Token).ConfigureAwait(false);
+            var match = AmdChipsetInstaller.Match(page);
+            if (!match.Success)
+                why = "AMD's page no longer names its newest chipset driver";
+
+            if (match.Success && installed is not null
+                && Version.TryParse(installed, out var have)
+                && Version.TryParse(match.Groups["version"].Value, out var newest))
+            {
+                if (newest <= have)
+                    return new Verdict("Newest chipset driver from AMD", Freshness.Current, "Newest");
+
+                // The page's "Release Date 2026-10-21" sits just before the
+                // download link; looked for there rather than anywhere on the
+                // page, which also dates the release notes and other files.
+                var date = System.Text.RegularExpressions.Regex.Match(
+                    page[Math.Max(0, match.Index - 2000)..match.Index], @"\d{4}-\d{2}-\d{2}(?!.*\d{4}-\d{2}-\d{2})",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+                string when = date.Success ? $" ({date.Value})" : string.Empty;
+                return new Verdict($"Newer chipset driver available: {match.Groups["version"].Value}{when}",
+                                   Behind(installedDate), "Update available");
+            }
+
+            if (match.Success)
+                why = "the versions could not be compared";
+        }
+        catch
+        {
+            // As in NvidiaDriverAsync: all land on the age rule.
+        }
+
+        return Age("Chipset driver", installedDate, $" ({why})")
+               ?? new Verdict($"Could not check for a newer chipset driver: {why}", Freshness.Unknown, "Can't check");
     }
 
     /// <summary>

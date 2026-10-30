@@ -26,6 +26,9 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     private bool _isExpanded;
     private string _peak = string.Empty;
     private double? _worst;
+
+    /// <summary>The reading Value was last formatted from - see Apply.</summary>
+    private double _shownReading = double.NaN;
     private string? _flag;
 
     public MetricRow(Metric metric, string sectionKey, UiTheme theme, AppSettings settings)
@@ -34,6 +37,7 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
         _theme = theme;
         _settings = settings;
         _valueBrush = theme.Unavailable;
+        _sectionKey = sectionKey;
 
         // The section has to be part of the key: "CPU" is a row in Usage and a
         // row in Temperature, and they fold independently.
@@ -56,55 +60,60 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     public Brush LabelHoverBrush => _theme.Section;
 
     /// <summary>
-    /// What the row means, on hover: the metric's own explanation, then the
-    /// levels it turns amber and red at, then what clicking it unfolds.
+    /// What the row means, on hover, as a card - see Ui.InfoTip: the section
+    /// over the row's name, the metric's own explanation, the levels it turns
+    /// amber and red at, and what clicking it unfolds. The section is there
+    /// because "CPU" is a row in Usage and in Temperature alike.
     ///
     /// The levels are worked out from the metric rather than written into each
     /// explanation, so changing a threshold in MetricRegistry can't leave the
     /// tooltip saying the old one. Null only for a row with nothing to say at
-    /// all, which then shows the panel's own tooltip.
+    /// all, which then shows the panel's own tooltip. Made again whenever it
+    /// is read - on a settings or theme change - so its colours follow.
     /// </summary>
-    public string? Tooltip
+    public object? Tooltip
     {
         get
         {
-            var lines = new List<string>();
+            var levels = Thresholds();
+            string? hint = _folded.Count > 0 ? $"Click to show {string.Join(", ", _folded.Select(r => r.Label))}."
+                         : Details.Count > 0 ? $"Click to show {_metric.DetailsAbout}."
+                         : null;
 
-            if (!string.IsNullOrWhiteSpace(_metric.Tooltip))
-                lines.Add(_metric.Tooltip);
+            if (string.IsNullOrWhiteSpace(_metric.Tooltip) && levels.Count == 0 && hint is null)
+                return null;
 
-            if (Thresholds() is { } levels)
-                lines.Add(levels);
+            // Said here as well as on the peak's own card: the bar is where
+            // the tick is seen, and hovering it shows this card, not that one.
+            // Only while the tick is shown - see PeakTooltip.
+            string? body = _metric.Tooltip;
+            if (_settings.ShowPeakMarker && _settings.ShowBars)
+                body = (body is null ? string.Empty : body + "\n")
+                       + $"The bright tick on the bar is the peak: the {(_metric.Invert ? "lowest" : "highest")} it has been since the game started or the peaks were reset.";
 
-            if (_folded.Count > 0)
-                lines.Add($"Click to show {string.Join(", ", _folded.Select(r => r.Label))}.");
-            else if (Details.Count > 0)
-                lines.Add($"Click to show {_metric.DetailsAbout}.");
-
-            return lines.Count > 0 ? string.Join("\n", lines) : null;
+            return Ui.InfoTip.Make(_theme, _sectionKey.ToUpperInvariant(), _metric.Label, body,
+                                   levels, hint is null ? null : new[] { hint });
         }
     }
 
+    private readonly string _sectionKey;
+
     /// <summary>
-    /// "Amber at 80 % or above, red at 95 % or above." - or "or below" for an
-    /// inverted metric like FPS. Null for a metric with no thresholds, which
-    /// never changes colour.
+    /// "Amber at" / "80 % or above" and "Red at" / "95 % or above", each in
+    /// its colour - or "or below" for an inverted metric like FPS. Empty for a
+    /// metric with no thresholds, which never changes colour.
     /// </summary>
-    private string? Thresholds()
+    private List<Ui.InfoTip.Fact> Thresholds()
     {
         string direction = _metric.Invert ? "or below" : "or above";
-        var parts = new List<string>();
+        var facts = new List<Ui.InfoTip.Fact>();
 
         if (!double.IsInfinity(_metric.Warn))
-            parts.Add($"amber at {Level(_metric.Warn)} {direction}");
+            facts.Add(new("Amber at", $"{Level(_metric.Warn)} {direction}", _theme.Warn));
         if (!double.IsInfinity(_metric.Crit))
-            parts.Add($"red at {Level(_metric.Crit)} {direction}");
+            facts.Add(new("Red at", $"{Level(_metric.Crit)} {direction}", _theme.Crit));
 
-        if (parts.Count == 0)
-            return null;
-
-        string sentence = string.Join(", ", parts) + ".";
-        return char.ToUpperInvariant(sentence[0]) + sentence[1..];
+        return facts;
     }
 
     private string Level(double value)
@@ -381,7 +390,11 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     public Visibility PeakVisibility
         => _settings.ShowPeaks ? Visibility.Visible : Visibility.Collapsed;
 
-    public double PeakFontSize => Math.Max(8, _settings.FontSize - 2);
+    /// <summary>
+    /// One point under the row's text, not two: at two the peaks were hard to
+    /// read at a glance, and one is still enough to say "history, not live".
+    /// </summary>
+    public double PeakFontSize => Math.Max(8, _settings.FontSize - 1);
 
     /// <summary>
     /// Narrower than the value column: no unit is printed, since the row it
@@ -390,8 +403,11 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// </summary>
     public double PeakWidth => Math.Max(16, _settings.PeakWidth);
 
-    /// <summary>Quieter than the live value - it is history, not a reading.</summary>
-    public Brush PeakBrush => _theme.Header;
+    /// <summary>
+    /// The label colour: still quieter than the live value it is history next
+    /// to, but the header colour was so dim the peaks were hard to make out.
+    /// </summary>
+    public Brush PeakBrush => _theme.Label;
 
     /// <summary>
     /// The worst reading since the peaks were last reset: the highest for most
@@ -432,9 +448,69 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
         NotePeakMarker();
     }
 
+    /// <summary>
+    /// The peak's own card, like the row's (see Ui.InfoTip): which reading it
+    /// is, the figure with its unit in the colour it reached - the panel
+    /// shows it unitless and dim, as history - and where to reset it. It was
+    /// one fixed sentence that never said what the figure was.
+    /// </summary>
+    public object PeakTooltip
+    {
+        get
+        {
+            Brush? level = _worst is not double worst ? _theme.Label
+                         : _metric.Exceeds(worst, _metric.Crit) ? _theme.Crit
+                         : _metric.Exceeds(worst, _metric.Warn) ? _theme.Warn
+                         : null;
+            string which = _metric.Invert ? "lowest" : "highest";
+
+            // The tick on the bar is the same figure, which nothing else on
+            // the panel says - a bright line in the bar read as part of the
+            // style. Only while it is shown, or the card would point at nothing.
+            string marker = _settings.ShowPeakMarker && _settings.ShowBars
+                ? "\nThe bright tick on the bar marks the same spot, so you can see how far the reading is from it."
+                : string.Empty;
+            return Ui.InfoTip.Make(_theme, _sectionKey.ToUpperInvariant(), $"{_metric.Label} peak",
+                                   $"The {which} reading since the game started or the peaks were reset.{marker}",
+                                   new[] { new Ui.InfoTip.Fact(_metric.Invert ? "Lowest" : "Highest", WorstText ?? "none yet", level) },
+                                   new[] { "Reset peaks is on the right-click menu." });
+        }
+    }
+
+    /// <summary>
+    /// What marks the figure as a peak: a little line chart with a dot on its
+    /// highest point - or on its lowest, for FPS and its lows, where low is
+    /// the bad way. A bare ↑ or ↓ read as "going up" or "falling" rather
+    /// than "the worst it reached". The dots are tiny circles the stroke
+    /// fills in, as in the section icons. Frozen, since every row shares them.
+    /// </summary>
+    public Geometry PeakIcon => _metric.Invert ? LowestIcon : HighestIcon;
+
+    private static readonly Geometry HighestIcon = FrozenGeometry(
+        "M0.5,8.5 L3,5.5 L5,7 L7.5,2 L9.5,5.5 M7.1,2 A0.4,0.4 0 1 1 7.9,2 A0.4,0.4 0 1 1 7.1,2");
+    private static readonly Geometry LowestIcon = FrozenGeometry(
+        "M0.5,2.5 L3,5.5 L5,4 L7.5,9 L9.5,5.5 M7.1,9 A0.4,0.4 0 1 1 7.9,9 A0.4,0.4 0 1 1 7.1,9");
+
+    private static Geometry FrozenGeometry(string data)
+    {
+        var geometry = Geometry.Parse(data);
+        geometry.Freeze();
+        return geometry;
+    }
+
+    /// <summary>Only beside a figure: an icon with nothing after it would mark nothing.</summary>
+    public Visibility PeakIconVisibility => _worst is null ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>About the figures' height, so it sits as one of them.</summary>
+    public double PeakIconSize => Math.Round(PeakFontSize * 0.85);
+
     /// <summary>The marker is worked out from _worst, so it has to be told when that moves.</summary>
     private void NotePeakMarker()
     {
+        Set(nameof(PeakIconVisibility));
+        // The card too, which shows the figure. Only on a new peak or a
+        // reset, which is where this is called from - not every tick.
+        Set(nameof(PeakTooltip));
         Set(nameof(PeakMarkerMargin));
         Set(nameof(PeakMarkerVisibility));
         Set(nameof(PeakMarkerBrush));
@@ -604,6 +680,25 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// <summary>The warning colour, since the mark is a warning however cool the number reads.</summary>
     public Brush FlagBrush => _theme.Warn;
 
+    /// <summary>
+    /// The row's label, value, bar and peak faded while it reads n/a - FPS
+    /// with no game running, say. The dim n/a colour alone left the label and
+    /// empty bar as bright as a live row's, so rows with nothing to say drew
+    /// the eye as much as the ones that had. Opacity rather than other brushes,
+    /// so every bar style and the in-bar layout fade alike.
+    /// </summary>
+    public double ContentOpacity => _unavailable ? 0.35 : 1;
+
+    private bool _unavailable = true;
+
+    private void NoteUnavailable(bool unavailable)
+    {
+        if (_unavailable == unavailable)
+            return;
+        _unavailable = unavailable;
+        Set(nameof(ContentOpacity));
+    }
+
     /// <summary>Pulls this row's number out of a snapshot and restyles it.</summary>
     public void Apply(SensorSnapshot snapshot)
     {
@@ -638,19 +733,29 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             BarWidth = 0;
             NoteFraction(0);
             ValueBrush = _theme.Unavailable;
+            NoteUnavailable(true);
             return;
         }
 
-        string text = value.ToString(_metric.Format, CultureInfo.InvariantCulture);
-        Value = _metric.Unit.Length > 0 ? text + " " + _metric.Unit : text;
+        NoteUnavailable(false);
+
+        // Formatted only when the reading moved: many stand still for minutes
+        // (RAM, disk use, a capped FPS), and two new strings per row per tick
+        // were garbage for a text that came out the same. Not after an n/a,
+        // which wrote over the text.
+        if (value != _shownReading || _value == "n/a")
+        {
+            _shownReading = value;
+            string text = value.ToString(_metric.Format, CultureInfo.InvariantCulture);
+            Value = _metric.Unit.Length > 0 ? text + " " + _metric.Unit : text;
+        }
 
         // Only the worst is kept. A live number cannot answer "what did it
         // actually reach while I was playing?", and that is the question.
         if (_worst is null || (_metric.Invert ? value < _worst : value > _worst))
         {
             _worst = value;
-            Peak = (_metric.Invert ? "↓" : "↑")
-                   + value.ToString(_metric.Format, CultureInfo.InvariantCulture);
+            Peak = value.ToString(_metric.Format, CultureInfo.InvariantCulture);   // marked by PeakIcon
             NotePeakMarker();
         }
 

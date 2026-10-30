@@ -142,7 +142,7 @@ internal static class FreezeWatchdog
             // the whole process also stops the dump from being taken until it
             // is over - and by then whatever was stuck has returned. This
             // reads only DeskMon's own list, so it is written at once.
-            App.Log("freeze", $"The widget stopped answering. {Activity.Describe()}");
+            App.Log("freeze", $"The widget stopped answering. {Activity.Describe()} {Memory()}");
 
             if (dumps >= MaxDumps)
             {
@@ -154,6 +154,45 @@ internal static class FreezeWatchdog
             App.Log("freeze", $"The widget hasn't answered for {silent / 1000} s. {WriteDump(dumps)}");
         }
     }
+
+    /// <summary>
+    /// "RAM free 15.2 GB; DeskMon 168 MB in memory." The freeze during an
+    /// antivirus scan left the UI thread idle in Windows, with no way to tell
+    /// from the dump whether DeskMon had been paged out. A working set far
+    /// under its usual size, or RAM nearly gone, says it was.
+    /// </summary>
+    private static string Memory()
+    {
+        try
+        {
+            var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
+            string ram = GlobalMemoryStatusEx(ref status)
+                ? (status.AvailPhys / (1024d * 1024 * 1024)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " GB"
+                : "unknown";
+            return $"RAM free {ram}; DeskMon {Environment.WorkingSet / (1024 * 1024)} MB in memory.";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatusEx
+    {
+        public uint Length;
+        public uint MemoryLoad;
+        public ulong TotalPhys;
+        public ulong AvailPhys;
+        public ulong TotalPageFile;
+        public ulong AvailPageFile;
+        public ulong TotalVirtual;
+        public ulong AvailVirtual;
+        public ulong AvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
 
     /// <summary>
     /// Writes the dump and says how it went, for the log line. Into a temporary

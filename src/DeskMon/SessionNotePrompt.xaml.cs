@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using DeskMon.Ui;
 
@@ -23,13 +24,24 @@ public partial class SessionNotePrompt : Window
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(20);
 
     private readonly Action<string> _save;
-    private readonly System.Windows.Threading.DispatcherTimer _timer = new();
-    private DateTime _closesAt;
-    private TimeSpan _left = Wait;
     private bool _typed;
 
+    /// <summary>
+    /// The countdown, as an animation of the bar's width share rather than a
+    /// timer resizing it. The timer ran at background priority and resized the
+    /// bar ten times a second, each a layout of this see-through, shadowed
+    /// window; right after a game quits the widget is busy, so the ticks came
+    /// late and the bar stalled and jumped. An animation is drawn smoothly
+    /// whatever the UI thread is doing, and its end is what closes the card.
+    /// </summary>
+    private AnimationClock? _countdown;
+
+    /// <summary>The widget's place, kept so a late layout (Loaded) can stand beside it.</summary>
+    private Rect _near;
+    private bool _shown;
+
     /// <param name="summary">The session in a line: "Factorio · 2 h 14 min · 58 fps · score 91".</param>
-    /// <param name="near">The widget's place on screen, to stand beside.</param>
+    /// <param name="near">The widget's place on screen, to stand beside - see Follow.</param>
     /// <param name="save">Given the note when SAVE or Enter is pressed.</param>
     public SessionNotePrompt(UiTheme theme, string summary, Rect near, Action<string> save)
     {
@@ -51,17 +63,21 @@ public partial class SessionNotePrompt : Window
         // Invisible until placed: shown first at wherever Windows puts it, it
         // would flash there before moving beside the widget.
         Opacity = 0;
-        Loaded += (_, _) => Place(near);
-
-        _timer.Interval = TimeSpan.FromMilliseconds(100);
-        _timer.Tick += (_, _) => Tick();
-        _closesAt = DateTime.UtcNow + Wait;
-        _timer.Start();
+        _near = near;
+        Loaded += (_, _) =>
+        {
+            Place();
+            StartCountdown();
+        };
 
         // The mouse on it holds the countdown: reading the summary or
         // reaching for the box shouldn't race the clock.
-        MouseEnter += (_, _) => _left = _closesAt - DateTime.UtcNow;
-        MouseLeave += (_, _) => _closesAt = DateTime.UtcNow + _left;
+        MouseEnter += (_, _) => _countdown?.Controller?.Pause();
+        MouseLeave += (_, _) =>
+        {
+            if (!_typed)
+                _countdown?.Controller?.Resume();
+        };
 
         // Clicked anywhere, it takes the keyboard and puts the caret in the box.
         PreviewMouseDown += (_, _) =>
@@ -72,35 +88,97 @@ public partial class SessionNotePrompt : Window
     }
 
     /// <summary>
-    /// Under the widget, left edges lined up; above it when there is no room
-    /// below; kept on the screens either way.
+    /// Moves the card with the widget - called by it as it is dragged or
+    /// changes size, so the card stays locked to its side rather than left
+    /// behind where the game quit.
     /// </summary>
-    private void Place(Rect near)
+    public void Follow(Rect near)
     {
-        double height = ActualHeight;
-        double left = near.Left;
-        double top = near.Bottom + 4;
-        if (top + height > SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight)
-            top = near.Top - height - 4;
-
-        Left = Math.Clamp(left, SystemParameters.VirtualScreenLeft,
-                          SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - ActualWidth);
-        Top = Math.Clamp(top, SystemParameters.VirtualScreenTop,
-                         SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - height);
-
-        // A short fade in, so it arrives rather than blinks into place.
-        BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
+        _near = near;
+        if (IsLoaded)
+            Place();
     }
 
-    private void Tick()
-    {
-        if (_typed)
-            return;
+    /// <summary>
+    /// The window's margin round the card, for its shadow: the window is this
+    /// much bigger than the card on every side, so the edges are lined up by
+    /// the card, not by the window.
+    /// </summary>
+    private const double ShadowMargin = 6;
 
-        var left = IsMouseOver ? _left : _closesAt - DateTime.UtcNow;
-        Countdown.Width = Math.Max(0, Card.ActualWidth * left.TotalMilliseconds / Wait.TotalMilliseconds);
-        if (left <= TimeSpan.Zero)
-            Close();
+    /// <summary>The space between the card and the widget.</summary>
+    private const double Gap = 6;
+
+    /// <summary>
+    /// To the widget's left, tops lined up - or to its right when the widget
+    /// is against the left edge of its screen - and kept on that screen.
+    /// The widget's own screen rather than the whole desktop: on the left
+    /// edge of a second monitor, "the left" would be the other monitor.
+    /// </summary>
+    private void Place()
+    {
+        var area = WorkAreaAround(_near);
+        double width = ActualWidth, height = ActualHeight;
+
+        double left = _near.Left - Gap - (width - ShadowMargin);
+        if (left + ShadowMargin < area.Left)
+            left = _near.Right + Gap - ShadowMargin;
+        double top = _near.Top - ShadowMargin;
+
+        Left = Math.Clamp(left, area.Left - ShadowMargin, Math.Max(area.Left - ShadowMargin, area.Right - width + ShadowMargin));
+        Top = Math.Clamp(top, area.Top - ShadowMargin, Math.Max(area.Top - ShadowMargin, area.Bottom - height + ShadowMargin));
+
+        // A short fade in the first time, so it arrives rather than blinks
+        // into place; not on every move after, which would flicker.
+        if (!_shown)
+        {
+            _shown = true;
+            BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
+        }
+    }
+
+    /// <summary>
+    /// The work area of the screen the widget is on, in WPF's units. Screens
+    /// are found in pixels, so converted both ways; the desktop as a whole if
+    /// the window has no screen yet.
+    /// </summary>
+    private Rect WorkAreaAround(Rect near)
+    {
+        if (PresentationSource.FromVisual(this)?.CompositionTarget is not { } target)
+            return new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+                            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+
+        var centre = target.TransformToDevice.Transform(new Point(near.Left + near.Width / 2, near.Top + near.Height / 2));
+        var area = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point((int)centre.X, (int)centre.Y)).WorkingArea;
+        return new Rect(target.TransformFromDevice.Transform(new Point(area.Left, area.Top)),
+                        target.TransformFromDevice.Transform(new Point(area.Right, area.Bottom)));
+    }
+
+    /// <summary>
+    /// The bar shrinks from full to nothing over Wait, from its left edge,
+    /// by scaling rather than resizing - see _countdown - and the card closes
+    /// as it runs out.
+    /// </summary>
+    private void StartCountdown()
+    {
+        var scale = new ScaleTransform(1, 1);
+        Countdown.RenderTransformOrigin = new Point(0, 0.5);
+        Countdown.RenderTransform = scale;
+
+        var shrink = new DoubleAnimation(1, 0, new Duration(Wait));
+        _countdown = shrink.CreateClock();
+        _countdown.Completed += (_, _) =>
+        {
+            // Completed also comes when the clock is stopped for typing.
+            if (!_typed)
+                Close();
+        };
+        scale.ApplyAnimationClock(ScaleTransform.ScaleXProperty, _countdown);
+
+        // Shown under the mouse - the widget's side is where it often is -
+        // it waits from the start, as if the mouse had just come onto it.
+        if (IsMouseOver)
+            _countdown.Controller?.Pause();
     }
 
     /// <summary>Typing stops the clock for good: a half-written note must not vanish.</summary>
@@ -109,6 +187,7 @@ public partial class SessionNotePrompt : Window
         if (_typed || NoteBox.Text.Length == 0)
             return;
         _typed = true;
+        _countdown?.Controller?.Stop();
         Countdown.Visibility = Visibility.Collapsed;
     }
 
@@ -173,7 +252,9 @@ public partial class SessionNotePrompt : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        _timer.Stop();
+        // Set first, so the stopped clock's Completed doesn't close it twice.
+        _typed = true;
+        _countdown?.Controller?.Stop();
         base.OnClosed(e);
     }
 }

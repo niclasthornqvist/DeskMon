@@ -325,6 +325,30 @@ public partial class HardwareWindow : PanelWindow
             AddItem(Item("System", info.SystemModel, null, BrandLogos.ForBoard(info.SystemModel), detail: null, full: Lines()),
                     Array.Empty<SystemInfo.Check>());
 
+        // The chipset software under the board it drives, checked the way the
+        // GPU driver is: AMD asked online, Intel judged by age since its site
+        // turns DeskMon away. Without the maker's package there is no row -
+        // Windows' own chipset drivers have no version to compare.
+        bool askChipset = _settings.CheckDriverOnline && info.ChipsetVersion is not null
+                          && info.ChipsetName!.StartsWith("AMD", StringComparison.OrdinalIgnoreCase);
+        InfoRow? chipsetItem = null;
+        if (info.ChipsetName is not null)
+        {
+            var chipsetOffline = askChipset ? null
+                : _settings.CheckDriverOnline && UpdateCheck.BlockedMaker(info.ChipsetName) is { } blockedChipset
+                ? UpdateCheck.Blocked("Chipset driver", blockedChipset, info.ChipsetDate)
+                : UpdateCheck.Age("Chipset driver", info.ChipsetDate);
+
+            var chipset = Item("Chipset", info.ChipsetName, null, BrandLogos.ForChip(info.ChipsetName),
+                               detail: Words(info.ChipsetVersion, info.ChipsetDate is { } installed ? $"installed {installed:yyyy-MM-dd}" : null),
+                               full: Lines(info.ChipsetVersion is null ? null : $"Version {info.ChipsetVersion}",
+                                           info.ChipsetDate is { } on ? $"Installed {on:yyyy-MM-dd}" : null));
+            chipset = askChipset ? chipset.WithStatus(Checking("Checking AMD for a newer chipset driver…"))
+                                 : chipset.WithStatus(ToCheck(chipsetOffline));
+            AddItem(chipset, new[] { ToCheck(chipsetOffline) });
+            chipsetItem = askChipset ? chipset : null;
+        }
+
         // Windows Update's answer is its status, asked behind the same
         // setting - it asks Microsoft's servers. The crash count goes into
         // the detail while it is clean, and becomes a note when it isn't;
@@ -427,6 +451,8 @@ public partial class HardwareWindow : PanelWindow
             : UpdateCheck.NvidiaDriverAsync(info.Gpu!, info.GpuDriverVersion, info.GpuDriverDate);
         var biosTask = biosItem is null ? null
             : UpdateCheck.AsusBiosAsync(info.BoardProduct!, info.BiosVersion, info.BiosDate);
+        var chipsetTask = chipsetItem is null ? null
+            : UpdateCheck.AmdChipsetAsync(info.ChipsetVersion, info.ChipsetDate);
         var pingTask = pingItem is null ? null : NetworkCheck.PingAsync(pingHost);
         var regionsTask = _regionRows.Count == 0 ? null : NetworkCheck.RegionsAsync();
 
@@ -440,6 +466,7 @@ public partial class HardwareWindow : PanelWindow
         var pending = new List<Task>();
         if (driverTask is not null) pending.Add(driverTask);
         if (biosTask is not null) pending.Add(biosTask);
+        if (chipsetTask is not null) pending.Add(chipsetTask);
         if (windowsTask is not null) pending.Add(windowsTask);
 
         bool allInTime = true;
@@ -458,7 +485,9 @@ public partial class HardwareWindow : PanelWindow
             SetStatus(driverItem!, ToCheck(await driverTask), generation);
         if (biosTask is not null)
             SetStatus(biosItem!, ToCheck(await biosTask), generation);
-        // Last: it is the slowest of the three by far.
+        if (chipsetTask is not null)
+            SetStatus(chipsetItem!, ToCheck(await chipsetTask), generation);
+        // Last: it is the slowest of these by far.
         if (windowsTask is not null)
             SetStatus(windowsItem!, ToCheck(await windowsTask), generation);
 

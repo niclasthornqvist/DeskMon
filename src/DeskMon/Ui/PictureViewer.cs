@@ -168,7 +168,7 @@ public sealed class PictureViewer : Window
         {
             Style = (Style)FindResource("PanelButton"),
             Content = "✕",
-            ToolTip = "Close (Esc)",
+            ToolTip = "Close (Esc)\nBack to the pictures.",
             Margin = new Thickness(8, 0, 0, 0),
         };
         close.Click += (_, _) => Close();
@@ -953,10 +953,15 @@ public sealed class PictureViewer : Window
         _saving = true;
         try
         {
-            var marked = Render(picture);   // frozen, so the worker may use it
+            // Said before the render, and given a frame to show: rendering a
+            // 4K picture holds the UI thread a moment, and without this the
+            // button looked dead for it.
             Note("Saving…");
+            await Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+            var marked = Render(picture);   // frozen, so the worker may use it
             string saved;
             string? binError = null;
+            string? unmarkedKept = null;   // the name it was given, for the message - see FreeName
 
             if (inPlace)
             {
@@ -967,7 +972,10 @@ public sealed class PictureViewer : Window
                 // original first and move the copy in after, and a move that
                 // failed then (an antivirus holding the file) left the notes
                 // pointing at nothing.
-                string unmarked = original + ".unmarked";
+                // A free name: an earlier .unmarked the bin refused is the
+                // true original, and File.Replace would overwrite it with the
+                // once-marked copy.
+                string unmarked = FreeName(original + ".unmarked");
                 await Task.Run(() =>
                 {
                     var written = File.GetLastWriteTime(original);
@@ -996,6 +1004,7 @@ public sealed class PictureViewer : Window
                 // it, it stays beside the picture - not lost, and not listed,
                 // since it no longer ends in .png or .jpg.
                 binError = RecycleBin.Send(unmarked);
+                unmarkedKept = unmarked;
                 saved = original;
             }
             else
@@ -1023,7 +1032,7 @@ public sealed class PictureViewer : Window
             ShowPicture(_paths.IndexOf(saved));
             Note(!inPlace ? "Saved as " + System.IO.Path.GetFileName(saved)
                  : binError is null ? "Saved - the unmarked picture is in the Recycle Bin"
-                 : $"Saved - the unmarked picture couldn't go to the Recycle Bin ({binError}), so it is kept beside it as {System.IO.Path.GetFileName(saved)}.unmarked",
+                 : $"Saved - the unmarked picture couldn't go to the Recycle Bin ({binError}), so it is kept beside it as {System.IO.Path.GetFileName(unmarkedKept)}",
                  warn: binError is not null);
         }
         catch (Exception ex)
@@ -1076,6 +1085,15 @@ public sealed class PictureViewer : Window
         encoder.Frames.Add(BitmapFrame.Create(picture));
         using var file = File.Create(path);
         encoder.Save(file);
+    }
+
+    /// <summary>"x.unmarked", or "x.unmarked 2" and on when that is taken - see SaveMarkup.</summary>
+    private static string FreeName(string path)
+    {
+        string name = path;
+        for (int n = 2; File.Exists(name); n++)
+            name = $"{path} {n.ToString(CultureInfo.InvariantCulture)}";
+        return name;
     }
 
     /// <summary>"name marked.png", or "name marked 2.png" and on when that is taken.</summary>

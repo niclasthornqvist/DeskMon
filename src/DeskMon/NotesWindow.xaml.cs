@@ -163,6 +163,19 @@ public partial class NotesWindow : PanelWindow
         // paste to have happened, since this runs just before it.
         DataObject.AddPastingHandler(Editor, (_, _) => _pictures.FitSoon());
 
+        // B, I, U and S follow the text after any editing command too -
+        // Ctrl+B with nothing selected moves no selection, so SelectionChanged
+        // alone left the button dark while bold was on for the next word.
+        // After the command, not during it: it has applied its formatting by then.
+        Editor.AddHandler(CommandManager.ExecutedEvent,
+                          new ExecutedRoutedEventHandler((_, _) => SyncSoon()),
+                          handledEventsToo: true);
+
+        // A link added or removed, a colour set or taken back - in their own
+        // popups, which move no selection either.
+        LinkPopup.Closed += (_, _) => SyncFormatButtons();
+        ColorPopup.Closed += (_, _) => SyncFormatButtons();
+
         // The mouse move that lights a picture's outline doesn't come when the
         // mouse leaves the editor straight off a picture at its edge.
         Editor.MouseLeave += (_, _) =>
@@ -378,6 +391,7 @@ public partial class NotesWindow : PanelWindow
 
         MarkDirty();
         SyncFontPickers();
+        SyncFormatButtons();
     }
 
     /// <summary>
@@ -402,8 +416,9 @@ public partial class NotesWindow : PanelWindow
 
             // Ctrl+] and Ctrl+[ change the size without moving the caret, so no
             // SelectionChanged follows to update the pickers. Deferred because
-            // this runs before the command does.
-            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(SyncFontPickers));
+            // this runs before the command does - and shared with the other
+            // syncs asked for, so the selection is read once (see SyncSoon).
+            SyncSoon();
         }
     }
 
@@ -517,6 +532,7 @@ public partial class NotesWindow : PanelWindow
         Editor.Selection.ApplyPropertyValue(property, value);
 
         MarkDirty();
+        SyncFormatButtons();   // strikethrough and colour aren't commands, so the command hook doesn't see them
     }
 
     // --- Font and size ---------------------------------------------------
@@ -552,7 +568,103 @@ public partial class NotesWindow : PanelWindow
         ApplyToSelection(TextElement.FontSizeProperty, points * DipsPerPoint);
     }
 
-    private void Editor_SelectionChanged(object sender, RoutedEventArgs e) => SyncFontPickers();
+    private void Editor_SelectionChanged(object sender, RoutedEventArgs e) => SyncSoon();
+
+    /// <summary>A sync is queued and not yet run - see SyncSoon.</summary>
+    private bool _syncQueued;
+
+    /// <summary>
+    /// The pickers and lit buttons brought up to date once, after the input
+    /// at hand. Each sync reads the whole selection about nine times, and an
+    /// arrow key asked twice - SelectionChanged and the command hook - so
+    /// Shift+arrow over a long selection stuttered. However many ask in one
+    /// go, one sync runs.
+    /// </summary>
+    private void SyncSoon()
+    {
+        if (_syncQueued)
+            return;
+        _syncQueued = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _syncQueued = false;
+            SyncFontPickers();
+            SyncFormatButtons();
+        }, DispatcherPriority.Input);
+    }
+
+    /// <summary>
+    /// Lights every formatting button whose formatting is on where the cursor
+    /// is - or across all of the selection - as a word processor does: there
+    /// was no telling from the toolbar whether a click would turn something
+    /// on or off. With nothing selected, it is what typing would give,
+    /// including bold just switched on with Ctrl+B. A selection that is only
+    /// partly bold reads as not bold, as clicking makes it all bold.
+    ///
+    /// The to-do button stays dark: it writes a new list rather than turning
+    /// something on, and a ticked or unticked box in the notes is its own sign.
+    /// </summary>
+    private void SyncFormatButtons()
+    {
+        try
+        {
+            var selection = Editor.Selection;
+            var decorations = selection.GetPropertyValue(Inline.TextDecorationsProperty) as TextDecorationCollection;
+            bool bold = selection.GetPropertyValue(TextElement.FontWeightProperty) is FontWeight weight
+                        && weight.ToOpenTypeWeight() >= FontWeights.SemiBold.ToOpenTypeWeight();
+
+            Ui.Lit.SetIsOn(BoldButton, bold);
+            Ui.Lit.SetIsOn(ItalicButton, selection.GetPropertyValue(TextElement.FontStyleProperty) is FontStyle style
+                                         && style != FontStyles.Normal);
+            Ui.Lit.SetIsOn(UnderlineButton, decorations?.Any(d => d.Location == TextDecorationLocation.Underline) == true);
+            Ui.Lit.SetIsOn(StrikeButton, decorations?.Any(d => d.Location == TextDecorationLocation.Strikethrough) == true);
+
+            // Headings by the same test ToggleHeading uses to take one off
+            // again: the heading's size, and bold.
+            double? size = selection.GetPropertyValue(TextElement.FontSizeProperty) is double dips ? dips : null;
+            Ui.Lit.SetIsOn(Heading1Button, bold && size is double h1 && Math.Abs(h1 - Heading1Points * DipsPerPoint) < 0.01);
+            Ui.Lit.SetIsOn(Heading2Button, bold && size is double h2 && Math.Abs(h2 - Heading2Points * DipsPerPoint) < 0.01);
+
+            // One alignment lit for the paragraph; none when the selection
+            // spans paragraphs aligned differently.
+            var alignment = selection.GetPropertyValue(Paragraph.TextAlignmentProperty) as TextAlignment?;
+            Ui.Lit.SetIsOn(AlignLeftButton, alignment is TextAlignment.Left or TextAlignment.Justify);
+            Ui.Lit.SetIsOn(AlignCenterButton, alignment == TextAlignment.Center);
+            Ui.Lit.SetIsOn(AlignRightButton, alignment == TextAlignment.Right);
+
+            // The list the cursor's paragraph is in, by its marker: numbers,
+            // or any of the bullet shapes.
+            var marker = (selection.Start.Paragraph?.Parent as ListItem)?.Parent is List list ? list.MarkerStyle : (TextMarkerStyle?)null;
+            Ui.Lit.SetIsOn(NumberingButton, marker is TextMarkerStyle.Decimal or TextMarkerStyle.LowerLatin or TextMarkerStyle.UpperLatin
+                                                     or TextMarkerStyle.LowerRoman or TextMarkerStyle.UpperRoman);
+            Ui.Lit.SetIsOn(BulletsButton, marker is TextMarkerStyle.Disc or TextMarkerStyle.Circle
+                                                   or TextMarkerStyle.Square or TextMarkerStyle.Box);
+
+            // Inside a link - at the cursor, or where the selection starts.
+            Ui.Lit.SetIsOn(LinkButton, InLink(selection.Start));
+
+            // Coloured: a text colour other than the notes' own. Its picture
+            // is already a rainbow, so lit is the one sign that colour is on.
+            Ui.Lit.SetIsOn(MoreColorsButton,
+                selection.GetPropertyValue(TextElement.ForegroundProperty) is SolidColorBrush colour
+                && Editor.Foreground is SolidColorBrush plain
+                && colour.Color != plain.Color
+                && !InLink(selection.Start));   // a link's own blue isn't a colour you chose
+        }
+        catch
+        {
+            // A selection caught mid document swap, as in SyncFontPickers; the next move corrects it.
+        }
+    }
+
+    /// <summary>Whether <paramref name="at"/> is inside a link - walked up from the run it is in.</summary>
+    private static bool InLink(TextPointer at)
+    {
+        for (var element = at.Parent as TextElement; element is not null; element = element.Parent as TextElement)
+            if (element is Hyperlink)
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// Shows the font and size of the text at the caret, the way a word
@@ -875,14 +987,21 @@ public partial class NotesWindow : PanelWindow
     /// Used when a game exits: the notes go back to General, but a window that
     /// was closed must stay closed. Null or empty means the General notes.
     /// </summary>
-    public void SwitchTo(string? gameName)
+    /// <param name="running">
+    /// Whether <paramref name="gameName"/> is the game running - or, for none,
+    /// that none is. False for a caller that only wants a game's notes on
+    /// screen: a screenshot taken from the camera button with no game
+    /// running goes into whichever notes are open, and passing that game
+    /// along here put it under PLAYING NOW.
+    /// </param>
+    public void SwitchTo(string? gameName, bool running = true)
     {
         string game = string.IsNullOrWhiteSpace(gameName) ? NotesStore.GeneralNotes : gameName!;
 
-        // The list's PLAYING NOW. Every caller passes the game that is running
-        // - or none, as one quits - so this is the one place that knows; set
-        // before the load, whose list refresh shows it.
-        _playing = IsGeneral(game) ? null : game;
+        // The list's PLAYING NOW, from the callers that know what is running;
+        // set before the load, whose list refresh shows it.
+        if (running)
+            _playing = IsGeneral(game) ? null : game;
 
         if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
             LoadGame(game);   // saves what is on screen first
@@ -894,9 +1013,10 @@ public partial class NotesWindow : PanelWindow
     /// Switches to a game's notes and makes sure the window is visible. Does not
     /// steal focus: during a game that would tab the player out of it.
     /// </summary>
-    public void ShowFor(string? gameName)
+    /// <param name="running">See SwitchTo: false when the game is only the notes wanted, not the one running.</param>
+    public void ShowFor(string? gameName, bool running = true)
     {
-        SwitchTo(gameName);
+        SwitchTo(gameName, running);
 
         Topmost = _settings.NotesAlwaysOnTop;
 
@@ -1980,6 +2100,25 @@ public partial class NotesWindow : PanelWindow
             return;
         }
 
+        // Ctrl+Shift like the two list shortcuts, since the to-do list sits next
+        // to them; T and C because plain Ctrl+T/C are taken or expected elsewhere.
+        if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            if (e.Key == Key.T)
+            {
+                TodoPopup.IsOpen = true;
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.C)
+            {
+                // Through the click handler so the picker starts on the selection's colour.
+                MoreColors_Click(MoreColorsButton, new RoutedEventArgs());
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (e.Key != Key.Enter)
             return;
 
@@ -2525,8 +2664,8 @@ public partial class NotesWindow : PanelWindow
     /// </summary>
     private void ScreenshotButton_ToolTipOpening(object sender, ToolTipEventArgs e)
         => ScreenshotButton.ToolTip = string.IsNullOrWhiteSpace(_settings.ScreenshotHotkey)
-            ? "Insert a screenshot of the game"
-            : $"Insert a screenshot of the game\nIn a game, press {_settings.ScreenshotHotkey}.";
+            ? "Insert a screenshot\nTakes a picture of the game and puts it in the notes at the cursor."
+            : $"Insert a screenshot ({_settings.ScreenshotHotkey})\nTakes a picture of the game and puts it in the notes at the cursor - in a game, press the key.";
 
     /// <summary>
     /// Adds a note written in the card shown as a game quits - see
@@ -3080,7 +3219,7 @@ public partial class NotesWindow : PanelWindow
             SessionText.Inlines.Add(new Run("  ·  cut short")
             {
                 Foreground = _theme.Warn,
-                ToolTip = "DeskMon was closed during the game, so the session may have run longer.",
+                ToolTip = "Cut short\nDeskMon was closed during the game, so the session may have run longer than this.",
             });
 
         // A table, not a line of text per section: the readings used to run

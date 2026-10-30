@@ -40,8 +40,8 @@ public static class GameIcons
 
     private static GameIcon? _general, _allGames;
 
-    /// <summary>The General notes' icon: a notepad.</summary>
-    public static GameIcon General => _general ??= new GameIcon(Glyph(GlyphKind.Notepad));
+    /// <summary>The General notes' icon: a house - see Glyph.</summary>
+    public static GameIcon General => _general ??= new GameIcon(Glyph(GlyphKind.Home));
 
     /// <summary>The sessions window's All games: a grid of tiles.</summary>
     public static GameIcon AllGames => _allGames ??= new GameIcon(Glyph(GlyphKind.Grid));
@@ -235,7 +235,7 @@ public static class GameIcons
         return string.Concat(meaningful.Take(2).Select(w => char.ToUpperInvariant(w[0])));
     }
 
-    private enum GlyphKind { Notepad, Grid }
+    private enum GlyphKind { Home, Grid }
 
     /// <summary>A white outline glyph on the accent blue-to-violet, so the two entries that aren't games look alike and unlike any game.</summary>
     private static ImageSource Glyph(GlyphKind kind)
@@ -245,14 +245,14 @@ public static class GameIcons
         var faint = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
 
         var shapes = new GeometryGroup();
-        if (kind == GlyphKind.Notepad)
+        if (kind == GlyphKind.Home)
         {
-            // A page with ruled lines, the last one short.
-            tile.Children.Add(new GeometryDrawing(faint, line, new RectangleGeometry(new Rect(17, 12, 30, 40), 4, 4)));
-            shapes.Children.Add(new LineGeometry(new Point(24, 24), new Point(40, 24)));
-            shapes.Children.Add(new LineGeometry(new Point(24, 32), new Point(40, 32)));
-            shapes.Children.Add(new LineGeometry(new Point(24, 40), new Point(33, 40)));
-            tile.Children.Add(new GeometryDrawing(null, line, shapes));
+            // A house: the roof, the walls and a door. It was a ruled page,
+            // which said "notes" - true of every entry in the list - rather
+            // than "general", the home for what belongs to no game.
+            tile.Children.Add(new GeometryDrawing(faint, null, Geometry.Parse("M32,17 L46,29 V50 H18 V29 Z")));
+            tile.Children.Add(new GeometryDrawing(null, line, Geometry.Parse(
+                "M13,31 L32,15 L51,31 M18,27 V50 H46 V27 M28,50 V40 H36 V50")));
         }
         else
         {

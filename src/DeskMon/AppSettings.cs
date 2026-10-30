@@ -695,6 +695,15 @@ public sealed class AppSettings
     /// <remarks>Replaced whole, never changed in place: scores read it on worker threads - see PerformanceScore.TargetFor.</remarks>
     public Dictionary<string, double> GameTargetFps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The frame rate a game's loading screens are locked at - The Witcher 3
+    /// holds them at 30 - so seconds held there are left out of its sessions'
+    /// figures like any loading screen; see FrameStats. By game name; set
+    /// from the SCORE card's menu in the sessions window, next to the target.
+    /// </summary>
+    /// <remarks>Replaced whole, never changed in place, as GameTargetFps is.</remarks>
+    public Dictionary<string, double> GameLoadingFps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>What the chart's bars measure: "avg", "length", "score" or a peak's "Label|Unit".</summary>
     public string SessionsChart { get; set; } = "avg";
 
@@ -806,6 +815,7 @@ public sealed class AppSettings
         // Rebuilt rather than only null-checked: the deserialiser makes a
         // case-sensitive one, and the game names in the logs vary in case.
         GameTargetFps = new Dictionary<string, double>(GameTargetFps ?? new(), StringComparer.OrdinalIgnoreCase);
+        GameLoadingFps = new Dictionary<string, double>(GameLoadingFps ?? new(), StringComparer.OrdinalIgnoreCase);
         PlaytimeFromSaves ??= DefaultPlaytimeFromSaves();
         // Case-insensitive like GameTargetFps, and for the same reason: the
         // lookups ignore case, the deserialiser's dictionary didn't, so
@@ -885,6 +895,7 @@ public sealed class AppSettings
         nameof(PicturesLeft), nameof(PicturesTop), nameof(PicturesWidth), nameof(PicturesHeight),
         nameof(PicturesSort),
         nameof(GameTargetFps),   // the SCORE card's right-click menu
+        nameof(GameLoadingFps),  // the same menu
         // Right-click on the hardware window's stability line. Off this list
         // it was only ever written once, as null, and every later click was
         // lost on the next start.

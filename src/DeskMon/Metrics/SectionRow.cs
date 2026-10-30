@@ -149,17 +149,15 @@ public sealed class SectionRow : INotifyPropertyChanged, IPanelRow
     /// <summary>
     /// What the section is about, then what a click does - which depends on
     /// whether it is folded, so it says the one that will happen - and that it
-    /// can be dragged.
+    /// can be dragged. A card like the rows' (see Ui.InfoTip), with the two
+    /// actions on lines of their own at its foot.
     /// </summary>
-    public string Tooltip
-    {
-        get
+    public object Tooltip
+        => Ui.InfoTip.Make(_theme, "SECTION", BaseTitle, _description, hints: new[]
         {
-            string click = (_isCollapsed ? "Click to show its rows again" : "Click to fold its rows away")
-                           + ", or drag it up or down to move the section.";
-            return _description is null ? click : $"{_description}\n{click}";
-        }
-    }
+            _isCollapsed ? "Click to show its rows again." : "Click to fold its rows away.",
+            "Drag it up or down to move the section.",
+        });
 
     private bool _isDragging;
 

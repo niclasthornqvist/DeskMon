@@ -32,7 +32,7 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
                     <Button Style="{StaticResource PanelButton}"
-                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                            Content="&#x2715;" ToolTip="Close&#x0a;Closes the window - it opens again where you left it." Click="Close_Click" />
                 </StackPanel>
             </Grid>
 
@@ -44,7 +44,7 @@
             <StackPanel Style="{StaticResource ActionRow}" Orientation="Horizontal">
                 <!-- Two pages, one over the other: copy. -->
                 <Button Style="{StaticResource ToolButton}"
-                        ToolTip="Copy everything to the clipboard" Click="Copy_Click">
+                        ToolTip="Copy&#x0a;Copies everything in this window as text - for a forum post or a support ticket." Click="Copy_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
                               Data="M3.5,0.5 H9.5 V7.5 H3.5 Z M1.5,2.5 V9.5 H7.5" />
@@ -190,7 +190,7 @@
                                             Width="18" Height="16" Margin="4,0,0,0"
                                             VerticalAlignment="Center"
                                             Visibility="{Binding RetryVisibility}"
-                                            ToolTip="Ping again"
+                                            ToolTip="Ping again&#x0a;Measures the ping and the regions again, without reading the rest of the window."
                                             Click="PingAgain_Click">
                                         <Path Data="M8.46,0.6 V3 H6.06 M8.46,3 A4,4 0 1 0 8.94,5.7"
                                               Width="10" Height="10" StrokeThickness="1.3"

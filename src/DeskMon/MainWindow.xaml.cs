@@ -269,6 +269,9 @@ public partial class MainWindow : Window
     {
         _settings = AppSettings.Load();
         _theme = new UiTheme(_settings);
+        // Every plain tooltip in every window as a card in this theme, so
+        // they all share one design - see InfoTip.UseCardsEverywhere.
+        Ui.InfoTip.UseCardsEverywhere(_theme);
         GameIcons.Use(_settings);
         PerformanceScore.Use(_settings);
         _notesStore = new NotesStore(_settings.NotesFolder);
@@ -811,7 +814,7 @@ public partial class MainWindow : Window
             if (_inGame && _fps.NeedsRestart)
             {
                 HarvestFrames();
-                _fps.Start(_gamePid, _settings.PresentMonPath);
+                _fps.Start(_gamePid, _settings.PresentMonPath, LoadingLockFor(_sessionGame), MenuAboveFor(_sessionGame));
             }
 
             // Its reason in the tooltip as it changes - it can change off the
@@ -965,6 +968,7 @@ public partial class MainWindow : Window
             {
                 _trimmed = true;
                 TrimMemory();   // hand back everything JIT and startup needed
+                KeepResident(); // after it, so the floor is the warm set, not startup's
             }
 
             // A young-object GC every half minute. .NET sizes that generation
@@ -1101,6 +1105,58 @@ public partial class MainWindow : Window
         }
         catch { /* purely an optimisation */ }
     }
+
+    /// <summary>
+    /// Floors DeskMon's working set at what it uses once warm, so Windows
+    /// can't page the widget out on its own. Leaving it to Windows (see
+    /// TrimMemory) still froze it for 82 s during an antivirus scan: an idle
+    /// widget's pages are the first Windows takes back while a scan fills the
+    /// file cache, and reading them back from a disk the scan has saturated
+    /// takes seconds a page. The memory is in use anyway; this only stops it
+    /// going. Clamped, so a bloated moment can't pin hundreds of MB for good.
+    /// </summary>
+    private static void KeepResident()
+    {
+        try
+        {
+            long floor = Math.Clamp(Environment.WorkingSet, 64L << 20, 256L << 20);
+
+            // The maximum stays soft (MAX_DISABLE), so the widget can still
+            // grow past the floor - opening the sessions window, say.
+            if (!SetProcessWorkingSetSizeEx(GetCurrentProcess(), (nint)floor, (nint)(floor * 4),
+                                            QuotaLimitsHardWsMinEnable | QuotaLimitsHardWsMaxDisable))
+                App.Log("keeping the widget in memory", $"SetProcessWorkingSetSizeEx failed (error {Marshal.GetLastWin32Error()}).");
+        }
+        catch (Exception ex)
+        {
+            App.Log("keeping the widget in memory", ex);
+        }
+    }
+
+    private const uint QuotaLimitsHardWsMinEnable = 0x1;
+    private const uint QuotaLimitsHardWsMaxDisable = 0x8;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetProcessWorkingSetSizeEx(IntPtr process, nint minimum, nint maximum, uint flags);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    /// <summary>
+    /// The frame rate <paramref name="game"/>'s loading screens are locked at,
+    /// if one is set - see AppSettings.GameLoadingFps. By the session's name,
+    /// as the per-game FPS target is, since both are set from the sessions window.
+    /// </summary>
+    private double? LoadingLockFor(string? game)
+        => game is not null && _settings.GameLoadingFps.TryGetValue(game, out double fps) ? fps : null;
+
+    /// <summary>
+    /// Three times <paramref name="game"/>'s FPS target - its own, or Settings'
+    /// - above which a second is a menu, left out of the session's figures; see
+    /// FrameStats' "Menus left out". From the target, so a game aimed at a
+    /// high frame rate keeps its fast play.
+    /// </summary>
+    private static double MenuAboveFor(string? game) => 3 * PerformanceScore.TargetFor(game);
 
     // --- Game detection ---------------------------------------------------
 
@@ -1359,7 +1415,7 @@ public partial class MainWindow : Window
         // an ETW trace session on a number nobody can see - which is the exact
         // overhead that setting is chosen to avoid.
         if (_settings.MeasureFps && !_settings.PauseWhenFullscreen)
-            _fps.Start(pid, _settings.PresentMonPath);
+            _fps.Start(pid, _settings.PresentMonPath, LoadingLockFor(_sessionGame), MenuAboveFor(_sessionGame));
 
         // Placed by this game's window, so it lands on the monitor being played on.
         _overlayAnchor = IntPtr.Zero;
@@ -1959,6 +2015,19 @@ public partial class MainWindow : Window
     private SessionNotePrompt? _notePrompt;
 
     /// <summary>
+    /// The panel as it is seen on screen: the window less the room it keeps
+    /// round the panel for the glow (UiTheme.GlowRoom). Lined up with the
+    /// window instead, the note card stood that much further off than it looked.
+    /// </summary>
+    private Rect VisiblePanel()
+    {
+        var room = Panel.Margin;
+        return new Rect(Left + room.Left, Top + room.Top,
+                        Math.Max(0, ActualWidth - room.Left - room.Right),
+                        Math.Max(0, ActualHeight - room.Top - room.Bottom));
+    }
+
+    /// <summary>
     /// The card asking for a note on the session just logged - see
     /// SessionNotePrompt. Here, where the line is written as the game quits,
     /// so it comes while the evening is fresh, and only for a session long
@@ -1984,7 +2053,7 @@ public partial class MainWindow : Window
 
         SaveTypedSessionNote();   // a card still up with a note typed in it is not thrown away for the new one
         _notePrompt?.Close();
-        var prompt = new SessionNotePrompt(_theme, summary, new Rect(Left, Top, ActualWidth, ActualHeight), async note =>
+        var prompt = new SessionNotePrompt(_theme, summary, VisiblePanel(), async note =>
         {
             // Said in the tray when it fails: the card is gone by then, and
             // a note typed and lost without a word would be worse than none.
@@ -2005,8 +2074,16 @@ public partial class MainWindow : Window
                 _tray?.Notify("DeskMon", $"The session note couldn't be added to {game}'s notes.", warning: true);
             }
         });
+        // Locked to the widget's side: moved with it while it is dragged or
+        // grows and shrinks - the GAME section folding away as the game quits
+        // changes its height right after the card appears.
+        void Follow(object? sender, EventArgs e) => prompt.Follow(VisiblePanel());
+        LocationChanged += Follow;
+        SizeChanged += Follow;
         prompt.Closed += (_, _) =>
         {
+            LocationChanged -= Follow;
+            SizeChanged -= Follow;
             if (ReferenceEquals(_notePrompt, prompt))
                 _notePrompt = null;
         };
@@ -2055,6 +2132,13 @@ public partial class MainWindow : Window
             return;
 
         _loggedLine = null;
+
+        // The card asked about a session that turns out not to be over: left
+        // up, it sat over the game and a second came when it really quit.
+        // Anything already typed is kept, under the heading it was asked with.
+        SaveTypedSessionNote();
+        _notePrompt?.Close();
+
         // On the writer, behind the append that wrote it - see SessionHistory.DeleteLater.
         if (SessionRecord.Parse(line) is { } logged)
             _sessions.DeleteLater(_sessionGame, logged, RefreshAfterSession);
@@ -3291,7 +3375,12 @@ public partial class MainWindow : Window
             using (shot)
             {
                 var notes = Notes();
-                notes.ShowFor(game);
+
+                // Only these notes on screen, not "this game is running": with
+                // no game running, game is just the notes that were open, and
+                // the plain ShowFor put it under PLAYING NOW. While a game
+                // runs, its start already marked it.
+                notes.ShowFor(game, running: false);
 
                 if (Screenshot.IsBlank(shot))
                 {
@@ -3326,7 +3415,7 @@ public partial class MainWindow : Window
                 // and the picture would have gone into those. Back to the
                 // game it was taken for, whose folder the file is in.
                 if (!string.Equals(notes.CurrentGame, game, StringComparison.OrdinalIgnoreCase))
-                    notes.ShowFor(game);
+                    notes.ShowFor(game, running: false);   // as above
 
                 notes.InsertScreenshot(preview, path, takenAt);
             }

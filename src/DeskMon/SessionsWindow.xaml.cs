@@ -957,7 +957,7 @@ public partial class SessionsWindow : PanelWindow
         foreach (var title in new FrameworkElement[] { GameLogo, GameNamePanel, GameLinkBadge })
         {
             title.Cursor = link ? Cursors.Hand : null;
-            title.ToolTip = link ? $"Open {name} on the Steam store" : null;
+            title.ToolTip = link ? $"{name}\nClick to open its page on the Steam store." : null;
         }
         // The badge says "link" before the mouse gets there; with no link it
         // would promise a click that does nothing.
@@ -1439,6 +1439,17 @@ public partial class SessionsWindow : PanelWindow
                 Margin = new Thickness(0, 1, 0, 0),
             });
 
+        // Said on the card once set, so a lower loading time or a better low
+        // in new sessions can be traced back to it - see LoadingLockMenu.
+        if (_settings.GameLoadingFps.TryGetValue(game, out double locked))
+            content.Children.Add(new TextBlock
+            {
+                Text = $"Loading screens at {locked:0} fps left out",
+                Foreground = _theme.Label,
+                FontSize = SmallFont - 1,
+                Margin = new Thickness(0, 1, 0, 0),
+            });
+
         border.Cursor = Cursors.Hand;
         border.MouseLeftButtonUp += (_, _) =>
         {
@@ -1514,7 +1525,58 @@ public partial class SessionsWindow : PanelWindow
             menu.Items.Add(item);
         }
 
+        menu.Items.Add(new Separator());
+        AddLoadingLockItems(menu, game);
         return menu;
+    }
+
+    /// <summary>Loading screen locks offered - the rates games cap a loading screen at.</summary>
+    private static readonly int[] LoadingLockChoices = { 30, 60 };
+
+    /// <summary>
+    /// "Loading screen locked at" for this game - see AppSettings.GameLoadingFps.
+    /// In the target's menu because both say how to read the game's frame
+    /// rate, and the target is where someone puzzling over a score already looks.
+    /// Takes effect from the next session: past ones kept no frames to redo.
+    ///
+    /// Straight in the menu, under a dim heading, not as a submenu: the dark
+    /// menu style draws no submenus, so one was an item that opened nothing.
+    /// </summary>
+    private void AddLoadingLockItems(ContextMenu menu, string game)
+    {
+        double? current = _settings.GameLoadingFps.TryGetValue(game, out double set) ? set : null;
+
+        // Disabled, so it reads as a heading and can't be clicked.
+        menu.Items.Add(new MenuItem { Header = "Loading screen locked at (from the next session):", IsEnabled = false });
+
+        void Pick(double? fps)
+        {
+            // A new dictionary in place of the old, as the target's Pick does.
+            var locks = new Dictionary<string, double>(_settings.GameLoadingFps, StringComparer.OrdinalIgnoreCase);
+            if (fps is double value)
+                locks[game] = value;
+            else
+                locks.Remove(game);
+            _settings.GameLoadingFps = locks;
+            _settings.Save();
+            ShowSelection(GamePicker.SelectedItem, null);
+        }
+
+        var none = new MenuItem { Header = "Not locked", IsCheckable = true, IsChecked = current is null };
+        none.Click += (_, _) => Pick(null);
+        menu.Items.Add(none);
+
+        foreach (int fps in LoadingLockChoices)
+        {
+            var item = new MenuItem
+            {
+                Header = $"{fps} fps - left out of {game}'s figures",
+                IsCheckable = true,
+                IsChecked = current == fps,
+            };
+            item.Click += (_, _) => Pick(fps);
+            menu.Items.Add(item);
+        }
     }
 
     /// <summary>Counts lookups, so one for a game already left behind doesn't land on the next.</summary>
@@ -2059,7 +2121,7 @@ public partial class SessionsWindow : PanelWindow
                 Margin = new Thickness(column.Number || i == 0 ? 0 : ColumnGap, 0, column.Number ? 10 : 0, 0),
                 Background = Brushes.Transparent,   // the whole cell clicks, not just the letters
                 Cursor = Cursors.Hand,
-                ToolTip = $"Sort by {column.Header}",
+                ToolTip = $"{column.Header}\nClick to sort the table by it; click again to turn the order round.",
             };
 
             heading.MouseLeftButtonUp += (_, _) =>
@@ -2485,7 +2547,9 @@ public partial class SessionsWindow : PanelWindow
 
             // With a BOM: without one Excel reads the file as the local code
             // page and "°C" turns into "Â°C".
-            File.WriteAllText(dialog.FileName, csv, new System.Text.UTF8Encoding(true));
+            // On a worker too: a slow or network drive would hold every window.
+            string file = dialog.FileName;
+            await System.Threading.Tasks.Task.Run(() => File.WriteAllText(file, csv, new System.Text.UTF8Encoding(true)));
         }
         catch (Exception ex)
         {

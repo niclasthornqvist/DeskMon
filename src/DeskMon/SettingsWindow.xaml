@@ -71,7 +71,7 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
                     <Button Style="{StaticResource PanelButton}"
-                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                            Content="&#x2715;" ToolTip="Close&#x0a;Closes the window - it opens again where you left it." Click="Close_Click" />
                 </StackPanel>
             </Grid>
 
@@ -135,7 +135,7 @@
                                        TextAlignment="Right" VerticalAlignment="Center" />
                             <Button Grid.Column="3" Style="{StaticResource PanelButton}"
                                     Width="Auto" Padding="10,0" Margin="8,0,0,0"
-                                    Content="Default" ToolTip="Back to the built-in colour"
+                                    Content="Default" ToolTip="Reset the colour&#x0a;Back to the theme's built-in colour."
                                     Click="DefaultColour_Click" />
                         </Grid>
                     </StackPanel>
@@ -161,7 +161,7 @@
                                      PreviewKeyDown="ProgramFilter_PreviewKeyDown" />
                             <Button Grid.Column="1" Style="{StaticResource PanelButton}"
                                     Width="Auto" Padding="10,0" Margin="6,0,0,0"
-                                    Content="Add" ToolTip="Add the name as typed (Enter)"
+                                    Content="Add" ToolTip="Add (Enter)&#x0a;Adds the program by the name as typed, even if it isn't running now."
                                     Click="ProgramAddTyped_Click" />
                         </Grid>
                         <!-- Wraps: "Nothing running matches. Press Enter to add

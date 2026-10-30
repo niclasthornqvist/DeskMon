@@ -118,7 +118,7 @@
 
                 <!-- A chip: body with two pins above and below. -->
                 <ToggleButton x:Name="ToolHardware" Style="{StaticResource ToolToggle}"
-                              ToolTip="Hardware info"
+                              ToolTip="Hardware info&#x0a;What the PC is made of, with checks for updates and for settings that hold games back."
                               Click="ToolHardware_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -134,7 +134,7 @@
                      this row now opens that window itself, and the history
                      is the window worth a button. -->
                 <ToggleButton x:Name="ToolSessions" Style="{StaticResource ToolToggle}"
-                              ToolTip="Session history"
+                              ToolTip="Session history&#x0a;Every game session DeskMon has recorded, with scores, charts and a play calendar."
                               Click="ToolSessions_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -159,7 +159,7 @@
 
                 <!-- A cog: a circle with four spokes poking out of it. -->
                 <ToggleButton x:Name="ToolSettings" Style="{StaticResource ToolToggle}"
-                              ToolTip="Settings"
+                              ToolTip="Settings&#x0a;The widget's readings, look and alerts, the windows, and how games are measured."
                               Click="ToolSettings_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -619,6 +619,7 @@
                                        Text="{Binding Label}"
                                        Width="{Binding LabelWidth}"
                                        Padding="{Binding LabelPadding}"
+                                       Opacity="{Binding ContentOpacity}"
                                        Foreground="{Binding LabelBrush}" />
 
                             <!-- A warning the number can't show, such as the CPU
@@ -635,7 +636,11 @@
                                        Visibility="{Binding FlagVisibility}"
                                        ToolTip="{Binding FlagTooltip}" />
 
+                            <!-- Faded with the label and peak while the row reads
+                                 n/a - see MetricRow.ContentOpacity. Not the flag or
+                                 the hover strip, which mean something either way. -->
                             <ContentControl Grid.Column="1" Content="{Binding}"
+                                            Opacity="{Binding ContentOpacity}"
                                             Focusable="False" IsTabStop="False"
                                             HorizontalContentAlignment="Stretch"
                                             VerticalContentAlignment="Center">
@@ -656,21 +661,44 @@
                             <!-- Right-aligned in its side, so the peaks end at the
                                  row's right edge whatever the label side's width. -->
                             <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                        Opacity="{Binding ContentOpacity}"
                                         HorizontalAlignment="Right">
                             <!-- MinWidth for the same reason as the value: a
-                                 long peak ("↑4850") ran past the column's edge
+                                 long peak ("4850") ran past the column's edge
                                  into the next section. The shared side column
-                                 then widens every row's peaks alike. -->
-                            <TextBlock Text="{Binding Peak}"
-                                       Visibility="{Binding PeakVisibility}"
-                                       MinWidth="{Binding PeakWidth}"
-                                       Margin="6,0,0,0"
-                                       TextAlignment="Right"
-                                       VerticalAlignment="Center"
-                                       Typography.NumeralAlignment="Tabular"
-                                       Foreground="{Binding PeakBrush}"
-                                       FontSize="{Binding PeakFontSize}"
-                                       ToolTip="Worst reading since the game started or the peaks were reset" />
+                                 then widens every row's peaks alike. On the box,
+                                 with the icon and figure right-aligned inside it,
+                                 so the icon stays against the figure however
+                                 short it is. Transparent, so the whole box
+                                 shows the tooltip, not only the strokes. -->
+                            <Border Visibility="{Binding PeakVisibility}"
+                                    MinWidth="{Binding PeakWidth}"
+                                    Margin="6,0,0,0"
+                                    Background="Transparent"
+                                    VerticalAlignment="Center"
+                                    ToolTip="{Binding PeakTooltip}">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <!-- A small chart with a dot on its top (or its
+                                         bottom, where low is worse) - see MetricRow.PeakIcon. -->
+                                    <Path Data="{Binding PeakIcon}"
+                                          Visibility="{Binding PeakIconVisibility}"
+                                          Stroke="{Binding PeakBrush}"
+                                          StrokeThickness="1.1"
+                                          StrokeLineJoin="Round"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round"
+                                          Width="{Binding PeakIconSize}"
+                                          Height="{Binding PeakIconSize}"
+                                          Stretch="Uniform"
+                                          Margin="0,0,3,0"
+                                          VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Peak}"
+                                               VerticalAlignment="Center"
+                                               Typography.NumeralAlignment="Tabular"
+                                               Foreground="{Binding PeakBrush}"
+                                               FontSize="{Binding PeakFontSize}" />
+                                </StackPanel>
+                            </Border>
 
                             <!-- Only present on a row that has something folded
                                  behind it - a sensor list, or rows like FPS's

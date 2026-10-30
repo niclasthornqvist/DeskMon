@@ -87,9 +87,12 @@ public sealed class FpsMonitor : IDisposable
         /// session, and the buffer holds only the last 3600 frames - so the
         /// totals are accumulated as frames arrive rather than derived later -
         /// with the lows and jitter over the whole of it, for the performance score.
-        /// The loading screen is left out - see FrameStats' "Loading left out".
+        /// The loading screen is left out - see FrameStats' "Loading left out",
+        /// and the game's loading lock with it where it has one.
         /// </summary>
-        public FrameStats Totals { get; } = new(skipLoading: true);
+        public FrameStats Totals { get; }
+
+        public SwapChain(double? loadingLockFps, double? menuAboveFps) => Totals = new(skipLoading: true, loadingLockFps, menuAboveFps);
 
         public DateTime LastFrameAt;
 
@@ -474,13 +477,33 @@ public sealed class FpsMonitor : IDisposable
     /// <summary>A start is queued or under way for <see cref="TargetPid"/>.</summary>
     private volatile bool _starting;
 
+    /// <summary>The measured game's loading lock - see Start. Written and read under _lock, where chains are made.</summary>
+    private double? _loadingLockFps;
+
+    /// <summary>The measured game's menu cut-off - see Start. Under _lock, like the lock.</summary>
+    private double? _menuAboveFps;
+
     /// <summary>
     /// Starts measuring <paramref name="pid"/>. Does nothing if already
     /// measuring that process, or about to. Returns at once: PresentMon is
     /// found, checked and started on a worker thread - see <see cref="_lifecycle"/>.
     /// </summary>
-    public void Start(int pid, string? presentMonPathOverride)
+    /// <param name="loadingLockFps">
+    /// The frame rate this game's loading screens are locked at, from
+    /// AppSettings.GameLoadingFps - seconds held there are left out of the
+    /// session's figures, see FrameStats. Null for most games.
+    /// </param>
+    /// <param name="menuAboveFps">Seconds faster than this are menus and left out - see FrameStats' "Menus left out".</param>
+    public void Start(int pid, string? presentMonPathOverride, double? loadingLockFps = null, double? menuAboveFps = null)
     {
+        // Set even when this pid is already being measured: it's the same
+        // game, so the same lock - and a chain made from here on uses it.
+        lock (_lock)
+        {
+            _loadingLockFps = loadingLockFps;
+            _menuAboveFps = menuAboveFps;
+        }
+
         if (TargetPid == pid && (_starting || IsRunning))
             return;
 
@@ -1001,7 +1024,7 @@ public sealed class FpsMonitor : IDisposable
                 if (_chains.Count >= MaxChains)
                     EvictQuietest();
 
-                chain = new SwapChain();
+                chain = new SwapChain(_loadingLockFps, _menuAboveFps);
                 _chains[swapChain] = chain;
             }
 

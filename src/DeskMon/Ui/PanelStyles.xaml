@@ -36,6 +36,13 @@
                             <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.26}" />
                             <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
                         </Trigger>
+                        <!-- On: the formatting it applies is on where the cursor is -
+                             the notes' B, I, U and S, see ui:Lit. In the toolbar's
+                             "open" blue, and after hover so hovering doesn't hide it. -->
+                        <Trigger Property="ui:Lit.IsOn" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Accent.40}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
+                        </Trigger>
                         <!-- Faded, or a button that can't be pressed yet (the
                              session history's Delete, before a row is picked)
                              would look exactly like one that can. -->
@@ -82,14 +89,20 @@
         <Setter Property="Focusable" Value="False" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Padding" Value="5,1" />
-        <Setter Property="Margin" Value="0,0,2,0" />
         <Setter Property="Template">
             <Setter.Value>
+                <!-- The 2 px between one button and the next is inside the button,
+                     a transparent strip at its right, not a margin outside it:
+                     as a margin it belonged to the panel behind, so sliding the
+                     mouse from CFG to NOTES crossed a strip where the widget's
+                     own "Drag to move" tooltip took over from the buttons'. -->
                 <ControlTemplate TargetType="ToggleButton">
-                    <Border x:Name="Back" Background="Transparent" CornerRadius="{DynamicResource Theme.CornerSmall}"
-                            Padding="{TemplateBinding Padding}">
-                        <ContentPresenter HorizontalAlignment="Center"
-                                          VerticalAlignment="Center" />
+                    <Border Background="Transparent" Padding="0,0,2,0">
+                        <Border x:Name="Back" Background="Transparent" CornerRadius="{DynamicResource Theme.CornerSmall}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -171,14 +184,22 @@
         <Setter Property="FontFamily" Value="{DynamicResource Theme.Font}" />
         <Setter Property="FontSize" Value="12" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
-        <Setter Property="MaxWidth" Value="340" />
+        <Setter Property="MaxWidth" Value="380" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="Template">
             <Setter.Value>
+                <!-- Text content drawn as a card (TooltipCards, see Ui/InfoTip.cs),
+                     so every tooltip in the program has one design however
+                     its text was set. Left-aligned whatever it hangs on: a
+                     tooltip inherits its owner's text settings, and the
+                     widget's right-aligned peak turned its card right-aligned.
+                     A little wider than the 340 it was, as the cards' titles
+                     and figure rows don't wrap. -->
                 <ControlTemplate TargetType="ToolTip">
                     <Border Background="{DynamicResource Theme.Popup}" BorderBrush="{DynamicResource Theme.PopupEdge}"
-                            BorderThickness="1" Padding="9,6,9,7">
-                        <ContentPresenter>
+                            BorderThickness="1" Padding="10,7,10,8" TextBlock.TextAlignment="Left">
+                        <ContentPresenter Content="{Binding Content, RelativeSource={RelativeSource TemplatedParent},
+                                                            Converter={x:Static ui:TooltipCards.Instance}}">
                             <ContentPresenter.Resources>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="TextWrapping" Value="Wrap" />

@@ -49,7 +49,7 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
                     <Button Style="{StaticResource PanelButton}"
-                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                            Content="&#x2715;" ToolTip="Close&#x0a;Closes the window - it opens again where you left it." Click="Close_Click" />
                 </StackPanel>
             </Grid>
 
@@ -72,7 +72,7 @@
 
                 <!-- A table: a box split into three columns. -->
                 <Button x:Name="ColumnsButton" Style="{StaticResource ToolButton}"
-                        ToolTip="Choose which readings the table shows"
+                        ToolTip="Columns&#x0a;Choose which readings the table shows."
                         Click="Columns_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -84,7 +84,7 @@
 
                 <!-- The notes button's page, with lines of text on it: a log. -->
                 <Button x:Name="OpenLogButton" Style="{StaticResource ToolButton}"
-                        ToolTip="Open this game&apos;s log file in Notepad"
+                        ToolTip="Open the log&#x0a;Opens this game&apos;s session log in Notepad. Reload picks up what you change."
                         Click="OpenLog_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -292,7 +292,7 @@
                              has a small icon in its mark's colour - the average's is a
                              dashed line, as it is drawn across the chart, not a bar. -->
                         <Border x:Name="AverageChip" Margin="0,0,0,0" Padding="9,3,10,3"
-                                ToolTip="The average of the sessions in the chart - the dashed green line across it.&#x0a;For Average FPS weighted by how long each session ran, as the AVERAGE card is."
+                                ToolTip="Average of the chart&#x0a;The dashed green line across it.&#x0a;For Average FPS weighted by how long each session ran, as the AVERAGE card is."
                                 CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
                                 <!-- A wavy line with a dashed level through it: the bars
@@ -310,7 +310,7 @@
                         <!-- The key for the one bar drawn in another colour, so the
                              colour is explained where it is seen, not in a tooltip. -->
                         <Border x:Name="HighestChip" Margin="8,0,0,0" Padding="9,3,10,3"
-                                ToolTip="The highest session in the chart - its bar is drawn in this colour."
+                                ToolTip="Highest in the chart&#x0a;Its bar is drawn in this colour."
                                 CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
                                 <!-- A trend line climbing to an arrowhead: the best
@@ -325,7 +325,7 @@
                              from the highest: with one session, or every bar level,
                              there is no lowest to point out. -->
                         <Border x:Name="LowestChip" Margin="8,0,0,0" Padding="9,3,10,3"
-                                ToolTip="The lowest session in the chart - its bar is drawn in this colour."
+                                ToolTip="Lowest in the chart&#x0a;Its bar is drawn in this colour."
                                 CornerRadius="9" BorderThickness="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
                                 <!-- The same falling: the worst session, in the lowest
@@ -401,7 +401,7 @@
             <TextBlock x:Name="PickHint" DockPanel.Dock="Bottom" Margin="14,0,12,8"
                        TextTrimming="CharacterEllipsis"
                        Text="Click a session or its bar to select it  ·  ← → switch the chart's reading  ·  Ctrl+click to select more  ·  Delete removes the selected"
-                       ToolTip="Click a row in the table, or a bar in the chart, to select that session.&#x0a;← / → switch the chart to the reading before or after - Average FPS, Minutes played and the rest.&#x0a;Ctrl+click selects more than one.&#x0a;Delete presses DELETE (press it again to confirm)." />
+                       ToolTip="Picking sessions&#x0a;Click a row in the table, or a bar in the chart, to select that session.&#x0a;← / → switch the chart to the reading before or after - Average FPS, Minutes played and the rest.&#x0a;Ctrl+click selects more than one.&#x0a;Delete presses DELETE (press it again to confirm)." />
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           Margin="12,2,4,10" Focusable="False">

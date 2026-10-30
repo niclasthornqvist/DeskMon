@@ -10,7 +10,7 @@ using DeskMon.Notes;
 namespace DeskMon;
 
 // All games' weekly report: this week's play against last week's, game by
-// game, and a calendar of the last twelve weeks shaded by time played. The
+// game, and a calendar of three months - slid back as far as a year - shaded by time played. The
 // totals above answer "how much, ever"; this answers "how much lately", which
 // they can't. From DeskMon's own sessions only - Steam's and GOG's playtime
 // is a total with no days in it.
@@ -21,8 +21,18 @@ public partial class SessionsWindow
 
     private IReadOnlyList<PlaySpan> _played = Array.Empty<PlaySpan>();
 
-    /// <summary>How many weeks the calendar shows, this one included.</summary>
-    private const int CalendarWeeks = 12;
+    /// <summary>How many calendar months the calendar shows at a time, the last one included.</summary>
+    private const int CalendarMonths = 3;
+
+    /// <summary>How far back the calendar's slider reaches, in months, this one included: a year.</summary>
+    private const int CalendarReachMonths = 12;
+
+    /// <summary>
+    /// How many months back the calendar is slid - 0 for the months up to
+    /// now. Kept for the window's life, so a refresh doesn't throw you back
+    /// to now; not saved, since opening the window is a fresh look.
+    /// </summary>
+    private int _calendarMonthsBack;
 
     /// <summary>
     /// Fills the report under All games' cards, or hides it for one game.
@@ -42,7 +52,11 @@ public partial class SessionsWindow
         var today = DateTime.Today;
         var thisWeek = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
         var lastWeek = thisWeek.AddDays(-7);
-        var calendarStart = thisWeek.AddDays(-7 * (CalendarWeeks - 1));
+
+        // The whole year the slider can reach, counted once here, so sliding
+        // only redraws the squares rather than adding the sessions up again.
+        var reachStart = new DateTime(today.Year, today.Month, 1).AddMonths(-(CalendarReachMonths - 1));
+        var calendarStart = reachStart.AddDays(-(((int)reachStart.DayOfWeek + 6) % 7));
 
         // Time per day and game, a session past midnight split between the
         // two days - an evening from 22:00 to 01:00 is two hours on one day
@@ -75,7 +89,7 @@ public partial class SessionsWindow
         Grid.SetColumn(week, 0);
         WeekPanel.Children.Add(week);
 
-        var calendar = Calendar(calendarStart, today, byDay);
+        var calendar = Calendar(today, byDay);
         Grid.SetColumn(calendar, 1);
         WeekPanel.Children.Add(calendar);
     }
@@ -134,7 +148,7 @@ public partial class SessionsWindow
             var name = new TextBlock
             {
                 Text = game, Foreground = _theme.NotesText, TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(0, 2, 10, 2), ToolTip = game, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 2, 10, 2), ToolTip = $"{game}\nThe bright bar is this week's play, the faint one last week's, on one scale.", VerticalAlignment = VerticalAlignment.Center,
             };
 
             // This week's bar over a faint one for last week, in the same track.
@@ -180,52 +194,144 @@ public partial class SessionsWindow
         return panel;
     }
 
-    /// <summary>
-    /// The last twelve weeks, a column each, Monday at the top: each day
-    /// shaded by how long was played, with the games in its tooltip. Today
-    /// outlined, so "where am I" needs no counting.
-    /// </summary>
-    private StackPanel Calendar(DateTime start, DateTime today, Dictionary<DateTime, Dictionary<string, TimeSpan>> byDay)
-    {
-        const double Cell = 11, Gap = 2;
-        var panel = new StackPanel();
-        panel.Children.Add(Heading($"LAST {CalendarWeeks} WEEKS"));
+    // Squares of 18 px: at 11 the grid was a small patch in a wide window,
+    // too fine to make out one day from the next or aim the mouse at, and the
+    // day of the month has to fit inside. The weekday row and month column
+    // (Top, Left) sized to the labels.
+    private const double CalendarCell = 18, CalendarGap = 3, CalendarTop = 16, CalendarLeft = 32;
 
+    /// <summary>
+    /// Three months laid out like a wall calendar, with a slider under it that
+    /// goes back a month at a time, as far as a year. Three months rather
+    /// than the twelve weeks it was: whole months read as "August", where
+    /// twelve weeks started and ended mid-month; and the slider reaches what
+    /// twelve weeks never showed - "was I playing this much in spring?".
+    /// </summary>
+    private StackPanel Calendar(DateTime today, Dictionary<DateTime, Dictionary<string, TimeSpan>> byDay)
+    {
+        var panel = new StackPanel();
+        var heading = Heading(string.Empty);
+        panel.Children.Add(heading);
+
+        // One scale over the whole reachable year, so a day's shade means the
+        // same however far back the calendar is slid.
         double longest = byDay.Count > 0 ? byDay.Values.Max(d => d.Values.Sum(t => t.TotalMinutes)) : 0;
+
+        var host = new Border();
+        panel.Children.Add(host);
+
+        // Far right is now, far left a year back - time running left to right
+        // as on the chart. Whole months only, and snapped, so it lands on one.
+        int furthest = CalendarReachMonths - CalendarMonths;
+        var slider = new Slider
+        {
+            Style = (Style)FindResource("DarkSlider"),
+            Width = CalendarLeft + 7 * (CalendarCell + CalendarGap) - CalendarGap,
+            Minimum = 0,
+            Maximum = furthest,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true,
+            SmallChange = 1,
+            LargeChange = 3,
+            Value = furthest - Math.Clamp(_calendarMonthsBack, 0, furthest),
+            Margin = new Thickness(0, 6, 0, 0),
+            ToolTip = "Months shown\nDrag left to go back, a month at a time, as far as a year.",
+        };
+        panel.Children.Add(slider);
+
+        void Draw()
+        {
+            _calendarMonthsBack = furthest - (int)Math.Round(slider.Value);
+            var last = new DateTime(today.Year, today.Month, 1).AddMonths(-_calendarMonthsBack);
+            var first = last.AddMonths(-(CalendarMonths - 1));
+
+            heading.Text = _calendarMonthsBack == 0
+                ? $"LAST {CalendarMonths} MONTHS"
+                : first.Year == last.Year
+                ? $"{first:MMM} – {last:MMM yyyy}".ToUpperInvariant()
+                : $"{first:MMM yyyy} – {last:MMM yyyy}".ToUpperInvariant();
+            host.Child = CalendarGrid(first, last.AddMonths(1), today, byDay, longest);
+        }
+
+        slider.ValueChanged += (_, _) => Draw();
+        Draw();
+        return panel;
+    }
+
+    /// <summary>
+    /// The days from <paramref name="from"/> up to <paramref name="until"/>
+    /// laid out like a wall calendar: a row a week, the oldest at the top,
+    /// Monday to Sunday from left to right, so the dates read 1, 2, 3 along a
+    /// row - a column per week had them running down and across, which took
+    /// counting to follow. Each day shaded by how long was played, with the
+    /// games in its tooltip; today outlined, so "where am I" needs no counting.
+    /// </summary>
+    private Canvas CalendarGrid(DateTime from, DateTime until, DateTime today,
+                                Dictionary<DateTime, Dictionary<string, TimeSpan>> byDay, double longest)
+    {
+        const double Cell = CalendarCell, Gap = CalendarGap, Top = CalendarTop, Left = CalendarLeft;
+        double labelSize = SmallFont - 1;
+
+        var start = from.AddDays(-(((int)from.DayOfWeek + 6) % 7));
+        int weeks = (int)Math.Ceiling((until - start).TotalDays / 7);
+
+        // Always as tall as three months can need, so sliding to a month that
+        // takes a row less doesn't make everything under it jump.
+        const int MostWeeks = 14;
         var grid = new Canvas
         {
-            Width = 26 + CalendarWeeks * (Cell + Gap),
-            Height = 12 + 7 * (Cell + Gap),
+            Width = Left + 7 * (Cell + Gap),
+            Height = Top + MostWeeks * (Cell + Gap),
             Margin = new Thickness(0, 2, 0, 0),
         };
 
-        // Day names on the left - every other one, as a calendar does when
-        // the rows are this small - and a month's name over its first week.
-        foreach (var (name, row) in new[] { ("Mon", 0), ("Wed", 2), ("Fri", 4), ("Sun", 6) })
+        // The weekdays across the top, each centred over its column - all
+        // seven, in two letters, which fit now that a column is a whole square.
+        string[] weekdays = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
+        for (int d = 0; d < 7; d++)
         {
-            var label = new TextBlock { Text = name, Foreground = _theme.Header, FontSize = SmallFont - 2 };
-            Canvas.SetLeft(label, 0);
-            Canvas.SetTop(label, 12 + row * (Cell + Gap) - 2);
+            var label = new TextBlock
+            {
+                Text = weekdays[d], Foreground = _theme.Header, FontSize = labelSize,
+                Width = Cell, TextAlignment = TextAlignment.Center,
+            };
+            Canvas.SetLeft(label, Left + d * (Cell + Gap));
+            Canvas.SetTop(label, -2);
             grid.Children.Add(label);
         }
 
-        for (int week = 0; week < CalendarWeeks; week++)
+        for (int week = 0; week < weeks; week++)
         {
             var monday = start.AddDays(7 * week);
-            double x = 26 + week * (Cell + Gap);
-            if (week == 0 || monday.Month != monday.AddDays(-7).Month)
+            double y = Top + week * (Cell + Gap);
+
+            // The month's name beside the week its 1st falls in, centred on
+            // the row. The first row always holds the first month's 1st.
+            var first = Enumerable.Range(0, 7).Select(d => monday.AddDays(d))
+                                  .FirstOrDefault(d => d.Day == 1 && d >= from && d < until);
+            if (first != default)
             {
-                var month = new TextBlock { Text = monday.ToString("MMM", CultureInfo.InvariantCulture), Foreground = _theme.Header, FontSize = SmallFont - 2 };
-                Canvas.SetLeft(month, x);
-                Canvas.SetTop(month, -2);
+                var month = new TextBlock
+                {
+                    Text = first.ToString("MMM", CultureInfo.InvariantCulture),
+                    Foreground = _theme.Header, FontSize = labelSize,
+                };
+                Canvas.SetLeft(month, 0);
+                Canvas.SetTop(month, y + (Cell - labelSize * 1.3) / 2);
                 grid.Children.Add(month);
             }
 
             for (int d = 0; d < 7; d++)
             {
                 var day = monday.AddDays(d);
-                if (day > today)
+                if (day > today || day >= until)
                     break;
+
+                // The days of the month before, in the first row, left blank:
+                // they belong to the next slide back, and drawn here they
+                // made "1" look like the middle of a week of play.
+                if (day < from)
+                    continue;
 
                 var games = byDay.GetValueOrDefault(day);
                 double minutes = games?.Values.Sum(t => t.TotalMinutes) ?? 0;
@@ -238,18 +344,33 @@ public partial class SessionsWindow
 
                 var square = new Border
                 {
-                    Width = Cell, Height = Cell, CornerRadius = new CornerRadius(2.5), Background = fill,
+                    Width = Cell, Height = Cell, CornerRadius = new CornerRadius(3.5), Background = fill,
                     BorderBrush = day == today ? _theme.NotesText : null,
                     BorderThickness = new Thickness(day == today ? 1 : 0),
                     ToolTip = DayTip(day, games),
+
+                    // The day of the month inside it, so a day can be found
+                    // by its date rather than by counting from the month's
+                    // name. Bright on a played day, where the fill is the
+                    // accent; dim on an empty one, so the played days still
+                    // stand out first. Not hit-tested, so the tooltip comes
+                    // from the square under it.
+                    Child = new TextBlock
+                    {
+                        Text = day.Day.ToString(CultureInfo.InvariantCulture),
+                        FontSize = 9,
+                        Foreground = minutes > 0 ? _theme.NotesText : _theme.Header,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        IsHitTestVisible = false,
+                    },
                 };
-                Canvas.SetLeft(square, x);
-                Canvas.SetTop(square, 12 + d * (Cell + Gap));
+                Canvas.SetLeft(square, Left + d * (Cell + Gap));
+                Canvas.SetTop(square, y);
                 grid.Children.Add(square);
             }
         }
-        panel.Children.Add(grid);
-        return panel;
+        return grid;
     }
 
     /// <summary>"Sat 25 Oct · 1 h 40 min" and each game's share, most first.</summary>

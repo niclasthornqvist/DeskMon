@@ -74,15 +74,84 @@ public sealed class FrameStats
     private int _cleanSeconds;
     private bool _secondClean = true;
 
+    // --- A loading screen locked at a frame rate -----------------------------
+    //
+    // The Witcher 3 draws its loading screens at a steady 30 fps - frames of
+    // 33-37 ms, under the 50 ms above - for 10-20 s, at the start and on every
+    // fast travel. Its main menu runs at 1200 fps first, which settled the run
+    // before the loading screen even began, so 20 s at 27 fps counted as play
+    // and took a game averaging 210 to a 1% low of 27. Such a lock can't be
+    // told from a game simply running at 30, so it is a per-game setting
+    // (AppSettings.GameLoadingFps): with one, a whole second held at that rate
+    // is loading wherever it falls - left out and added to LoadingMs.
+
+    /// <summary>The per-game lock, or null: see the note above.</summary>
+    private readonly double? _lockFps;
+
+    /// <summary>
+    /// How close to the lock a frame must be: 75% to 110% of it - 22 to 33
+    /// fps for 30. Wide below, since the lock measured 27; tight above, since
+    /// a capped screen never runs faster than its cap.
+    /// </summary>
+    private bool AtLock(double frameMs)
+        => _lockFps is double fps && frameMs >= 1000 / (fps * 1.1) && frameMs <= 1000 / (fps * 0.75);
+
+    /// <summary>
+    /// A second held at the lock: nine frames in ten in its band. Not all of
+    /// them, so one odd frame doesn't let a loading second through; a real
+    /// game at a varied 30-ish breaks out of the band far more often than that.
+    /// </summary>
+    private bool Locked(FrameStats second, int atLock)
+        => _lockFps is not null && second.Frames > 0 && atLock >= second.Frames * 0.9;
+
+    /// <summary>Frames in the second in progress that sat at the lock - see Locked.</summary>
+    private int _secondAtLock;
+
+    /// <summary>
+    /// Once settled, with a lock: the second in progress, held until it is
+    /// whole and can be judged. Without a lock frames count straight away.
+    /// </summary>
+    private FrameStats? _playSecond;
+
+    /// <summary>The last whole second was left out - at the lock or in a menu - for the timeline's shading.</summary>
+    private bool _atLockNow;
+
+    // --- Menus left out --------------------------------------------------------
+    //
+    // The Witcher 3's menus - the main menu, the map, the pause screen - run
+    // uncapped at 800-1200 fps. A minute in one makes as many frames as nine
+    // minutes of play at 130, so they were over half of a session's frames:
+    // its median frame came out at 1 ms, every play frame slower than 9 ms
+    // counted as a "stutter" (20,000 in nine minutes of smooth play), and the
+    // average and the frame-time spread were the menu's. So a whole second
+    // running faster than three times the game's FPS target is a menu, and
+    // left out like a loading screen. Three times, so a game simply played
+    // fast stays in: 222 fps play against a 144 target counts, as would CS2
+    // at 600 against 240.
+
+    /// <summary>Faster than this, a second is a menu - see the note above. Null to count every second.</summary>
+    private readonly double? _menuAboveFps;
+
+    /// <summary>A whole second whose frames came faster than the menu cut-off.</summary>
+    private bool InMenu(FrameStats second)
+        => _menuAboveFps is double above && second.TotalMs > 0 && second.Frames * 1000 / second.TotalMs > above;
+
+    /// <summary>The time left out as menus, across every run added in. Kept apart from LoadingMs, which the log names "loading".</summary>
+    public double MenuMs { get; private set; }
+
     /// <param name="skipLoading">
     /// Wait for the game to settle before counting - for a swap chain's live
     /// frames. Off for totals that are only added together from runs, which
     /// were each settled already.
     /// </param>
-    public FrameStats(bool skipLoading = false)
+    /// <param name="loadingLockFps">The game's loading screen lock, if it has one - see the note above.</param>
+    /// <param name="menuAboveFps">Seconds faster than this are menus, left out - see "Menus left out".</param>
+    public FrameStats(bool skipLoading = false, double? loadingLockFps = null, double? menuAboveFps = null)
     {
         _skipLoading = skipLoading;
         _settled = !skipLoading;
+        _lockFps = loadingLockFps is double fps && double.IsFinite(fps) && fps > 0 ? fps : null;
+        _menuAboveFps = menuAboveFps is double menu && double.IsFinite(menu) && menu > 0 ? menu : null;
     }
 
     public void Add(double frameMs)
@@ -96,7 +165,33 @@ public sealed class FrameStats
             return;
         }
 
-        Count(frameMs);
+        if (_lockFps is null && _menuAboveFps is null)
+        {
+            Count(frameMs);
+            return;
+        }
+
+        // Settled, with a lock or a menu cut-off: judged a second at a time,
+        // as while unsettled.
+        _playSecond ??= new FrameStats();
+        _playSecond.Count(frameMs);
+        if (AtLock(frameMs))
+            _secondAtLock++;
+
+        if (_playSecond.TotalMs < 1000)
+            return;
+
+        bool locked = Locked(_playSecond, _secondAtLock);
+        bool menu = !locked && InMenu(_playSecond);
+        _atLockNow = locked || menu;
+        if (locked)
+            LoadingMs += _playSecond.TotalMs;
+        else if (menu)
+            MenuMs += _playSecond.TotalMs;
+        else
+            Add(_playSecond);
+        _playSecond = new FrameStats();
+        _secondAtLock = 0;
     }
 
     /// <summary>A frame while unsettled: into the second in progress, and each whole second judged on its own.</summary>
@@ -109,11 +204,29 @@ public sealed class FrameStats
         _second.Count(frameMs);
         if (frameMs >= LoadingFrameMs)
             _secondClean = false;
+        if (AtLock(frameMs))
+            _secondAtLock++;
 
         if (_second.TotalMs < 1000)
             return;
 
-        if (_secondClean)
+        // A second at the game's loading lock is loading however smooth -
+        // see "A loading screen locked at a frame rate".
+        bool locked = Locked(_second, _secondAtLock);
+        _secondAtLock = 0;
+
+        // A menu second is set aside: neither play towards settling - the
+        // 1200 fps main menu settled the run before its loading screen had
+        // even begun - nor a slow second that breaks the streak.
+        if (!locked && InMenu(_second))
+        {
+            MenuMs += _second.TotalMs;
+            _second = new FrameStats();
+            _secondClean = true;
+            return;
+        }
+
+        if (_secondClean && !locked)
         {
             _streak.Add(_second);
             _cleanSeconds++;
@@ -197,6 +310,7 @@ public sealed class FrameStats
         _pacedMs += other._pacedMs;
         _squares += other._squares;
         LoadingMs += other.LoadingMs;
+        MenuMs += other.MenuMs;
 
         // A run that ended - or is read - before it settled hands over what
         // it held back as well: a short session is all loading or all play,
@@ -205,13 +319,21 @@ public sealed class FrameStats
             foreach (var held in new[] { other._loading, other._streak, other._second })
                 if (held is not null)
                     Add(held);
+
+        // Likewise the part-second a locked run is still judging: a session
+        // read or ended mid-second would otherwise lose up to a second of play.
+        if (other._settled && other._playSecond is { } pending)
+            Add(pending);
     }
 
-    /// <summary>Whether the loading screen is over and frames count - for the timeline, which shades the part before.</summary>
-    public bool Settled => _settled;
+    /// <summary>
+    /// Whether frames count now - past the loading screen, and not at the
+    /// game's loading lock or in a menu - for the timeline, which shades the rest.
+    /// </summary>
+    public bool Settled => _settled && !_atLockNow;
 
     /// <summary>Every frame added, counted or held back - for telling which chain is the game's.</summary>
-    public long Seen => Frames + (_loading?.Frames ?? 0) + (_streak?.Frames ?? 0) + (_second?.Frames ?? 0);
+    public long Seen => Frames + (_loading?.Frames ?? 0) + (_streak?.Frames ?? 0) + (_second?.Frames ?? 0) + (_playSecond?.Frames ?? 0);
 
     public FrameStats Copy()
     {

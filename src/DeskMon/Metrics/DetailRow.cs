@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Linq;
 using System.Windows.Media;
 
 namespace DeskMon.Metrics;
@@ -54,20 +55,40 @@ public sealed class DetailRow : INotifyPropertyChanged, IPanelRow
 
     /// <summary>
     /// The full name - a long one is cut short with "…" on the panel - and
-    /// what these rows are.
+    /// what these rows are, as a card like the metric rows' (see Ui.InfoTip).
+    /// A "Right-click …" line in the note goes to the card's foot with the
+    /// other hints, rather than reading as part of the explanation.
     /// </summary>
-    public string Tooltip => $"{Label}\n{_note}";
+    public object Tooltip
+    {
+        get
+        {
+            var lines = _note.Split('\n');
+            bool IsHint(string line) => line.StartsWith("Right-click", System.StringComparison.Ordinal)
+                                        || line.StartsWith("Click", System.StringComparison.Ordinal);
+            return Ui.InfoTip.Make(_theme, null, Label,
+                                   string.Join("\n", lines.Where(l => !IsHint(l))),
+                                   hints: lines.Where(IsHint));
+        }
+    }
 
     public double ValueWidth => _settings.ValueWidth;
-    public double FontSize => System.Math.Max(8, _settings.FontSize - 1.5);
+    /// <summary>
+    /// One point under a metric row: smaller keeps the list from competing
+    /// with the row above, but at 1.5 the names and values were hard to read.
+    /// </summary>
+    public double FontSize => System.Math.Max(8, _settings.FontSize - 1);
 
     /// <summary>Re-reads everything, for a settings change.</summary>
     public void Refresh() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
 
     public Brush LabelBrush => _theme.Label;
 
-    /// <summary>The header colour - quieter than a measured value.</summary>
-    public Brush ValueBrush => _theme.Header;
+    /// <summary>
+    /// The label colour - still quieter than a measured value, which keeps its
+    /// warning colours, but the header colour made the readings hard to see.
+    /// </summary>
+    public Brush ValueBrush => _theme.Label;
 
     public string Value
     {

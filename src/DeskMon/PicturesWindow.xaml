@@ -35,7 +35,7 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
                     <Button Style="{StaticResource PanelButton}"
-                            Content="&#x2715;" ToolTip="Close" Click="Close_Click" />
+                            Content="&#x2715;" ToolTip="Close&#x0a;Closes the window - it opens again where you left it." Click="Close_Click" />
                 </StackPanel>
             </Grid>
 
@@ -46,7 +46,7 @@
             <StackPanel Style="{StaticResource ActionRow}" Orientation="Horizontal">
                 <!-- A folder: tab on top, body below. -->
                 <Button Style="{StaticResource ToolButton}"
-                        ToolTip="Open this game&apos;s screenshots folder in Explorer"
+                        ToolTip="Screenshots folder&#x0a;Opens this game&apos;s screenshots folder in Explorer."
                         Click="OpenFolder_Click">
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource ToolIcon}"
@@ -61,7 +61,7 @@
                 <ComboBox x:Name="SortPicker" Style="{StaticResource DarkCombo}"
                           Width="150" Margin="6,0,4,0" Focusable="False"
                           VerticalAlignment="Center"
-                          ToolTip="The order the pictures are shown in" />
+                          ToolTip="Sort order&#x0a;The order the pictures are shown in." />
 
                 <!-- Only there when there is something to clean up, so it comes
                      last: appearing, it doesn't push FOLDER or the order along.

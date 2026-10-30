@@ -706,7 +706,7 @@ public partial class PicturesWindow : PanelWindow
             "Taking out the ones you no longer need keeps it smooth.")
         {
             Foreground = _theme.Warn,
-            ToolTip = "Each picture's preview is stored inside the notes file, which is written every time typing pauses.",
+            ToolTip = "Why saving can pause\nEach picture's preview is stored inside the notes file, which is written every time typing pauses.",
         });
         ShowSummaryLine();
     }
@@ -879,7 +879,7 @@ public partial class PicturesWindow : PanelWindow
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
             Cursor = Cursors.Hand,
-            ToolTip = picture.Favourite ? "Take it out of favourites" : "Add it to favourites",
+            ToolTip = picture.Favourite ? "Take it out of favourites\nIts star goes, and it no longer comes first under Favourites first." : "Add it to favourites\nIt gets a star, and comes first when sorted by Favourites first.",
             Child = new TextBlock
             {
                 Text = picture.Favourite ? "★" : "☆",

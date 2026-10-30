@@ -48,6 +48,15 @@ public sealed class SystemInfo
     public string? BoardProduct { get; private set; }
     public string? BiosVersion { get; private set; }
 
+    // The chipset software's own package - "AMD Chipset Software" or Intel's
+    // "Chipset Device Software" - for the chipset row and its update check.
+    // Null when neither is installed, which is common: Windows brings drivers
+    // of its own for the chipset, and only the maker's package has a version
+    // that can be compared with theirs.
+    public string? ChipsetName { get; private set; }
+    public string? ChipsetVersion { get; private set; }
+    public DateTime? ChipsetDate { get; private set; }
+
     public string? OperatingSystem { get; private set; }
 
     /// <summary>When Windows last started, rather than an uptime: the window is
@@ -108,6 +117,7 @@ public sealed class SystemInfo
         };
 
         info.ReadBoardAndBios();
+        info.ReadChipset();
         info.ReadMemory();
         info.ReadCpuDetail();
         info.ReadCpuChecks();
@@ -820,6 +830,57 @@ public sealed class SystemInfo
         catch
         {
             // Leave whatever was read; the window shows "unknown" for the rest.
+        }
+    }
+
+    /// <summary>
+    /// The chipset package from the installed-programs list, not from the
+    /// devices: its drivers each carry their own version ("2.0.0.1" for one,
+    /// "7.0.1" for another), and only the package's matches the number AMD
+    /// and Intel publish. Both registry views, as the installers differ in
+    /// which they write to.
+    /// </summary>
+    private void ReadChipset()
+    {
+        try
+        {
+            foreach (string path in new[] { @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                                            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" })
+            {
+                using var programs = Registry.LocalMachine.OpenSubKey(path);
+                if (programs is null)
+                    continue;
+
+                foreach (string id in programs.GetSubKeyNames())
+                {
+                    using var program = programs.OpenSubKey(id);
+                    string? name = Clean(program?.GetValue("DisplayName") as string);
+                    if (name is null || !name.Contains("Chipset", StringComparison.OrdinalIgnoreCase)
+                        || !(name.StartsWith("AMD", StringComparison.OrdinalIgnoreCase)
+                             || name.StartsWith("Intel", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+
+                    // AMD lists the package twice: "AMD Chipset Software" with
+                    // no install date, and "AMD_Chipset_Drivers" with one. The
+                    // name from the tidy one, the date from whichever has it.
+                    // The install date stands in for the release date, which
+                    // neither gives - a little younger, never older.
+                    if (ChipsetName is null || !name.Contains('_'))
+                    {
+                        ChipsetName = name.Replace('_', ' ');
+                        ChipsetVersion = Clean(program?.GetValue("DisplayVersion") as string) ?? ChipsetVersion;
+                    }
+
+                    if (DateTime.TryParseExact(program?.GetValue("InstallDate") as string, "yyyyMMdd", CultureInfo.InvariantCulture,
+                                               DateTimeStyles.None, out var installed)
+                        && (ChipsetDate is null || installed > ChipsetDate))
+                        ChipsetDate = installed;
+                }
+            }
+        }
+        catch
+        {
+            // No chipset row; the rest of the window is unaffected.
         }
     }
 

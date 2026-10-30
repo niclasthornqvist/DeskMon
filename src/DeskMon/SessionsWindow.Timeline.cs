@@ -525,7 +525,7 @@ public partial class SessionsWindow
                 Child = row, Padding = new Thickness(8, 2, 9, 2), Margin = new Thickness(6, 0, 0, 0),
                 CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1),
                 BorderBrush = on ? brush : _theme.Separator, Background = Brushes.Transparent,
-                Cursor = Cursors.Hand, ToolTip = on ? $"Hide the {name} line" : $"Show the {name} line",
+                Cursor = Cursors.Hand, ToolTip = on ? $"{name}\nShown on the timeline.\nClick to hide its line." : $"{name}\nHidden from the timeline.\nClick to show its line again.",
             };
             chip.MouseLeftButtonUp += (_, _) => { flip(); DrawTimeline(); };
             TimelineToggles.Children.Add(chip);

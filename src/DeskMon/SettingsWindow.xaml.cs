@@ -401,7 +401,7 @@ public partial class SettingsWindow : PanelWindow
             SmallChange = range.Step,
             LargeChange = range.Step * 10,
             Value = Convert.ToDouble(property.GetValue(_settings), CultureInfo.InvariantCulture),
-            ToolTip = $"From {SliderText(range.Min, property, range)} to {SliderText(range.Max, property, range)}",
+            ToolTip = $"Drag to set it\nFrom {SliderText(range.Min, property, range)} to {SliderText(range.Max, property, range)} - or type the value in the box.",
         };
 
         // Each side's change sets the other, which would fire straight back
@@ -520,8 +520,8 @@ public partial class SettingsWindow : PanelWindow
         }
 
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        Place(ColumnHeading("DESKTOP", "Shown while no game is running - settings.json: HiddenSections"), 0, 1);
-        Place(ColumnHeading("GAME", "Shown while a game runs - settings.json: HiddenSectionsInGame"), 0, 2);
+        Place(ColumnHeading("DESKTOP", "Desktop layout\nThe sections shown while no game is running.\nsettings.json  HiddenSections"), 0, 1);
+        Place(ColumnHeading("GAME", "Game layout\nThe sections shown while a game runs.\nsettings.json  HiddenSectionsInGame"), 0, 2);
 
         int row = 1;
         foreach (var section in MetricRegistry.Sections)
@@ -570,7 +570,7 @@ public partial class SettingsWindow : PanelWindow
             IsChecked = IsShown(),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = $"Show {section.ToUpperInvariant()} on the {layout} layout",
+            ToolTip = $"{section.ToUpperInvariant()} on the {layout} layout\nTicked, the section is shown there; unticked, it is left out.",
         };
 
         void Commit(bool shown)
@@ -674,7 +674,7 @@ public partial class SettingsWindow : PanelWindow
             Width = 30,
             Height = 24,
             Content = swatch,
-            ToolTip = "Pick a colour",
+            ToolTip = "Pick a colour\nOpens the colour picker.",
         };
 
         var box = NewBox(property.GetValue(_settings) as string ?? string.Empty, null);
@@ -888,14 +888,14 @@ public partial class SettingsWindow : PanelWindow
             Padding = new Thickness(10, 0, 10, 0),
             Margin = new Thickness(6, 0, 0, 0),
             Content = browseLabel,
-            ToolTip = folder ? "Choose a folder" : "Choose the program",
+            ToolTip = folder ? "Choose a folder\nPick it in a folder browser." : "Choose the program\nPick the .exe in a file browser.",
         };
 
         var clear = new Button
         {
             Style = (Style)FindResource("PanelButton"),
             Content = "✕",
-            ToolTip = folder ? "Use the default folder" : "Find it automatically",
+            ToolTip = folder ? "Use the default folder\nClears the box, so DeskMon's own folder is used." : "Find it automatically\nClears the box, so DeskMon looks in the usual places.",
         };
 
         browse.Click += (_, _) =>
@@ -1115,7 +1115,7 @@ public partial class SettingsWindow : PanelWindow
                 Height = 18,
                 FontSize = 10,
                 Content = "✕",
-                ToolTip = $"Remove {name}",
+                ToolTip = $"Remove {name}\nTakes it off this list.",
             };
 
             string captured = name;
