@@ -32,6 +32,19 @@ internal static class InfoTip
         return new ToolTip { Content = Card(theme, caption, title, body, facts, hints) };
     }
 
+    /// <summary>A card still to be made - see <see cref="Later"/>.</summary>
+    public sealed record LaterCard(Func<object> Make);
+
+    /// <summary>
+    /// <see cref="Make"/>, with the card made only when the tooltip is drawn -
+    /// see TooltipCards. For what a binding reads often and is rarely seen:
+    /// the widget's rows read theirs on every settings keystroke and every new
+    /// peak, and each read built a whole card nobody was looking at.
+    /// </summary>
+    public static LaterCard Later(UiTheme theme, string? caption, string? title, string? body,
+                                  IEnumerable<Fact>? facts = null, IEnumerable<string>? hints = null)
+        => new(() => Card(theme, caption, title, body, facts, hints));
+
     /// <summary>The card itself, for a ToolTip (Make) or for a plain text tooltip's content (Cards).</summary>
     private static StackPanel Card(UiTheme theme, string? caption, string? title, string? body,
                                    IEnumerable<Fact>? facts, IEnumerable<string>? hints)
@@ -225,7 +238,9 @@ public sealed class TooltipCards : System.Windows.Data.IValueConverter
     public static readonly TooltipCards Instance = new();
 
     public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
-        => value is string text && !string.IsNullOrWhiteSpace(text) ? InfoTip.CardFor(text) ?? value : value;
+        => value is InfoTip.LaterCard later ? later.Make()
+         : value is string text && !string.IsNullOrWhiteSpace(text) ? InfoTip.CardFor(text) ?? value
+         : value;
 
     public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
         => throw new NotSupportedException();

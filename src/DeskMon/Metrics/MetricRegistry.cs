@@ -67,8 +67,11 @@ public static class MetricRegistry
         // decisions - but it runs well above the CCD and cache sensors, so
         // comparing against another tool used to mean guessing which of the six
         // it was showing. Now you can just look.
+        //
+        // Red from 87, under the 89 °C a 7800X3D stops at and slows down: at
+        // 90 the colour and the alert could never come on this chip.
         new MetricSection("Temperature",
-            new Metric("CPU", "°C", s => s.CpuTemp, Min: 30, Max: 95, Warn: 80, Crit: 90,
+            new Metric("CPU", "°C", s => s.CpuTemp, Min: 30, Max: 95, Warn: 80, Crit: 87,
                        Details: s => s.CpuTemperatures,
                        Tooltip: "The processor's temperature - the sensor it uses itself to decide how fast to run.\n" +
                                 "Too hot, it slows itself down to cool off, and the frame rate drops with it.",
@@ -135,7 +138,9 @@ public static class MetricRegistry
             // point a mouse starts to feel indirect, 50 ms is unmistakable -
             // and the bar fills at 60 ms, since beyond that the figure matters
             // more than where it sits on a bar.
-            new Metric("LAT", "ms", s => s.Latency, Max: 60, Warn: 25, Crit: 50,
+            // No alert: it is about how a game is set up, not the PC's health,
+            // and a slow game would otherwise be told so in the middle of it.
+            new Metric("LAT", "ms", s => s.Latency, Max: 60, Warn: 25, Crit: 50, Alerts: false,
                        Tooltip: "Display latency: from the game starting work on a frame to that frame being on screen.\n" +
                                 "Not the frame time - a game can hold a steady 10 ms frame time and still put it on screen 60 ms late.\n" +
                                 "Shows n/a in a windowed game, which has no latency to report.",
@@ -157,7 +162,7 @@ public static class MetricRegistry
             // sit high and there is no alert, because many games fill the card
             // on purpose as a cache - 90% alone is not a fault, only near 100%
             // together with stutter is. Read with the other card sensors.
-            new Metric("VRAM", "%", s => s.GpuMemoryLoad, Max: 100, Warn: 90, Crit: 97,
+            new Metric("VRAM", "%", s => s.GpuMemoryLoad, Max: 100, Warn: 90, Crit: 97, Alerts: false,
                        Tooltip: "How much of the graphics card's own memory is in use.\n" +
                                 "Many games fill it on purpose, so a high figure alone is fine.\n" +
                                 "Near 100% with stutters, lower the texture setting - the card is moving textures in and out over PCIe.")

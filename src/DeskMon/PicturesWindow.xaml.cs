@@ -80,13 +80,21 @@ public partial class PicturesWindow : PanelWindow
     ///
     /// Only the <see cref="ThumbsKept"/> most recently used: each is about
     /// half a megabyte, and kept for ever a game with 500 screenshots would
-    /// have held a quarter of a gigabyte for a window opened once.
+    /// have held a quarter of a gigabyte for a window opened once. Let go
+    /// altogether a while after the window is put away - see _forgetThumbs.
     /// </summary>
     private static readonly Dictionary<string, (DateTime Written, BitmapSource Image, long Used)> Thumbs =
         new(StringComparer.OrdinalIgnoreCase);
 
     private const int ThumbsKept = 100;
     private static long _thumbUse;
+
+    /// <summary>
+    /// Empties the cache two minutes after the window is hidden: quick to come
+    /// back to after a look at the notes, but up to 50 MB shouldn't stay in a
+    /// widget that runs all day - least of all beside a game wanting the RAM.
+    /// </summary>
+    private readonly DispatcherTimer _forgetThumbs = new() { Interval = TimeSpan.FromMinutes(2) };
 
     /// <summary>
     /// How many screenshots one set of notes can hold before saving them gets
@@ -188,6 +196,12 @@ public partial class PicturesWindow : PanelWindow
 
         // Put away, it lets go of every thumbnail - the cache keeps the most
         // recent, so opening it again is still quick.
+        _forgetThumbs.Tick += (_, _) =>
+        {
+            _forgetThumbs.Stop();
+            Thumbs.Clear();
+        };
+
         IsVisibleChanged += (_, _) =>
         {
             if (!IsVisible)
@@ -195,6 +209,11 @@ public partial class PicturesWindow : PanelWindow
                 Tiles.Children.Clear();
                 _shown = null;
                 EmptyState.Visibility = Visibility.Collapsed;   // so it fades in again on the next open
+                _forgetThumbs.Start();
+            }
+            else
+            {
+                _forgetThumbs.Stop();
             }
         };
 
@@ -433,11 +452,16 @@ public partial class PicturesWindow : PanelWindow
     /// <summary>The open game's pictures, in the order picked above them, each marked with whether the notes use it.</summary>
     private List<Picture> Read()
     {
+        _useKnown = true;
+
         string folder = _notes.PictureFolder;
         if (!Directory.Exists(folder))
             return new List<Picture>();
 
+        // Not known: every picture counts as used, so none is marked or
+        // offered for deleting on the strength of notes nobody could read.
         var inUse = _notes.PicturesInUse();
+        _useKnown = inUse is not null;
         var favourites = PictureFavourites.Load(folder);
 
         var pictures = new DirectoryInfo(folder).EnumerateFiles()
@@ -445,10 +469,13 @@ public partial class PicturesWindow : PanelWindow
                         || f.Extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase))
             .Select(f => new Picture(f.FullName, f.Name,
                                      NotesPictures.TimeFromFileName(f.FullName) ?? f.LastWriteTime,
-                                     f.Length, inUse.Contains(f.Name), favourites.Contains(f.Name)));
+                                     f.Length, inUse is null || inUse.Contains(f.Name), favourites.Contains(f.Name)));
 
         return Sorted(pictures).ToList();
     }
+
+    /// <summary>Whether the last read could tell which pictures the notes use - see Read.</summary>
+    private bool _useKnown = true;
 
     /// <summary>The pictures as last listed, in their order - what the viewer steps through.</summary>
     private List<Picture> _listed = new();
@@ -550,7 +577,7 @@ public partial class PicturesWindow : PanelWindow
         int inNotes = pathsInNotes.Select(Path.GetFileName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         int missing = pathsInNotes.Count(path => !File.Exists(path));
 
-        string shown = $"{_notes.CurrentGame}|{inNotes}|{missing}|" + string.Join("|", pictures.Select(p => $"{p.Name}:{p.Bytes}:{p.InNotes}:{p.Favourite}"));
+        string shown = $"{_notes.CurrentGame}|{inNotes}|{missing}|{_useKnown}|" + string.Join("|", pictures.Select(p => $"{p.Name}:{p.Bytes}:{p.InNotes}:{p.Favourite}"));
         if (shown == _shown)
             return;
         _shown = shown;
@@ -566,6 +593,7 @@ public partial class PicturesWindow : PanelWindow
 
         ShowSummary(pictures, null, missing);
         WarnIfManyInNotes(inNotes);
+        WarnIfUseUnknown();
 
         var unused = pictures.Where(p => !p.InNotes).ToList();
         CleanButton.Visibility = unused.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -707,6 +735,26 @@ public partial class PicturesWindow : PanelWindow
         {
             Foreground = _theme.Warn,
             ToolTip = "Why saving can pause\nEach picture's preview is stored inside the notes file, which is written every time typing pauses.",
+        });
+        ShowSummaryLine();
+    }
+
+    /// <summary>
+    /// Says why NOT IN NOTES and DELETE UNUSED have gone, when some notes
+    /// couldn't be read - their going unexplained would look like every
+    /// picture being in use, which isn't known either.
+    /// </summary>
+    private void WarnIfUseUnknown()
+    {
+        if (_useKnown)
+            return;
+
+        if (SummaryText.Inlines.Count > 0)
+            SummaryText.Inlines.Add(new System.Windows.Documents.LineBreak());
+        SummaryText.Inlines.Add(new System.Windows.Documents.Run(
+            "Some notes can't be read right now, so unused pictures aren't shown. Close whatever holds the file and click back here.")
+        {
+            Foreground = _theme.Warn,
         });
         ShowSummaryLine();
     }

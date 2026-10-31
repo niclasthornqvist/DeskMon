@@ -68,8 +68,9 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// The levels are worked out from the metric rather than written into each
     /// explanation, so changing a threshold in MetricRegistry can't leave the
     /// tooltip saying the old one. Null only for a row with nothing to say at
-    /// all, which then shows the panel's own tooltip. Made again whenever it
-    /// is read - on a settings or theme change - so its colours follow.
+    /// all, which then shows the panel's own tooltip. Read again on a settings
+    /// or theme change, so its colours follow; the card is made only when
+    /// the tooltip is drawn - see InfoTip.Later.
     /// </summary>
     public object? Tooltip
     {
@@ -91,8 +92,8 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
                 body = (body is null ? string.Empty : body + "\n")
                        + $"The bright tick on the bar is the peak: the {(_metric.Invert ? "lowest" : "highest")} it has been since the game started or the peaks were reset.";
 
-            return Ui.InfoTip.Make(_theme, _sectionKey.ToUpperInvariant(), _metric.Label, body,
-                                   levels, hint is null ? null : new[] { hint });
+            return Ui.InfoTip.Later(_theme, _sectionKey.ToUpperInvariant(), _metric.Label, body,
+                                    levels, hint is null ? null : new[] { hint });
         }
     }
 
@@ -470,10 +471,10 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             string marker = _settings.ShowPeakMarker && _settings.ShowBars
                 ? "\nThe bright tick on the bar marks the same spot, so you can see how far the reading is from it."
                 : string.Empty;
-            return Ui.InfoTip.Make(_theme, _sectionKey.ToUpperInvariant(), $"{_metric.Label} peak",
-                                   $"The {which} reading since the game started or the peaks were reset.{marker}",
-                                   new[] { new Ui.InfoTip.Fact(_metric.Invert ? "Lowest" : "Highest", WorstText ?? "none yet", level) },
-                                   new[] { "Reset peaks is on the right-click menu." });
+            return Ui.InfoTip.Later(_theme, _sectionKey.ToUpperInvariant(), $"{_metric.Label} peak",
+                                    $"The {which} reading since the game started or the peaks were reset.{marker}",
+                                    new[] { new Ui.InfoTip.Fact(_metric.Invert ? "Lowest" : "Highest", WorstText ?? "none yet", level) },
+                                    new[] { "Reset peaks is on the right-click menu." });
         }
     }
 

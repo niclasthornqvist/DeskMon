@@ -77,21 +77,23 @@ public static class SteamPlaytime
         string stamp = string.Join("|", libraries.Select(folder =>
             Directory.Exists(folder) ? Directory.GetLastWriteTimeUtc(folder).Ticks.ToString(CultureInfo.InvariantCulture) : "-"));
 
+        // Held through the reading too: a list opening asks from a thread per
+        // game, and each of those parsed every manifest at the same moment.
+        // The first reads them, and the rest wait for its answer.
         lock (NamesLock)
         {
             if (_names is { } known && known.Stamp == stamp)
                 return known.Ids;
-        }
 
-        var ids = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string steamapps in libraries)
-            foreach (var state in Manifests(steamapps))
-                if (Value(state, "name") is { } name && Value(state, "appid") is { } id)
-                    ids.TryAdd(Simplified(name), id);   // the first, as the walk used to find
+            var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string steamapps in libraries)
+                foreach (var state in Manifests(steamapps))
+                    if (Value(state, "name") is { } name && Value(state, "appid") is { } id)
+                        ids.TryAdd(Simplified(name), id);   // the first, as the walk used to find
 
-        lock (NamesLock)
             _names = (stamp, ids);
-        return ids;
+            return ids;
+        }
     }
 
     /// <summary>Steam's playtime for an app, or null.</summary>

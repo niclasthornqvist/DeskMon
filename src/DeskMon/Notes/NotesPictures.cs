@@ -339,6 +339,13 @@ internal sealed class NotesPictures
         public int FileWidth { get; set; } = int.MaxValue;
 
         /// <summary>
+        /// No sharp copy could be made, so none is tried before this - every
+        /// scroll asked again for a file that isn't there. A time rather than
+        /// for good: it may come back from the Recycle Bin.
+        /// </summary>
+        public DateTime TryAgainAfter { get; set; }
+
+        /// <summary>
         /// This picture's group in the RTF, learned from a full save - see
         /// NotesPictures.Serialise - and what it was learned for: a preview
         /// swapped by mark-up, or a picture resized, is learned again.
@@ -1214,7 +1221,7 @@ internal sealed class NotesPictures
 
     private async void LoadSharp(Image image, Picture picture, double width)
     {
-        if (picture.FullPath is not { } path)
+        if (picture.FullPath is not { } path || DateTime.UtcNow < picture.TryAgainAfter)
             return;
 
         double scale = VisualTreeHelper.GetDpi(_editor).DpiScaleX;
@@ -1252,6 +1259,8 @@ internal sealed class NotesPictures
             picture.Loading = 0;
         if (fileWidth > 0)
             picture.FileWidth = fileWidth;
+        if (sharp is null)
+            picture.TryAgainAfter = DateTime.UtcNow.AddSeconds(30);
 
         if (!stillWanted)
             return;

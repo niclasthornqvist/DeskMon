@@ -71,10 +71,13 @@ public sealed class SessionTimeline
         if (limit is Bottleneck.Kind k) _limits[k] = _limits.GetValueOrDefault(k) + 1;
         _loading |= loading && fps is not null;
 
-        if (now - _bucketStart < Every)
+        // In UTC: when the clocks go back, local time runs backwards for a
+        // moment and no point would be written for the hour that followed.
+        var nowUtc = now.ToUniversalTime();
+        if (nowUtc - _bucketStart.ToUniversalTime() < Every)
             return;
 
-        _points.Add(new Point(_bucketStart - Start,
+        _points.Add(new Point(_bucketStart.ToUniversalTime() - Start.ToUniversalTime(),
                               _fpsCount > 0 ? _fps / _fpsCount : null,
                               _lowCount > 0 ? _low / _lowCount : null,
                               _cpuCount > 0 ? _cpu / _cpuCount : null,
@@ -106,17 +109,18 @@ public sealed class SessionTimeline
 
     /// <summary>
     /// The points as the file holds them: a heading, then "seconds,fps,low,cpu,gpu,loading"
-    /// per line, empty where nothing was read. Made on the UI thread, written on AtomicFile's.
+    /// per line, empty where nothing was read. Static, from a copy of the
+    /// points, so AtomicFile's writer can make it while the tick adds more.
     /// </summary>
-    public string ToText()
+    public static string ToText(DateTime start, IReadOnlyList<Point> points)
     {
         var inv = CultureInfo.InvariantCulture;
         var text = new StringBuilder();
-        text.AppendLine($"{StartedPrefix}{Start.ToString("yyyy-MM-dd HH:mm:ss", inv)} · a point every {Every.TotalSeconds:0} s");
+        text.AppendLine($"{StartedPrefix}{start.ToString("yyyy-MM-dd HH:mm:ss", inv)} · a point every {Every.TotalSeconds:0} s");
         text.AppendLine("# seconds,fps,1% low,cpu °C,gpu °C,loading,ping ms,limit");
 
         static string Cell(double? value) => value?.ToString("0.#", CultureInfo.InvariantCulture) ?? string.Empty;
-        foreach (var p in _points)
+        foreach (var p in points)
             text.AppendLine(string.Join(",", ((int)p.At.TotalSeconds).ToString(inv), Cell(p.Fps), Cell(p.Low),
                                         Cell(p.CpuTemp), Cell(p.GpuTemp), p.Loading ? "1" : "0",
                                         Cell(p.Ping), p.Limit is Bottleneck.Kind k ? LimitLetter(k) : string.Empty));

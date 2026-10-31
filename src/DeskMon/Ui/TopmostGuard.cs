@@ -141,7 +141,13 @@ internal sealed class TopmostGuard
 
         int ownPid = Environment.ProcessId;
 
-        for (IntPtr above = GetWindow(_handle, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+        // Capped: the z-order can change during the walk, and Microsoft warns
+        // a GetWindow loop can then go round for ever - here on the UI thread.
+        // Only other topmost windows are above this one; there are never many.
+        int steps = 0;
+        for (IntPtr above = GetWindow(_handle, GW_HWNDPREV);
+             above != IntPtr.Zero && steps < MostWindowsAbove;
+             above = GetWindow(above, GW_HWNDPREV), steps++)
         {
             if (!IsWindowVisible(above) || IsCloaked(above))
                 continue;
@@ -174,6 +180,7 @@ internal sealed class TopmostGuard
     /// <summary>Given way to until then: a window that keeps putting itself back over this one.</summary>
     private DateTime _yieldUntil;
 
+    private const int MostWindowsAbove = 64;
     private const int RaisesBeforeYielding = 5;
     private static readonly TimeSpan RaiseWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan YieldFor = TimeSpan.FromMinutes(1);

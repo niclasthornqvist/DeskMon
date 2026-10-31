@@ -49,21 +49,45 @@ internal static class AtomicFile
         // before it writes the file's contents out, and a power cut in that
         // window leaves the real name pointing at an empty file - the exact
         // outcome this class exists to prevent.
-        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            stream.Write(contents);
-            stream.Flush(flushToDisk: true);
-        }
-
         try
         {
-            File.Move(temp, path, overwrite: true);
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(contents);
+                stream.Flush(flushToDisk: true);
+            }
+
+            MoveOver(temp, path);
         }
         catch
         {
-            // Don't leave a stray .tmp next to the real file.
+            // Don't leave a stray .tmp next to the real file - a full disk
+            // failing the write above left one as well.
             try { File.Delete(temp); } catch { }
             throw;
+        }
+    }
+
+    private const int MoveAttempts = 3;
+
+    /// <summary>
+    /// The rename, tried a few times: an antivirus or sync tool holding the
+    /// target for a moment refuses it, and that one failed save used to be the
+    /// end of it. Short, as a notes save can be waiting on the UI thread.
+    /// </summary>
+    private static void MoveOver(string temp, string path)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, path, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < MoveAttempts)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 
@@ -123,6 +147,9 @@ internal static class AtomicFile
     /// <summary>A job is being run, not only queued - <see cref="Flush"/> waits for both.</summary>
     private static bool _busy;
 
+    /// <summary>Jobs waiting out a delay before they queue - <see cref="Flush"/> waits for those too.</summary>
+    private static int _delayed;
+
     /// <summary>
     /// Runs <paramref name="work"/> on the writer thread, after everything
     /// queued before it. For file work only; its errors are logged, not thrown,
@@ -142,6 +169,27 @@ internal static class AtomicFile
             }
             Monitor.PulseAll(PendingLock);
         }
+    }
+
+    /// <summary>
+    /// <see cref="Later(Action)"/> after <paramref name="wait"/>, for a retry.
+    /// Counted while it waits: a delay of its own was invisible to Flush, so a
+    /// retry due just as DeskMon closed was lost with the process.
+    /// </summary>
+    public static void Later(TimeSpan wait, Action work)
+    {
+        lock (PendingLock)
+            _delayed++;
+
+        System.Threading.Tasks.Task.Delay(wait).ContinueWith(_ =>
+        {
+            // One step under the lock, so Flush never finds it in neither place.
+            lock (PendingLock)
+            {
+                _delayed--;
+                Later(work);
+            }
+        });
     }
 
     private static void Drain()
@@ -182,7 +230,7 @@ internal static class AtomicFile
         var until = DateTime.UtcNow + timeout;
         lock (PendingLock)
         {
-            while (Pending.Count > 0 || _busy)
+            while (Pending.Count > 0 || _busy || _delayed > 0)
             {
                 var left = until - DateTime.UtcNow;
                 if (left <= TimeSpan.Zero || !Monitor.Wait(PendingLock, left))

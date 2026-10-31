@@ -133,14 +133,13 @@ public partial class SessionsWindow
             return;
         }
 
-        // Said rather than left blank: an empty panel would look broken.
+        // Said rather than left blank: an empty panel would look broken. Why
+        // there is none is left out: which version recorded it means nothing
+        // to anyone looking at an old session, and there is nothing to do about it.
         if (session is null || timeline is null || timeline.HighestFps is not double highest)
         {
             TimelineCaption.Text = string.Empty;
-            DrawTimelinePlaceholder(
-                session is { LoadingLeftOut: null } ? "No timeline: logged before DeskMon 1.73" : "No timeline for this session",
-                "Sessions played from 1.73 on are recorded minute by minute",
-                width, height, TimelineBadge.None);
+            DrawTimelinePlaceholder("No timeline logged", string.Empty, width, height, TimelineBadge.None);
             return;
         }
         TimelineCaption.Text = Summary(session);

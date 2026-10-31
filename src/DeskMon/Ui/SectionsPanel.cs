@@ -57,6 +57,13 @@ internal sealed class SectionsPanel : Panel
     /// </summary>
     public Func<object?, bool>? IsSpare { get; set; }
 
+    /// <summary>
+    /// How wide the columns asked to be at the last measure. Kept because
+    /// DesiredSize is cut down to the room given, so a window left too narrow
+    /// could never be told from one that fits - see KeepColumnsInside.
+    /// </summary>
+    public double NeededWidth { get; private set; }
+
     private bool Spare(UIElement child)
         => Columns && IsSpare is { } spare && spare((child as FrameworkElement)?.DataContext);
 
@@ -130,6 +137,7 @@ internal sealed class SectionsPanel : Panel
         }
 
         total += ColumnGap * Math.Max(0, columns.Count - 1);
+        NeededWidth = total;
         return new Size(total, tallest);
     }
 

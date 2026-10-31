@@ -175,9 +175,14 @@ internal sealed class MemoryUsers
                     // with its parent shouldn't stop the rest being ended.
                     process.Kill(entireProcessTree: false);
                 }
-                catch (Exception ex) when (ex is not InvalidOperationException)
+                catch (InvalidOperationException)
                 {
-                    // InvalidOperationException is "already exited", which is the goal.
+                    // "Already exited", which is the goal. Caught here: a filter
+                    // on the catch below let it out to the outer one, which
+                    // gave up on every process still to go.
+                }
+                catch (Exception ex)
+                {
                     failed++;
                     firstError ??= ex.Message;
                 }

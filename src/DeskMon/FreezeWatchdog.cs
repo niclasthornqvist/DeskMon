@@ -225,6 +225,7 @@ internal static class FreezeWatchdog
             if (error != 0)
                 return $"The dump failed (snapshot error {error}).";
 
+            string? failed = null;
             try
             {
                 using var file = new FileStream(partial, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
@@ -238,11 +239,19 @@ internal static class FreezeWatchdog
 
                 if (!MiniDumpWriteDump(snapshot, (uint)Environment.ProcessId, file.SafeFileHandle, type,
                                        IntPtr.Zero, IntPtr.Zero, ref callback))
-                    return $"The dump failed (error {Marshal.GetLastWin32Error()}).";
+                    failed = $"The dump failed (error {Marshal.GetLastWin32Error()}).";
             }
             finally
             {
                 PssFreeSnapshot(self, snapshot);
+            }
+
+            // After the file is closed: returned from inside, a dump cut short
+            // stayed behind as .partial, a couple of hundred MB of nothing.
+            if (failed is not null)
+            {
+                try { File.Delete(partial); } catch { /* best effort */ }
+                return failed;
             }
 
             File.Move(partial, path, overwrite: true);

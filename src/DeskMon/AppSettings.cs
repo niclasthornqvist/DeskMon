@@ -748,8 +748,15 @@ public sealed class AppSettings
     {
         try
         {
-            if (File.Exists(FilePath))
-                return (JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Options)
+            string? text = ReadAtStart(out bool held);
+
+            // Defaults for this run, but marked: the file is fine, and the
+            // next drag or the exit must not write them over it - see Save.
+            if (held)
+                return new AppSettings { _notLoaded = true };
+
+            if (text is not null)
+                return (JsonSerializer.Deserialize<AppSettings>(text, Options)
                         ?? new AppSettings()).Repaired();
         }
         catch (Exception ex)
@@ -764,6 +771,50 @@ public sealed class AppSettings
         }
         return new AppSettings();
     }
+
+    /// <summary>How often the start tries a held settings.json, and how long between.</summary>
+    private const int LoadAttempts = 5;
+    private static readonly TimeSpan LoadRetryAfter = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>
+    /// The settings file's text, or null when there is none. Tried for a
+    /// couple of seconds: DeskMon starts at logon, just when antivirus and sync
+    /// tools are busiest. <paramref name="held"/> says it is there and stayed
+    /// unreadable - a different thing from a typing error, which is why it
+    /// isn't left to the catch in Load.
+    /// </summary>
+    private static string? ReadAtStart(out bool held)
+    {
+        held = false;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return File.Exists(FilePath) ? File.ReadAllText(FilePath) : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= LoadAttempts)
+                {
+                    held = true;
+                    App.Log("reading settings.json", ex);
+                    return null;
+                }
+                System.Threading.Thread.Sleep(LoadRetryAfter);
+            }
+        }
+    }
+
+    /// <summary>The file couldn't be read at start, so this run's values are defaults, not the file's.</summary>
+    private bool _notLoaded;
+
+    /// <summary>
+    /// <see cref="_notLoaded"/> for the widget to say so: this run's folders
+    /// are the defaults too, so a custom notes or sessions folder isn't in use
+    /// and what is written goes elsewhere. Only error.log used to know.
+    /// </summary>
+    [JsonIgnore]
+    public bool NotLoaded => _notLoaded;
 
     /// <summary>
     /// Copies a settings.json that won't parse to settings.unreadable-&lt;time&gt;.json
@@ -948,8 +999,11 @@ public sealed class AppSettings
             edited = new string[_edited.Count];
             _edited.CopyTo(edited);
         }
-        catch
+        catch (Exception ex)
         {
+            // Logged: one value that can't be written stops every save of the
+            // run, and with nothing said the changes were just gone next start.
+            App.Log("saving settings.json", ex);
             return;
         }
 
@@ -957,7 +1011,8 @@ public sealed class AppSettings
             return;
 
         int sequence = System.Threading.Interlocked.Increment(ref _saveSequence);
-        AtomicFile.Later(() => WriteMerged(mine, edited, sequence, attempt: 1));
+        bool ownedToo = !_notLoaded;
+        AtomicFile.Later(() => WriteMerged(mine, edited, ownedToo, sequence, attempt: 1));
     }
 
     /// <summary>
@@ -980,7 +1035,12 @@ public sealed class AppSettings
     }
 
     /// <summary>The file part of <see cref="Save"/>, on the writer thread.</summary>
-    private static void WriteMerged(JsonObject mine, string[] edited, int sequence, int attempt)
+    /// <param name="ownedToo">
+    /// False after a start that couldn't read the file: what is in memory is
+    /// only defaults, and writing the owned keys would replace the widget's
+    /// place, the section order and every game's targets and ids with them.
+    /// </param>
+    private static void WriteMerged(JsonObject mine, string[] edited, bool ownedToo, int sequence, int attempt)
     {
         // A retry overtaken by a newer save: that one has the newer values,
         // and the keys this one edited are still marked for it to write.
@@ -999,8 +1059,7 @@ public sealed class AppSettings
             if (unreadable)
             {
                 if (attempt < ReadAttempts)
-                    System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(1))
-                        .ContinueWith(_ => AtomicFile.Later(() => WriteMerged(mine, edited, sequence, attempt + 1)));
+                    AtomicFile.Later(TimeSpan.FromSeconds(1), () => WriteMerged(mine, edited, ownedToo, sequence, attempt + 1));
                 else
                     App.Log("saving settings.json", "The file couldn't be read, so this save was skipped rather than written over it.");
                 return;
@@ -1025,17 +1084,20 @@ public sealed class AppSettings
                 if (!target.ContainsKey(key))
                     target[key] = value?.DeepClone();
 
-            foreach (string key in OwnedAtRuntime)
-                target[key] = mine[key]?.DeepClone();
+            if (ownedToo)
+                foreach (string key in OwnedAtRuntime)
+                    target[key] = mine[key]?.DeepClone();
 
             foreach (string key in edited)
                 target[key] = mine[key]?.DeepClone();
 
             AtomicFile.WriteAllText(FilePath, target.ToJsonString(Options));
         }
-        catch
+        catch (Exception ex)
         {
-            // Read-only folder or a locked file - not worth bothering the user.
+            // Read-only folder or a locked file - not worth bothering the user,
+            // but said in the log: a drag that "forgot" its place left no trace.
+            App.Log("saving settings.json", ex.Message);
         }
     }
 

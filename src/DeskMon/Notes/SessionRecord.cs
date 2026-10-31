@@ -228,10 +228,13 @@ public sealed class SessionRecord
 
         foreach (string part in parts.Skip(1))
         {
-            if (part.Length > 0 && Duration.Match(part) is { Success: true } duration)
+            // TryParse and a sane limit: a mistyped number that overflowed threw
+            // out of here, and the catch in SessionHistory.Sessions then showed
+            // the whole game as having no sessions. Too big, it stays a note.
+            if (part.Length > 0 && Duration.Match(part) is { Success: true } duration
+                && TryWhole(duration.Groups["h"], out int hours) && TryWhole(duration.Groups["m"], out int minutes)
+                && hours <= MostHours && minutes <= MostHours)
             {
-                int hours = duration.Groups["h"].Success ? int.Parse(duration.Groups["h"].Value, CultureInfo.InvariantCulture) : 0;
-                int minutes = duration.Groups["m"].Success ? int.Parse(duration.Groups["m"].Value, CultureInfo.InvariantCulture) : 0;
                 length = new TimeSpan(hours, minutes, 0);
                 continue;
             }
@@ -327,6 +330,18 @@ public sealed class SessionRecord
             notes.Add(part);
         }
 
+        // An end the clock put before the start needn't be past midnight: a
+        // session across the autumn change can run 02:50-02:20 on one night,
+        // and was shown ending the next day. The length, which is measured,
+        // says which day fits.
+        if (length is { } ran && end.Date > start.Date)
+        {
+            var expected = start + ran;
+            var sameDay = end.AddDays(-1);
+            if ((sameDay - expected).Duration() < (end - expected).Duration())
+                end = sameDay;
+        }
+
         return new SessionRecord
         {
             Start = start,
@@ -350,6 +365,16 @@ public sealed class SessionRecord
             Note = notes.Count > 0 ? string.Join(" · ", notes) : null,
             Raw = line,
         };
+    }
+
+    /// <summary>Far past any session, and well inside what a TimeSpan can hold.</summary>
+    private const int MostHours = 1_000_000;
+
+    /// <summary>A group of digits as a number; a group that didn't match is zero.</summary>
+    private static bool TryWhole(Group group, out int value)
+    {
+        value = 0;
+        return !group.Success || int.TryParse(group.Value, NumberStyles.None, CultureInfo.InvariantCulture, out value);
     }
 
     /// <summary>"2 h 3 min", or just minutes under an hour - as the log writes it.</summary>

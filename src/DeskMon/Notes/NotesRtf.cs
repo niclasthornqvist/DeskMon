@@ -36,9 +36,10 @@ public static class NotesRtf
     {
         try
         {
-            // RTF is 7-bit ASCII with escapes, which is why this can be treated
-            // as text at all; anything outside ASCII is already \'xx encoded.
-            string text = Encoding.ASCII.GetString(rtf);
+            // Latin-1, a byte per character, not ASCII: WPF's RTF is 7-bit, but
+            // a file saved by another editor may not be, and ASCII would turn
+            // every byte past 127 into a question mark for good.
+            string text = Encoding.Latin1.GetString(rtf);
 
             int index = IndexInColourTable(text, normal);
             if (index < 0)
@@ -52,7 +53,7 @@ public static class NotesRtf
 
             // The now-unused entry is left in the colour table: harmless, and
             // renumbering the table would mean rewriting every other reference.
-            return Encoding.ASCII.GetBytes(stripped);
+            return Encoding.Latin1.GetBytes(stripped);
         }
         catch
         {
@@ -81,7 +82,7 @@ public static class NotesRtf
         try
         {
             string text = rtf is { Length: > 0 }
-                ? Encoding.ASCII.GetString(rtf)
+                ? Encoding.Latin1.GetString(rtf)
                 : @"{\rtf1\ansi\ansicpg1252\uc1\deff0{\fonttbl{\f0 Segoe UI;}}{\colortbl;}}";
             if (!text.StartsWith(@"{\rtf", StringComparison.Ordinal))
                 return null;
@@ -113,7 +114,7 @@ public static class NotesRtf
             foreach (string line in lines)
                 added.Append($@"{{\pard\plain\fs{size} ").Append(Escape(line)).Append(@"\par}");
 
-            return Encoding.ASCII.GetBytes(text.Insert(end, added.ToString()));
+            return Encoding.Latin1.GetBytes(text.Insert(end, added.ToString()));
         }
         catch
         {

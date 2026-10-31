@@ -66,7 +66,14 @@ public static class GameIcons
         // Its own thread, not the pool: an online icon can wait seconds on
         // Steam, and the notes picker asks for every game's at once - on pool
         // threads that held up the widget's sensor reads. See GameArt.OwnThread.
-        GameArt.OwnThread(() => Lookup(game, steamId, gogKey, online))
+        GameArt.OwnThread(() =>
+            {
+                // A few at a time: a list opening asks for every game at once,
+                // and online each one is a Steam login of its own.
+                LookupGate.Wait();
+                try { return Lookup(game, steamId, gogKey, online); }
+                finally { LookupGate.Release(); }
+            })
             .ContinueWith(found =>
             {
                 if (found.Status == TaskStatus.RanToCompletion && found.Result is { } steam)
@@ -75,6 +82,8 @@ public static class GameIcons
 
         return icon;
     }
+
+    private static readonly System.Threading.SemaphoreSlim LookupGate = new(3);
 
     // --- Finding a real one --------------------------------------------------------
 

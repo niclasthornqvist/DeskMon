@@ -285,21 +285,23 @@ public sealed class SessionHistory
 
     /// <summary>
     /// Writes the open session's timeline on AtomicFile's writer, as the
-    /// session lines are: the text is taken here, on the tick, and the disk is
-    /// left to the writer, so a busy disk can't freeze the windows. Written
-    /// whole each time - at the checkpoint and at the end - so a crash keeps
-    /// all but the last minute, as with the line.
+    /// session lines are: only the points are copied here, on the tick. The
+    /// text is made on the writer too - by hour three that is 1,100 lines,
+    /// every minute, over a game - and the disk left to it, so a busy disk
+    /// can't freeze the windows. Written whole each time - at the checkpoint
+    /// and at the end - so a crash keeps all but the last minute, as with the line.
     /// </summary>
     public void SaveTimelineLater(string game, SessionTimeline timeline)
     {
         string path = SessionTimeline.PathFor(PathFor(game), timeline.Start);
-        string text = timeline.ToText();
+        var start = timeline.Start;
+        var points = timeline.Points.ToArray();
         AtomicFile.Later(() =>
         {
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                AtomicFile.WriteAllText(path, text);
+                AtomicFile.WriteAllText(path, SessionTimeline.ToText(start, points));
             }
             catch (Exception ex)
             {
@@ -453,6 +455,33 @@ public sealed class SessionHistory
     private sealed record OpenSession(string Game, string Line);
 
     /// <summary>
+    /// The file still holds a session from an earlier run that couldn't be
+    /// logged at start. Set from the UI thread at start, read on the writer.
+    /// </summary>
+    private volatile bool _earlierSessionLeft;
+
+    /// <summary>
+    /// Tries once more to log the earlier run's session, before the file is
+    /// written or deleted. True when nothing of it is left in the way.
+    ///
+    /// Both of those would otherwise destroy the only copy: the file holds one
+    /// session, so the first checkpoint of the next game replaced a crashed
+    /// session that was only waiting for a scan to let go. Until it can be
+    /// read, that game goes without checkpoints: its line is still written
+    /// when it ends, and only a second crash would cost it - where the other
+    /// way round the first session was certain to be lost.
+    /// </summary>
+    private bool EarlierSessionLogged()
+    {
+        if (!_earlierSessionLeft)
+            return true;
+
+        _earlierSessionLeft = false;   // set again if this try fails too
+        RecoverOpenSession();
+        return !_earlierSessionLeft;
+    }
+
+    /// <summary>
     /// Replaces the saved open session. Atomic, so a power cut mid-write leaves
     /// the previous one. On AtomicFile's writer: this runs once a minute inside
     /// the polling tick, mid-game, and waiting there for the disk froze the
@@ -465,13 +494,18 @@ public sealed class SessionHistory
 
         AtomicFile.Later(() =>
         {
+            if (!EarlierSessionLogged())
+                return;
+
             try
             {
                 AtomicFile.WriteAllText(path, json);
             }
-            catch
+            catch (Exception ex)
             {
-                // Insurance only: the session is still written normally when it ends.
+                // Insurance only: the session is still written normally when
+                // it ends. Logged, since a crash then has nothing to recover.
+                App.Log("saving the open session", ex.Message);
             }
         });
     }
@@ -487,6 +521,10 @@ public sealed class SessionHistory
         string path = OpenSessionPath;
         AtomicFile.Later(() =>
         {
+            // What is there may be the earlier run's, not this session's.
+            if (!EarlierSessionLogged())
+                return;
+
             try
             {
                 File.Delete(path);   // no error when there is none
@@ -498,8 +536,10 @@ public sealed class SessionHistory
     /// <summary>
     /// Writes the session a previous run left open, if there is one, into its
     /// game's log. Returns the game's name, or null when there was nothing to
-    /// recover. Left in place if the log can't be written, to try again next
-    /// start rather than lose it.
+    /// recover. Left in place if the log can't be written, to try again before
+    /// the next write to the file or at the next start rather than lose it -
+    /// and likewise if the file itself can't be read yet: at logon a scan can
+    /// hold it, and treated as a broken file that was the session deleted.
     /// </summary>
     public string? RecoverOpenSession()
     {
@@ -508,7 +548,7 @@ public sealed class SessionHistory
             if (!File.Exists(OpenSessionPath))
                 return null;
 
-            string saved = File.ReadAllText(OpenSessionPath);
+            string saved = ReadOpenSession();
             var open = JsonSerializer.Deserialize<OpenSession>(saved);
 
             // Taken away before the line is written, not after: deleting it
@@ -523,18 +563,28 @@ public sealed class SessionHistory
             catch (Exception ex)
             {
                 App.Log("recovering a session", ex);
+                _earlierSessionLeft = true;
                 return null;
             }
 
             if (open is { Game.Length: > 0, Line.Length: > 0 } && Append(open.Game, open.Line) is { } error)
             {
-                // Put back, so it is tried again next start rather than lost.
+                // Put back, so it is tried again rather than lost.
                 App.Log("recovering a session", error);
                 try { AtomicFile.WriteAllText(OpenSessionPath, saved); } catch { }
+                _earlierSessionLeft = true;
                 return null;
             }
 
             return open?.Game;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Held, not broken: the session is still in there, and is tried
+            // again before anything replaces it - see EarlierSessionLogged.
+            App.Log("recovering a session", ex);
+            _earlierSessionLeft = true;
+            return null;
         }
         catch (Exception ex)
         {
@@ -543,6 +593,29 @@ public sealed class SessionHistory
             App.Log("recovering a session", ex);
             ClearOpenSession();
             return null;
+        }
+    }
+
+    /// <summary>How often the start tries a held open-session.json, and how long between - as settings.json.</summary>
+    private const int ReadAttempts = 5;
+    private static readonly TimeSpan ReadRetryAfter = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>The checkpoint's text, tried for a couple of seconds. Throws if it stays held.</summary>
+    private string ReadOpenSession()
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(OpenSessionPath, FileMode.Open, FileAccess.Read,
+                                                  FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < ReadAttempts)
+            {
+                System.Threading.Thread.Sleep(ReadRetryAfter);
+            }
         }
     }
 }

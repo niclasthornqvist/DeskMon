@@ -504,6 +504,19 @@ public partial class SessionsWindow : PanelWindow
                 if (Backdrop.Background is not null)
                     FadeInArt(OpenDelay, OpenFadeIn);
             }
+            else
+            {
+                // Every opening reads it all again (ShowAndFocus), so a table
+                // of a row per session and the charts' shapes were only being
+                // kept in memory, unseen. The ticket drops a read still under
+                // way, which would fill them in again. The banners stay:
+                // GameArt keeps those whatever happens here.
+                _selectionTicket++;
+                Rows.Children.Clear();
+                _sessionRows.Clear();
+                Chart.Children.Clear();
+                TimelineChart.Children.Clear();
+            }
         };
         LocationChanged += (_, _) => QueuePlacementSave();
         SizeChanged += (_, _) => QueuePlacementSave();
@@ -628,8 +641,30 @@ public partial class SessionsWindow : PanelWindow
     /// <summary>Counts selections, so All games' totals arriving after another game was picked are dropped.</summary>
     private int _selectionTicket;
 
-    /// <param name="games">Every game with a log, if the caller has just listed them; null to list them on the worker.</param>
+    /// <summary>
+    /// <see cref="ShowSelectionAsync"/> with its errors caught. The reading is
+    /// guarded, but everything drawn after it wasn't: as async void, a fault
+    /// there went straight to the crash handler - this window can be redrawn
+    /// inside the widget's tick as a game quits. Said here, so a blank window
+    /// isn't left with no reason.
+    /// </summary>
     private async void ShowSelection(object? item, IReadOnlyList<string>? games)
+    {
+        try
+        {
+            await ShowSelectionAsync(item, games);
+        }
+        catch (Exception ex)
+        {
+            App.Log("showing the sessions", ex);
+            SummaryText.Text = "These sessions couldn't be shown - the details are in error.log.";
+            SummaryText.Foreground = _theme.Warn;
+            SummaryText.Visibility = Visibility.Visible;
+        }
+    }
+
+    /// <param name="games">Every game with a log, if the caller has just listed them; null to list them on the worker.</param>
+    private async System.Threading.Tasks.Task ShowSelectionAsync(object? item, IReadOnlyList<string>? games)
     {
         int ticket = ++_selectionTicket;
         _allGames = item is AllGamesEntry;
@@ -672,7 +707,10 @@ public partial class SessionsWindow : PanelWindow
                         var log = _history.Sessions(name);
                         if (Total(name, log) is { } total)
                             found.Add(total);
-                        spans.AddRange(log.Select(s => new PlaySpan(name, s.Start, s.End)));
+                        // By its length when the clock went back during it:
+                        // the end is then before the start, and the calendar
+                        // rightly skips a span like that - and the session.
+                        spans.AddRange(log.Select(s => new PlaySpan(name, s.Start, s.End > s.Start ? s.End : s.Start + s.Length)));
                     }
                     return (found, spans);
                 });
@@ -802,16 +840,18 @@ public partial class SessionsWindow : PanelWindow
             }
             catch
             {
-                art = new GameArt.Art(null, null);
+                art = new GameArt.Art(null, null, Incomplete: true);
             }
 
             // Bounded like GameArt's own cache, which this holds on to as
             // well: kept for good, every banner looked at stayed in memory.
             // Cleared outright rather than one at a time - it is only a
             // shortcut, and the shared lookup still has the recent ones.
+            // Not an offline answer, or the banner would stay away until REFRESH.
             if (_art.Count >= 8)
                 _art.Clear();
-            _art[key] = art;
+            if (!art.Incomplete)
+                _art[key] = art;
             if (ticket != _artTicket)
                 return;
         }
@@ -1930,9 +1970,13 @@ public partial class SessionsWindow : PanelWindow
         // in the same columns as the rows. They used to be added to every row
         // - about seven elements a row, thousands for a long-played game,
         // rebuilt on every sort and refresh.
+        // The widths once as well: worked out in AddColumns per row, each table
+        // measured every column's heading again for every session.
+        double[] widths = ColumnWidths(columns);
+
         GroupLines.Children.Clear();
         GroupLines.ColumnDefinitions.Clear();
-        AddColumns(GroupLines, columns);
+        AddColumns(GroupLines, widths);
         AddGroupLines(GroupLines, columns, 1);
 
         Rows.Children.Clear();
@@ -1955,7 +1999,7 @@ public partial class SessionsWindow : PanelWindow
             // the same meaning, picked rather than merely pointed at.
             row.Background = selected?.Invoke(item) == true ? SelectedBrush : RowRest(row);
             LazyTip(row, () => tooltip(item));
-            AddColumns(row, columns);
+            AddColumns(row, widths);
             if (item is SessionRecord record)
                 _sessionRows[record] = row;   // for Select's repaint
 
@@ -2056,7 +2100,7 @@ public partial class SessionsWindow : PanelWindow
         TableHeader.Children.Clear();
         TableHeader.ColumnDefinitions.Clear();
         TableHeader.RowDefinitions.Clear();
-        AddColumns(TableHeader, columns);
+        AddColumns(TableHeader, ColumnWidths(columns));
 
         // A line of group names over the headings - "Frame rate" over Avg FPS
         // to Latency - so a group reads as one even with a single column of it
@@ -2139,12 +2183,16 @@ public partial class SessionsWindow : PanelWindow
     }
 
     /// <summary>The fixed columns, then one that takes the rest - for the "cut short" mark.</summary>
-    private void AddColumns<T>(Grid grid, IReadOnlyList<Column<T>> columns)
+    private static void AddColumns(Grid grid, double[] widths)
     {
-        for (int i = 0; i < columns.Count; i++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ColumnWidth(columns[i], i) + (StartsGroup(columns, i) ? GroupGap : 0)) });
+        foreach (double width in widths)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
     }
+
+    /// <summary>Each column's width in the table, with the room before a group.</summary>
+    private double[] ColumnWidths<T>(IReadOnlyList<Column<T>> columns)
+        => columns.Select((column, i) => ColumnWidth(column, i) + (StartsGroup(columns, i) ? GroupGap : 0)).ToArray();
 
     /// <summary>
     /// Extra room before the first column of a group, with the dividing line
@@ -2359,14 +2407,27 @@ public partial class SessionsWindow : PanelWindow
     /// picker - Average FPS, Minutes played and so on - wrapping round at the
     /// ends, so going through every reading for a game is a row of key
     /// presses rather than a trip to the drop-down each time. Delete presses
-    /// DELETE, so its click-twice still guards it. Left to a drop-down or text
-    /// box that has the keyboard, where the keys already mean something.
+    /// DELETE, so its click-twice still guards it. Left to a text box or an
+    /// open drop-down, where the keys already mean something.
+    ///
+    /// Open, not merely focused: picking a game leaves the keyboard on its
+    /// closed picker, which takes ← / → as "the next game" - so the keys went
+    /// from switching the reading to switching the game, with nothing on
+    /// screen to say why.
     /// </summary>
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_allGames || _sessions.Count == 0 || e.OriginalSource is TextBox or ComboBox or ComboBoxItem
+        if (e.OriginalSource is TextBox || GamePicker.IsDropDownOpen || ChartPicker.IsDropDownOpen
             || Keyboard.Modifiers != ModifierKeys.None)
             return;
+
+        // No readings to switch. Taken all the same, or under All games the
+        // closed picker would jump to a game, for the same reason as above.
+        if (_allGames || _sessions.Count == 0)
+        {
+            e.Handled = e.Key is Key.Left or Key.Right;
+            return;
+        }
 
         if (e.Key is Key.Left or Key.Right && ChartPicker.Items.Count > 0)
         {

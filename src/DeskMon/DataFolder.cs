@@ -69,6 +69,9 @@ internal static class DataFolder
     /// </summary>
     private static string MovedMarker => Path.Combine(OldRoot, "moved-to-appdata.txt");
 
+    /// <summary>Beside the new data while a move is running - see MoveOldData.</summary>
+    private static string MoveUnderway => Path.Combine(Root, "move-underway.txt");
+
     /// <summary>
     /// Moves the data from app\ to here, once - the first start of this
     /// version, for the first Windows user to run it. Before anything reads a
@@ -138,9 +141,28 @@ internal static class DataFolder
 
             moves.RemoveAll(m => !File.Exists(m.From));
 
+            // Notes or sessions here with no try on record are live data: the
+            // new settings.json was deleted to reset it, and an old one is
+            // still in app\. "No settings.json means nothing has written here"
+            // doesn't hold then, and the emptying below would put old notes in
+            // place of newer ones. Neither copy is touched; this user carries
+            // on here, with an empty settings.json as for someone else's data.
+            bool liveData = folders.Where(f => f.To != Cache && Directory.Exists(f.To))
+                                   .Any(f => Directory.EnumerateFiles(f.To, "*", SearchOption.AllDirectories).Any());
+            if (liveData && !File.Exists(MoveUnderway))
+            {
+                try { AtomicFile.WriteAllText(newSettings, "{}"); } catch { }
+                return ($"Older data is still in {OldRoot}, so it was left there: your notes and sessions here stay as they are.", false);
+            }
+
+            // Written before anything here is changed, and gone only with the
+            // move done, so a try that fails part-way can be told from live data.
+            Directory.CreateDirectory(Root);
+            File.WriteAllText(MoveUnderway, string.Empty);
+
             // A try that failed part-way left its copies here, and anything
             // deleted from app\ since would come back with them. Emptied first:
-            // with no settings.json yet, nothing but such a try has written here.
+            // MoveUnderway says nothing but such a try has written here.
             foreach (var (_, to) in folders)
                 if (Directory.Exists(to))
                     Directory.Delete(to, recursive: true);
@@ -181,6 +203,9 @@ internal static class DataFolder
                 return ("settings.json didn't copy whole.", true);
             }
             moves.Add((oldSettings, newSettings));
+
+            // A leftover is harmless: settings.json being here stops any other try.
+            try { File.Delete(MoveUnderway); } catch { }
 
             // 5. Only now the old copy. A failure here loses nothing - the new
             // copy is complete - so it is logged, and the marker stops anyone

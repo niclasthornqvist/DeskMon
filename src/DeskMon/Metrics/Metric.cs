@@ -68,6 +68,10 @@ namespace DeskMon.Metrics;
 /// what to say about it on hover, or null when there is nothing to flag; the
 /// row then shows a small amber mark beside its label.
 /// </param>
+/// <param name="Alerts">
+/// False for a row whose red is only a colour: VRAM full is how many games
+/// run on purpose, so a Crit level alone must not raise an alert over one.
+/// </param>
 public sealed record Metric(
     string Label,
     string Unit,
@@ -84,7 +88,8 @@ public sealed record Metric(
     string DetailsAbout = "every sensor behind this reading",
     string DetailNote = "One of the sensors behind the reading above, as the hardware reports it.",
     string? AlertName = null,
-    Func<SensorSnapshot, string?>? Flag = null)
+    Func<SensorSnapshot, string?>? Flag = null,
+    bool Alerts = true)
 {
     /// <summary>
     /// Whether a threshold has been passed. For an inverted metric such as FPS

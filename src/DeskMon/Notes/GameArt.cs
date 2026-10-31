@@ -46,12 +46,17 @@ public static class GameArt
     /// picture or writes the name.
     /// </summary>
     /// <param name="SteamAppId">The game's Steam app id where the lookup learned it, for the logo's link to its store page.</param>
-    public sealed record Art(ImageSource? Picture, ImageSource? Logo, string? SteamAppId = null);
+    /// <param name="Incomplete">
+    /// The store couldn't be reached, so this says nothing about what it has -
+    /// not to be kept. See <see cref="ForAsync"/>.
+    /// </param>
+    public sealed record Art(ImageSource? Picture, ImageSource? Logo, string? SteamAppId = null, bool Incomplete = false);
 
     /// <param name="steamAppId">The app id remembered from the last time the game ran, or null to look it up by name.</param>
     /// <param name="online">Whether the Steam store may be asked when this PC has no picture (the OnlineGameArt setting).</param>
     public static Art For(string game, string? steamAppId, string screenshotFolder, bool online)
     {
+        _storeFailed = false;
         string? appId = steamAppId ?? LocalAppId(game);
         var picture = Load(Find(game, ref appId, screenshotFolder, online), DecodeWidth);
 
@@ -62,8 +67,15 @@ public static class GameArt
         if (logo is null && online)
             logo = StoreFile(game, ref appId, ".logo.png", LogoUrls);
 
-        return new Art(picture, Trimmed(Load(logo, 600)), appId);
+        return new Art(picture, Trimmed(Load(logo, 600)), appId, _storeFailed);
     }
+
+    /// <summary>
+    /// The store failed during the lookup on this thread - see StoreFile. Per
+    /// thread, as each lookup has its own and the files between don't pass it on.
+    /// </summary>
+    [ThreadStatic]
+    private static bool _storeFailed;
 
     /// <summary>
     /// The game's Steam app id from the store's search by name - for a game
@@ -119,12 +131,23 @@ public static class GameArt
             var art = OwnThread(() =>
             {
                 try { return For(game, steamAppId, screenshotFolder, online); }
-                catch { return new Art(null, null); }
+                catch { return new Art(null, null, Incomplete: true); }
             });
 
             Found[game] = (art, ++_used);
             if (Found.Count > ArtKept)
                 Found.Remove(Found.MinBy(entry => entry.Value.Used).Key);
+
+            // A lookup made offline isn't kept: it would leave the game without
+            // its banner for the rest of the run, the network long since back.
+            art.ContinueWith(done =>
+            {
+                if (!done.Result.Incomplete)
+                    return;
+                lock (FoundLock)
+                    if (Found.TryGetValue(game, out var kept) && ReferenceEquals(kept.Art, done))
+                        Found.Remove(game);
+            }, System.Threading.Tasks.TaskScheduler.Default);
 
             return art;
         }
@@ -358,6 +381,7 @@ public static class GameArt
         }
         catch
         {
+            _storeFailed = true;
             return null;   // offline, or the store changed shape: the drawn picture instead
         }
     }
@@ -404,7 +428,12 @@ public static class GameArt
     /// </summary>
     private static byte[]? Download(string url)
     {
-        using var response = Http.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+        // For the whole download. The client's own Timeout ends with the
+        // headers when they are asked for first, so a server that stopped
+        // half-way held this thread - and the game's banner - for ever.
+        using var limit = new System.Threading.CancellationTokenSource(DownloadLimit);
+
+        using var response = Http.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, limit.Token).GetAwaiter().GetResult();
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             return null;
         response.EnsureSuccessStatusCode();
@@ -416,11 +445,11 @@ public static class GameArt
         if (response.Content.Headers.ContentLength > MaxDownload)
             throw new InvalidDataException("Too large: " + url);
 
-        using var body = response.Content.ReadAsStream();
+        using var body = response.Content.ReadAsStream(limit.Token);
         using var copy = new MemoryStream();
         var buffer = new byte[81920];
         int read;
-        while ((read = body.Read(buffer, 0, buffer.Length)) > 0)
+        while ((read = body.ReadAsync(buffer, 0, buffer.Length, limit.Token).GetAwaiter().GetResult()) > 0)
         {
             copy.Write(buffer, 0, read);
             if (copy.Length > MaxDownload)
@@ -432,6 +461,8 @@ public static class GameArt
             throw new InvalidDataException("Not a PNG or JPEG: " + url);
         return data;
     }
+
+    private static readonly TimeSpan DownloadLimit = TimeSpan.FromSeconds(30);
 
     /// <summary>Far above any banner or logo Steam serves, far below what could hurt.</summary>
     internal const int MaxDownload = 8 * 1024 * 1024;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -84,19 +85,35 @@ public sealed class NotesSearch
 
             for (int occurrence = 0; occurrence < PerGame; occurrence++)
             {
-                at = text.IndexOf(query, at, StringComparison.CurrentCultureIgnoreCase);
+                at = IndexOf(text, query, at, out int length);
                 if (at < 0)
                     break;
 
-                hits.Add(Snippet(game, text, at, query.Length, occurrence));
+                hits.Add(Snippet(game, text, at, length, occurrence));
                 if (hits.Count >= max)
                     return hits;
 
-                at += query.Length;
+                at += length;
             }
         }
 
         return hits;
+    }
+
+    /// <summary>
+    /// The next match at or after <paramref name="from"/>, or -1, with how much
+    /// of the text it covers. Not always the query's length: this compares as
+    /// the language does, so "ﬁ" matches "fi" and a zero-width character counts
+    /// for nothing. Going by the query's length ran past the end of the text
+    /// and threw, or cut the wrong slice out of it.
+    /// A match of nothing - a query of only such characters - is no match:
+    /// stepping on by nothing, it would be found in the same place for ever.
+    /// </summary>
+    private static int IndexOf(string text, string query, int from, out int length)
+    {
+        int found = CultureInfo.CurrentCulture.CompareInfo.IndexOf(
+            text.AsSpan(from), query, CompareOptions.IgnoreCase, out length);
+        return found < 0 || length == 0 ? -1 : from + found;
     }
 
     /// <summary>
@@ -128,7 +145,12 @@ public sealed class NotesSearch
     /// </summary>
     private string PlainText(string game)
     {
-        byte[]? rtf = _store.LoadRtf(game);
+        // Held by another program: nothing to search this time, as with a
+        // note that can't be parsed below. Unlike saving, no harm can come of it.
+        byte[]? rtf = null;
+        try { rtf = _store.LoadRtf(game); }
+        catch { }
+
         if (rtf is { Length: > 0 })
         {
             try
@@ -155,6 +177,12 @@ public sealed class NotesSearch
         {
             try { done.SetResult(work()); }
             catch (Exception ex) { done.SetException(ex); }
+            finally
+            {
+                // The documents gave this thread a Dispatcher, which stays
+                // registered and holds on to what it knows until shut down.
+                System.Windows.Threading.Dispatcher.FromThread(Thread.CurrentThread)?.InvokeShutdown();
+            }
         })
         {
             IsBackground = true,
@@ -198,16 +226,16 @@ public sealed class NotesSearch
             string joined = text.ToString();
             int at = 0;
 
-            while ((at = joined.IndexOf(query, at, StringComparison.CurrentCultureIgnoreCase)) >= 0)
+            while ((at = IndexOf(joined, query, at, out int length)) >= 0)
             {
                 if (seen++ == occurrence)
                 {
                     var start = PointerAt(pieces, at, preferEnd: false);
-                    var end = PointerAt(pieces, at + query.Length, preferEnd: true);
+                    var end = PointerAt(pieces, at + length, preferEnd: true);
                     return start is not null && end is not null ? new TextRange(start, end) : null;
                 }
 
-                at += query.Length;
+                at += length;
             }
         }
 

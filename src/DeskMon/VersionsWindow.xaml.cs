@@ -96,7 +96,9 @@ public partial class VersionsWindow : PanelWindow
     /// versions and nearly two hundred lines, with the same date printed
     /// twenty times over on a busy day. Grouped, the date is said once; folded,
     /// the window opens on what changed most recently - which is what it is
-    /// opened for - with the rest one click away.
+    /// opened for - with the rest one click away. A folded day's cards are made
+    /// when it is first opened: the history runs to hundreds of lines, nearly
+    /// all of them never looked at.
     /// </summary>
     private void BuildHistory()
     {
@@ -115,15 +117,24 @@ public partial class VersionsWindow : PanelWindow
                 Margin = new Thickness(0, 2, 0, 8),
                 Visibility = first ? Visibility.Visible : Visibility.Collapsed,
             };
-            foreach (var release in releases)
-                body.Children.Add(ReleaseBlock(release, ReferenceEquals(release, current)));
+
+            void Fill()
+            {
+                if (body.Children.Count > 0)
+                    return;
+                foreach (var release in releases)
+                    body.Children.Add(ReleaseBlock(release, ReferenceEquals(release, current)));
+            }
+
+            if (first)
+                Fill();
 
             // A thin line between days, so where one day's changes end and the
             // next date starts reads at a glance, folded or not.
             if (!first)
                 History.Children.Add(new Border { Height = 1, Background = _theme.Separator, Margin = new Thickness(0, 2, 0, 2) });
 
-            History.Children.Add(DayHeading(day.Key, releases, body));
+            History.Children.Add(DayHeading(day.Key, releases, body, Fill));
             History.Children.Add(body);
             first = false;
         }
@@ -132,9 +143,9 @@ public partial class VersionsWindow : PanelWindow
     /// <summary>
     /// "▾ Today · Sunday 19 October", with the versions it holds on the right
     /// - the range, so a folded day still says what is in it. Clicks fold and
-    /// unfold the day below.
+    /// unfold the day below, <paramref name="fill"/> making its cards first.
     /// </summary>
-    private UIElement DayHeading(string date, IReadOnlyList<Changelog.Release> releases, UIElement body)
+    private UIElement DayHeading(string date, IReadOnlyList<Changelog.Release> releases, UIElement body, Action fill)
     {
         var heading = new Grid
         {
@@ -190,6 +201,7 @@ public partial class VersionsWindow : PanelWindow
 
         strip.MouseLeftButtonUp += (_, _) =>
         {
+            fill();
             body.Visibility = body.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
             arrow.Text = Arrow(body);
         };
@@ -239,81 +251,203 @@ public partial class VersionsWindow : PanelWindow
         };
     }
 
+    /// <summary>One change as shown: its area, what changed, and any detail after it.</summary>
+    /// <param name="Area">The heading it goes under; empty for a line that names none.</param>
+    /// <param name="Detail">What followed " - " in the line, or null.</param>
+    private sealed record Change(string Area, string Headline, string? Detail);
+
+    /// <summary>The heading fixes go under, and last: what is new reads first.</summary>
+    private const string FixesArea = "Fixes";
+
     /// <summary>
-    /// One release: its number in a narrow column on the left and its changes
-    /// beside it, rather than the number on a line of its own above them -
-    /// a line saved per release, and the numbers line up into a column the eye
-    /// can run down. The running version is lit and says so.
+    /// Areas the changelog has spelled more than one way, as one heading, or
+    /// the same part of the program would come up twice in a release.
+    /// </summary>
+    private static readonly Dictionary<string, string> AreaNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Fix"] = FixesArea,
+        ["Fixed"] = FixesArea,
+        ["Hardware window"] = "Hardware",
+        ["Settings window"] = "Settings",
+        ["Pictures window"] = "Pictures",
+        ["Session history"] = "Sessions",
+        ["Session history window"] = "Sessions",
+        ["FPS overlay"] = "FPS",
+        ["New setting"] = "New settings",
+        ["Every window"] = "All windows",
+        ["Windows"] = "All windows",
+    };
+
+    /// <summary>
+    /// A line split into its parts. A leading "Sessions:" or "Fixed:" is the
+    /// area - only a short phrase counts, or the first half of an ordinary
+    /// sentence with a colon in it would be taken for one. A " - " parts what
+    /// changed from how: the lines run long, and with the second half set
+    /// back the first can be read down the list. Only when both halves are
+    /// worth a line: "a - b" in the middle of a short phrase stays whole.
+    /// </summary>
+    private static Change ParseChange(string line)
+    {
+        const int LongestArea = 22, ShortestPart = 12;
+
+        string area = string.Empty;
+        string text = line;
+        int colon = line.IndexOf(": ", StringComparison.Ordinal);
+        if (colon is > 0 and <= LongestArea && char.IsUpper(line[0]))
+        {
+            area = line[..colon];
+            area = AreaNames.GetValueOrDefault(area, area);
+            text = Capitalised(line[(colon + 2)..]);
+        }
+
+        int dash = text.IndexOf(" - ", StringComparison.Ordinal);
+        return dash >= ShortestPart && text.Length - dash - 3 >= ShortestPart
+            ? new Change(area, text[..dash], Capitalised(text[(dash + 3)..]))
+            : new Change(area, text, null);
+    }
+
+    /// <summary>
+    /// One release as a card: its number at the top, then its changes under a
+    /// heading per area, in the order the changelog first names each, fixes
+    /// last. It used to be one list in the order the lines were written, with
+    /// the number in a column of its own beside it: a release of twenty-odd
+    /// changes had to be read through to find what touched one window, and
+    /// the column took width the text needed. The running version says so.
     /// </summary>
     private UIElement ReleaseBlock(Changelog.Release release, bool isCurrent)
     {
-        var block = new Grid { Margin = new Thickness(18, 3, 0, 3) };   // under the heading's text, which the hover strip moved in by 4
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(VersionColumn) });
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var content = new StackPanel();
+        content.Children.Add(ReleaseHeading(release, isCurrent));
 
-        var number = new StackPanel();
-        number.Children.Add(new TextBlock
+        // Stable, so fixes move to the end and the rest keep their order.
+        var groups = release.Changes.Select(ParseChange)
+                                    .GroupBy(change => change.Area)
+                                    .OrderBy(group => group.Key == FixesArea ? 1 : 0)
+                                    .ToList();
+
+        foreach (var group in groups)
         {
-            Text = release.Version,
-            Foreground = isCurrent ? _theme.Section : _theme.Label,
-            FontWeight = isCurrent ? FontWeights.SemiBold : FontWeights.Normal,
-        });
-        if (isCurrent)
-            number.Children.Add(new TextBlock
-            {
-                Text = "running",
-                Foreground = _theme.Normal,
-                FontSize = SmallFontSize,
-            });
-        block.Children.Add(number);
+            // Lines naming no area need a heading only among groups that have one.
+            if (group.Key.Length > 0 || groups.Count > 1)
+                content.Children.Add(AreaHeading(group.Key.Length > 0 ? group.Key : "General"));
+            foreach (var change in group)
+                content.Children.Add(ChangeLine(change));
+        }
 
-        var changes = new StackPanel();
-        foreach (string change in release.Changes)
-            changes.Children.Add(ChangeLine(change));
-        Grid.SetColumn(changes, 1);
-        block.Children.Add(changes);
-
-        return block;
+        return new Border
+        {
+            Background = _theme.Shade(0x0A),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 9, 12, 8),
+            Margin = new Thickness(4, 3, 4, 6),
+            Child = content,
+        };
     }
 
-    /// <summary>Wide enough for "1.47.0" at the panel font, with a gap after it.</summary>
-    private double VersionColumn => Math.Round(UiTheme.PanelFontSize * 5.2);
+    /// <summary>The number large in the accent while it is the one running, "running" beside it, and how many changes at the far end.</summary>
+    private UIElement ReleaseHeading(Changelog.Release release, bool isCurrent)
+    {
+        var heading = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        heading.Children.Add(new TextBlock
+        {
+            Text = release.Version,
+            Foreground = isCurrent ? _theme.Accent : _theme.Section,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = UiTheme.PanelFontSize + 3,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        if (isCurrent)
+        {
+            var running = new Border
+            {
+                BorderBrush = _theme.Normal,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 0, 6, 1),
+                Margin = new Thickness(9, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Child = new TextBlock { Text = "running", Foreground = _theme.Normal, FontSize = SmallFontSize },
+            };
+            Grid.SetColumn(running, 1);
+            heading.Children.Add(running);
+        }
+
+        int count = release.Changes.Length;
+        var changes = new TextBlock
+        {
+            Text = count == 1 ? "1 change" : $"{count.ToString(CultureInfo.InvariantCulture)} changes",
+            Foreground = _theme.Header,
+            FontSize = SmallFontSize,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(changes, 2);
+        heading.Children.Add(changes);
+
+        return heading;
+    }
+
+    /// <summary>In small capitals like the cards' captions, so the headings read as signposts and not as more text.</summary>
+    private TextBlock AreaHeading(string area) => new()
+    {
+        Text = area.ToUpperInvariant(),
+        Foreground = _theme.Section,
+        FontWeight = FontWeights.SemiBold,
+        FontSize = SmallFontSize,
+        Margin = new Thickness(0, 9, 0, 3),
+    };
 
     /// <summary>
-    /// One change. A leading "Sessions:" or "Fixed:" - the part of the program
-    /// it is about - is picked out, so a day's list can be scanned by area.
-    /// Only a short leading phrase counts, or the first half of an ordinary
-    /// sentence with a colon in it would be lit up too.
-    ///
-    /// A dim bullet with the text hanging off it: without one, a change that
-    /// wraps onto a second line can't be told from the start of the next.
+    /// One change: what changed in the text colour, at full size, and any
+    /// detail dimmer under it. A dim bullet with the text hanging off it:
+    /// without one, a change that wraps onto a second line can't be told from
+    /// the start of the next. A line height of its own, as the window's
+    /// default sets long lines too tightly to follow from one to the next.
     /// </summary>
-    private UIElement ChangeLine(string change)
+    private UIElement ChangeLine(Change change)
     {
-        var item = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+        var item = new Grid { Margin = new Thickness(0, 0, 0, 4) };
         item.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         item.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
+        double size = UiTheme.PanelFontSize;
         item.Children.Add(new TextBlock
         {
             Text = "•",
             Foreground = _theme.Header,
-            Margin = new Thickness(0, 0, 7, 0),
+            FontSize = size,
+            Margin = new Thickness(0, 0, 8, 0),
         });
 
-        var line = new TextBlock { TextWrapping = TextWrapping.Wrap };
-        Grid.SetColumn(line, 1);
-        item.Children.Add(line);
+        var text = new StackPanel();
+        Grid.SetColumn(text, 1);
+        item.Children.Add(text);
 
-        int colon = change.IndexOf(": ", StringComparison.Ordinal);
-        if (colon is > 0 and <= 22 && char.IsUpper(change[0]))
+        text.Children.Add(new TextBlock
         {
-            line.Inlines.Add(new Run(change[..colon] + "  ") { Foreground = AreaBrush, FontWeight = FontWeights.SemiBold });
-            line.Inlines.Add(new Run(Capitalised(change[(colon + 2)..])) { Foreground = _theme.NotesText });
-        }
-        else
+            Text = change.Headline,
+            Foreground = _theme.NotesText,
+            FontSize = size,
+            LineHeight = Math.Round(size * 1.35),
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        if (change.Detail is { } detail)
         {
-            line.Inlines.Add(new Run(change) { Foreground = _theme.NotesText });
+            double small = Math.Max(9, size - 1);
+            text.Children.Add(new TextBlock
+            {
+                Text = detail,
+                Foreground = _theme.Label,
+                FontSize = small,
+                LineHeight = Math.Round(small * 1.35),
+                TextWrapping = TextWrapping.Wrap,
+            });
         }
 
         return item;
@@ -322,9 +456,6 @@ public partial class VersionsWindow : PanelWindow
     /// <summary>"the chart can show…" after its area label reads as the start of a sentence.</summary>
     private static string Capitalised(string text)
         => text.Length > 0 && char.IsLower(text[0]) ? char.ToUpperInvariant(text[0]) + text[1..] : text;
-
-    /// <summary>The accent the toolbars light up in - set apart from the text without shouting.</summary>
-    private Brush AreaBrush => _theme.Accent;
 
     // --- Requirements -----------------------------------------------------
 

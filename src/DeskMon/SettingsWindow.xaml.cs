@@ -1197,8 +1197,18 @@ public partial class SettingsWindow : PanelWindow
         // Deferred: the popup's contents can't take focus while it is opening.
         _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => Keyboard.Focus(ProgramFilter)));
 
-        _running = await Task.Run(RunningPrograms);
-        ShowRunningPrograms();
+        // Caught as this is async void, where a fault would reach the crash
+        // handler. Typing a name still works without the list.
+        try
+        {
+            _running = await Task.Run(RunningPrograms);
+            ShowRunningPrograms();
+        }
+        catch (Exception ex)
+        {
+            App.Log("listing the running programs", ex);
+            ProgramHint.Text = "Couldn't list what is running. Type a program's name and press Enter to add it.";
+        }
     }
 
     /// <summary>
@@ -1429,7 +1439,10 @@ public partial class SettingsWindow : PanelWindow
             // Invariant on purpose: the box shows what the file holds, and the
             // file is JSON, where the decimal separator is always a point -
             // whatever this machine's locale would rather use.
-            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double number))
+            // Finite too: TryParse takes "NaN" and "Infinity", which pass the
+            // floor check, and the settings can't be written with one in them.
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double number)
+                || !double.IsFinite(number))
                 return false;
 
             value = number;

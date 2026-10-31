@@ -12,6 +12,9 @@ namespace DeskMon;
 /// changed, not a commit log - the window is small on purpose, and a wall of
 /// text in it would never be read. Put the detail in README.md.
 ///
+/// Written "Area: what changed - how": the area is the heading the line goes
+/// under, and what follows " - " is shown dimmer beneath it. "Fixes:" goes last.
+///
 /// The top entry's version is what the program reports as its own, so bump it
 /// and add notes in the same edit. <c>Version</c> in DeskMon.csproj should
 /// match it.
@@ -28,6 +31,41 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.74.1", "2026-10-31",
+            "Versions: patch notes are easier to read - each release is a card with its changes under a heading per area, fixes last, and long lines split into what changed and how",
+            "Widget: side by side, it could start too narrow after a reboot - it now widens itself within a second",
+            "Widget: starting or leaving a game no longer rebuilds rows that don't change, and the game's name and the notes switch run off the update tick - less stalling",
+            "Widget: pins 96 MB in memory rather than up to 256 MB, so more can go to games",
+            "Widget: stays paused when the PC wakes to the lock screen, and a re-fit no longer pulls it back in the middle of a drag",
+            "Notes: a file held by another program is no longer taken for empty and written over - the note opens read-only until it can be read",
+            "Notes: a session note that can't go in is kept - it is added by itself once the file can be read",
+            "Notes: a failed save is tried again by itself - at exit, what is on screen goes to HISTORY if it can't be saved",
+            "Notes: search no longer fails on letters written as one character or on invisible characters, and a match selects the right text",
+            "Notes: text from another RTF editor keeps its special characters",
+            "Notes: the last session is read off the UI thread as notes load - each slow step of a load now shows in error.log by name",
+            "Sessions: the session a crash left open is no longer lost when a scan holds its file - it is logged once it can be read",
+            "Sessions: a session across the autumn clock change keeps its real length, timeline and end time, and stays in the calendar",
+            "Sessions: ← → switch the chart's reading even right after picking a game, instead of moving on to the next game",
+            "Sessions: a mistyped log line can no longer hide a game's whole history",
+            "Sessions: a game whose process refuses to answer no longer ends its session at once",
+            "Sessions: the calendar's month names are in English",
+            "Sessions: a session with no timeline says \"No timeline logged\", without naming a version",
+            "Pictures: DELETE UNUSED and NOT IN NOTES step aside when notes can't be read - the window says why",
+            "Pictures: the ✕ asks once before dropping unsaved marks",
+            "Pictures: a failed mark-up save leaves no file behind, and adding a picture to notes that can't be read says it failed",
+            "Settings: a settings.json that can't be read at start keeps its positions, section order and per-game targets - the tray says this run uses defaults",
+            "Settings: saves are tried again when another program has the file for a moment, and a failed save is logged",
+            "Settings: \"NaN\" and \"Infinity\" are no longer taken as numbers - one of them stopped every later save",
+            "Alerts: VRAM and LAT no longer raise alerts",
+            "Alerts: CPU temperature turns red and alerts from 87 °C, under the 7800X3D's 89 °C limit - session scores use the new level too",
+            "Art: a banner lookup made offline is tried again, a stalled download gives up after 30 s, and opening a game list is lighter on Steam's files",
+            "Data: deleting settings.json can no longer put older notes from the app folder over newer ones",
+            "All windows: lighter when hidden or idle - the sessions window frees its table, thumbnails go after 2 minutes, and tooltips are made when shown",
+            "Fixes: ending a program from the RAM list carries on past one that already closed",
+            "Fixes: a failed freeze dump leaves no file behind, and error.log times no longer look like UTC",
+            "Fixes: the session timeline is written off the UI thread",
+            "Fixes: a fault drawing the sessions window or listing running programs is logged instead of reaching the crash handler"),
+
         new("1.74.0", "2026-10-30",
             "Notes: the \"Anything to note?\" card closes when the game comes back within the grace time instead of staying over it - a note already typed is kept",
             "Pictures: drawing on a picture in place a second time no longer overwrites the kept original when the Recycle Bin refused it",

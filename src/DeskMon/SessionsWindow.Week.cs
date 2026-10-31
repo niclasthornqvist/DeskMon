@@ -248,8 +248,10 @@ public partial class SessionsWindow
             heading.Text = _calendarMonthsBack == 0
                 ? $"LAST {CalendarMonths} MONTHS"
                 : first.Year == last.Year
-                ? $"{first:MMM} – {last:MMM yyyy}".ToUpperInvariant()
-                : $"{first:MMM yyyy} – {last:MMM yyyy}".ToUpperInvariant();
+                // Invariant, like every other date in this window: as plain
+                // interpolation these came out in the PC's own language.
+                ? string.Create(CultureInfo.InvariantCulture, $"{first:MMM} – {last:MMM yyyy}").ToUpperInvariant()
+                : string.Create(CultureInfo.InvariantCulture, $"{first:MMM yyyy} – {last:MMM yyyy}").ToUpperInvariant();
             host.Child = CalendarGrid(first, last.AddMonths(1), today, byDay, longest);
         }
 

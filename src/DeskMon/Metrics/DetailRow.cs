@@ -57,7 +57,9 @@ public sealed class DetailRow : INotifyPropertyChanged, IPanelRow
     /// The full name - a long one is cut short with "…" on the panel - and
     /// what these rows are, as a card like the metric rows' (see Ui.InfoTip).
     /// A "Right-click …" line in the note goes to the card's foot with the
-    /// other hints, rather than reading as part of the explanation.
+    /// other hints, rather than reading as part of the explanation. Made when
+    /// drawn (InfoTip.Later): the memory list's names change as programs swap
+    /// places, and each change built a card nobody had asked to see.
     /// </summary>
     public object Tooltip
     {
@@ -66,9 +68,9 @@ public sealed class DetailRow : INotifyPropertyChanged, IPanelRow
             var lines = _note.Split('\n');
             bool IsHint(string line) => line.StartsWith("Right-click", System.StringComparison.Ordinal)
                                         || line.StartsWith("Click", System.StringComparison.Ordinal);
-            return Ui.InfoTip.Make(_theme, null, Label,
-                                   string.Join("\n", lines.Where(l => !IsHint(l))),
-                                   hints: lines.Where(IsHint));
+            return Ui.InfoTip.Later(_theme, null, Label,
+                                    string.Join("\n", lines.Where(l => !IsHint(l))),
+                                    hints: lines.Where(IsHint));
         }
     }
 

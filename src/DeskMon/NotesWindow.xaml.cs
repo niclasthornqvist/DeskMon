@@ -111,6 +111,25 @@ public partial class NotesWindow : PanelWindow
     private (string Game, byte[]? Rtf)? _preloaded;
 
     /// <summary>
+    /// The open note's file is there but couldn't be read, so what is on screen
+    /// is not those notes. The editor is read-only and _saved stays null, which
+    /// SaveNow refuses on: nothing typed or dropped in here may reach the file.
+    /// Tried again when the window is next used - see the Activated handler.
+    /// </summary>
+    private bool _unreadable;
+
+    /// <summary>
+    /// The file was read but wouldn't load as notes, so the editor holds at
+    /// most part of it. Unlike _unreadable the notes can still be typed in and
+    /// saved, a copy of the file being kept first - so this ends with the
+    /// first save, when the editor really is what the notes say.
+    /// </summary>
+    private bool _loadFailed;
+
+    /// <summary>The session the card shows, for its tooltip - made when it opens, see ShowSession.</summary>
+    private SessionRecord? _cardSession;
+
+    /// <summary>
     /// A key was pressed in the editor while a load was settling - see
     /// LoadGame's deferred reset, which would otherwise mark that typing saved.
     /// </summary>
@@ -222,6 +241,13 @@ public partial class NotesWindow : PanelWindow
         _placementSave.Tick += (_, _) => SavePlacementNow();
         _disarmDelete.Tick += (_, _) => DisarmDelete();
 
+        // Made as they open: a game starting or leaving loads notes, and two
+        // of these cards built each time, mostly never seen, were part of
+        // that stall on the UI thread. Hooked up once, as ShowSession runs
+        // for every load.
+        SessionText.ToolTipOpening += SessionTip_Opening;
+        SessionPeaks.ToolTipOpening += SessionTip_Opening;
+
         // Catches a formatting command however it was given - Ctrl+I as well as
         // the toolbar button, which runs the same command. PreviewExecuted
         // rather than Executed: the editor's own command bindings mark Executed
@@ -237,6 +263,13 @@ public partial class NotesWindow : PanelWindow
         // dirty (typing via TextChanged, formatting via OnEditorCommand and
         // ApplyToSelection), and closing, switching game and exit still do the
         // full comparison regardless.
+        // Whatever held the file has often let go by the time the window is
+        // used again, and there is no event to say so.
+        Activated += (_, _) =>
+        {
+            if (_unreadable && !_loading)
+                LoadGame(_currentGame);
+        };
         Deactivated += (_, _) =>
         {
             SearchPopup.IsOpen = false;
@@ -918,11 +951,22 @@ public partial class NotesWindow : PanelWindow
     /// Every screenshot file name some notes still show: these notes as they
     /// are on screen - unsaved edits included - and every other game's as
     /// saved. A picture not in here is unused.
+    ///
+    /// Null when that can't be told. A blank editor standing in for notes that
+    /// wouldn't read, or another game's notes that can't be opened, used to
+    /// mean "shows no pictures" - and DELETE UNUSED then offered to bin every
+    /// picture they do show.
     /// </summary>
-    public HashSet<string> PicturesInUse()
+    public HashSet<string>? PicturesInUse()
     {
+        if (_unreadable || _loadFailed)
+            return null;
+
+        if (_store.ScreenshotNamesInNotes(exceptGame: _currentGame) is not { } others)
+            return null;
+
         var names = NotesPictures.FileNamesIn(Editor.Document);
-        names.UnionWith(_store.ScreenshotNamesInNotes(exceptGame: _currentGame));
+        names.UnionWith(others);
         return names;
     }
 
@@ -1000,12 +1044,16 @@ public partial class NotesWindow : PanelWindow
 
         // The list's PLAYING NOW, from the callers that know what is running;
         // set before the load, whose list refresh shows it.
+        string? wasPlaying = _playing;
         if (running)
             _playing = IsGeneral(game) ? null : game;
 
+        // The same note again, on screen, playing the same game: nothing the
+        // list shows has moved. Rebuilt anyway, each time cost a listing of
+        // the folder on the UI thread and a read of every session log.
         if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
             LoadGame(game);   // saves what is on screen first
-        else
+        else if (!IsOpen || !string.Equals(wasPlaying, _playing, StringComparison.OrdinalIgnoreCase))
             RefreshList();
     }
 
@@ -1036,6 +1084,13 @@ public partial class NotesWindow : PanelWindow
         Editor.Focus();
     }
 
+    /// <summary>
+    /// Each step of a load is logged past this. Well under Activity's usual
+    /// 2 s: the stalls at a game's start and end were 2-3 s in all, and with
+    /// the steps named this short, the next one in the log says which it was.
+    /// </summary>
+    private static readonly TimeSpan SlowLoadStep = TimeSpan.FromMilliseconds(300);
+
     /// <param name="mayRefuse">
     /// For a switch asked for here - the picker, a search result, NEW: when
     /// the notes on screen can be neither saved nor kept as a copy, they stay
@@ -1045,7 +1100,8 @@ public partial class NotesWindow : PanelWindow
     /// </param>
     private bool LoadGame(string game, bool mayRefuse = false)
     {
-        SaveNow();   // never lose what is on screen
+        using (Activity.Begin("saving the notes before a switch", SlowLoadStep))
+            SaveNow();   // never lose what is on screen
 
         // The save failed - the file held by another program, the disk full -
         // and the notes on screen are about to be replaced. They used to be
@@ -1080,7 +1136,10 @@ public partial class NotesWindow : PanelWindow
         try
         {
             _currentGame = game;
-            var (state, problem) = LoadInto(game);
+            (string State, bool Problem) loaded;
+            using (Activity.Begin("loading notes into the editor", SlowLoadStep))
+                loaded = LoadInto(game);
+            var (state, problem) = loaded;
 
             // To-do items written before they had their own layout get it now.
             // Before the baseline below, so this alone never rewrites the file:
@@ -1092,7 +1151,8 @@ public partial class NotesWindow : PanelWindow
             // because WPF's writer normalises what it reads - the file and a
             // round trip of it are the same notes but not the same bytes, and
             // comparing them would make every save rewrite the file.
-            _saved = Serialise();
+            using (Activity.Begin("writing out the loaded notes to compare", SlowLoadStep))
+                _saved = _unreadable ? null : Serialise();
 
             // Title is the taskbar entry, and names the game since nothing else
             // there does. The header names it too, large: with the drop-down
@@ -1104,7 +1164,8 @@ public partial class NotesWindow : PanelWindow
             DeleteNoteButton.ToolTip = IsGeneral(game)
                 ? "Clear General\nGeneral can't be deleted, only cleared. The old notes go to the Recycle Bin."
                 : "Delete this note\nIt goes to the Recycle Bin.";
-            RefreshList();
+            using (Activity.Begin("listing the notes", SlowLoadStep))
+                RefreshList();
             ShowLastSession();
             _dirty = false;
             ShowStatus(state, problem);
@@ -1159,10 +1220,7 @@ public partial class NotesWindow : PanelWindow
     {
         string game = string.IsNullOrWhiteSpace(gameName) ? NotesStore.GeneralNotes : gameName!;
         if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
-        {
-            byte[]? rtf = await Task.Run(() => _store.LoadRtf(game));
-            _preloaded = (game, rtf);
-        }
+            await PreloadAsync(game);
 
         try
         {
@@ -1171,6 +1229,47 @@ public partial class NotesWindow : PanelWindow
         finally
         {
             _preloaded = null;   // only ever for the one load it was read for
+        }
+    }
+
+    /// <summary>
+    /// <see cref="SwitchTo"/> with the file read on a worker first - for a game
+    /// quitting, where General's screenshots read on the UI thread stalled the
+    /// widget's tick. <paramref name="stillWanted"/> is asked after the read:
+    /// another game can have started meanwhile, and its notes must not be
+    /// switched away from. A closed window stays closed, as with SwitchTo.
+    /// </summary>
+    public async Task SwitchToAsync(string? gameName, Func<bool> stillWanted)
+    {
+        string game = string.IsNullOrWhiteSpace(gameName) ? NotesStore.GeneralNotes : gameName!;
+        if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
+            await PreloadAsync(game);
+
+        try
+        {
+            if (stillWanted())
+                SwitchTo(game);
+        }
+        finally
+        {
+            _preloaded = null;
+        }
+    }
+
+    /// <summary>
+    /// Reads a file ahead for LoadInto. One that can't be read is left for
+    /// LoadInto to find out again: that is where it is handled and said.
+    /// </summary>
+    private async Task PreloadAsync(string game)
+    {
+        try
+        {
+            byte[]? rtf = await Task.Run(() => _store.LoadRtf(game));
+            _preloaded = (game, rtf);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _preloaded = null;
         }
     }
 
@@ -1205,11 +1304,28 @@ public partial class NotesWindow : PanelWindow
         // Nothing to protect until shown otherwise: a new game has no file, and
         // a .txt import is never written over (its .rtf is a new file).
         _backupBeforeWrite = false;
+        _unreadable = false;
+        _loadFailed = false;
+        Editor.IsReadOnly = false;
 
         // Read ahead on a worker when this load came from ShowForAsync.
-        byte[]? rtf = _preloaded is { } ahead && string.Equals(ahead.Game, game, StringComparison.OrdinalIgnoreCase)
-            ? ahead.Rtf
-            : _store.LoadRtf(game);
+        byte[]? rtf;
+        try
+        {
+            rtf = _preloaded is { } ahead && string.Equals(ahead.Game, game, StringComparison.OrdinalIgnoreCase)
+                ? ahead.Rtf
+                : _store.LoadRtf(game);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Not "new notes": the file is there, and the blank document on
+            // screen must never be taken for it - see _unreadable.
+            _unreadable = true;
+            Editor.IsReadOnly = true;
+            _onDisk = null;
+            return ("Could not read these notes - another program may be holding the file. Close it and click back here; nothing is saved until then", true);
+        }
+
         _onDisk = rtf is { Length: > 0 } ? rtf : null;
         if (rtf is { Length: > 0 })
         {
@@ -1234,6 +1350,7 @@ public partial class NotesWindow : PanelWindow
                 // since a file that cannot be read here might still be
                 // recoverable elsewhere.
                 _backupBeforeWrite = true;
+                _loadFailed = true;
                 return ("Could not read the notes file - a copy is kept before anything is saved over it", true);
             }
         }
@@ -1813,21 +1930,58 @@ public partial class NotesWindow : PanelWindow
             {
                 _saved = rtf;
                 _onDisk = rtf;   // what the next backup (after Clear history) copies
+                _loadFailed = false;   // the file now holds what the editor does
             }
 
             // Date as well as time. Notes outlive the session they were written
             // in, so "Saved 21:04" is no use the next day - it reads as though
             // the file was touched this evening when it may be weeks old.
             if (error is null)
+            {
                 ShowStatus(SavedNowText());
+            }
             else
+            {
                 ShowStatus("Save failed: " + error, problem: true);
+                TrySaveAgainLater();
+            }
         }
         catch (Exception ex)
         {
             _dirty = true;
             ShowStatus("Save failed: " + ex.Message, problem: true);
+            TrySaveAgainLater();
         }
+    }
+
+    /// <summary>
+    /// Whatever made a save fail is usually gone in a moment, but nothing
+    /// asked again until the next edit - so text typed last stayed unsaved
+    /// however long the window was left. At the slowest pace, as each try
+    /// costs a pass over the whole document on the UI thread.
+    /// </summary>
+    private void TrySaveAgainLater()
+    {
+        _autoSave.Interval = SlowestAutoSave;
+        _autoSave.Start();
+    }
+
+    /// <summary>
+    /// <see cref="SaveNow"/> for DeskMon going away. A save that fails here has
+    /// no later try, so the notes on screen go to HISTORY as they do when a
+    /// switch to other notes can't save them - or to the log, if that fails too.
+    /// </summary>
+    public void SaveForExit()
+    {
+        SaveNow();
+        _autoSave.Stop();   // the try SaveNow may have queued: there is no later
+
+        if (!_dirty || _saved is null)
+            return;
+
+        App.Log("closing the notes", KeepUnsavedCopy()
+            ? $"{_currentGame} couldn't be saved, so what was on screen is kept in its HISTORY."
+            : $"{_currentGame} couldn't be saved or kept as a copy, so the last edits are lost.");
     }
 
     /// <summary>The autosave's wait while saving is quick, and the longest it may stretch to.</summary>
@@ -2687,14 +2841,39 @@ public partial class NotesWindow : PanelWindow
         if (ShowsNotesOf(game))
             return AppendToEditor(heading, text);
 
-        string? error = await Task.Run(() => AppendToFile(_store, _theme.AccentColor, game, heading, text));
+        string? error = await Task.Run(() => AppendOrHold(_store, _theme.AccentColor, game, heading, text));
+        LoadAgainIfSwitched(game, error);
+        return error;
+    }
 
-        // Switched to this game while the file was written: it may have
-        // loaded the notes without the entry, and saving them would drop it.
-        // Loaded again - with nothing typed yet there is nothing to lose.
+    /// <summary>
+    /// Switched to this game while the file was written: it may have loaded
+    /// the notes without the entry, and saving them would drop it. Loaded
+    /// again - with nothing typed yet there is nothing to lose.
+    /// </summary>
+    private void LoadAgainIfSwitched(string game, string? error)
+    {
         if (error is null && ShowsNotesOf(game) && !_dirty)
             LoadGame(game);
-        return error;
+    }
+
+    /// <summary>
+    /// A held note - see NotesStore.HoldNote - tried again. True when it has
+    /// gone in, so it can be let go. In the editor that counts even if the
+    /// save fails: it is on screen by then with the autosave trying, and
+    /// held as well it would go in a second time.
+    /// </summary>
+    public async Task<bool> AddHeldNoteAsync(NotesStore.HeldNote note)
+    {
+        if (ShowsNotesOf(note.Game))
+        {
+            AppendToEditor(note.Heading, note.Text);
+            return true;
+        }
+
+        string? error = await Task.Run(() => AppendToFile(_store, _theme.AccentColor, note.Game, note.Heading, note.Text));
+        LoadAgainIfSwitched(note.Game, error);
+        return error is null;
     }
 
     /// <summary>
@@ -2702,7 +2881,7 @@ public partial class NotesWindow : PanelWindow
     /// out - see MainWindow.SaveTypedSessionNote - where no later moment comes.
     /// </summary>
     public string? AppendSessionNote(string game, string heading, string text)
-        => ShowsNotesOf(game) ? AppendToEditor(heading, text) : AppendToFile(_store, _theme.AccentColor, game, heading, text);
+        => ShowsNotesOf(game) ? AppendToEditor(heading, text) : AppendOrHold(_store, _theme.AccentColor, game, heading, text);
 
     /// <summary>Whether the editor holds <paramref name="game"/>'s notes, loaded and so the ones its next save writes.</summary>
     private bool ShowsNotesOf(string game) => _saved is not null && SameNote(_currentGame, game);
@@ -2746,7 +2925,18 @@ public partial class NotesWindow : PanelWindow
     /// </summary>
     internal static string? AppendToFile(NotesStore store, Color accent, string game, string heading, string text)
     {
-        byte[]? rtf = store.LoadRtf(game);
+        // Stopped here rather than taken for empty notes: the entry would then
+        // have replaced the whole file, with nothing backed up.
+        byte[]? rtf;
+        try
+        {
+            rtf = store.LoadRtf(game);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "the notes file couldn't be read - another program may be holding it";
+        }
+
         var lines = NoteLines(text);
         if (rtf is not { Length: > 0 } && store.LoadLegacyText(game) is { Length: > 0 } legacy)
             lines = NoteLines(legacy).Append(string.Empty).Concat(lines).ToArray();
@@ -2757,6 +2947,19 @@ public partial class NotesWindow : PanelWindow
         if (rtf is { Length: > 0 })
             store.BackupLater(game, rtf);
         return store.SaveRtf(game, added, hasContent: true);
+    }
+
+    /// <summary>
+    /// <see cref="AppendToFile"/> for a note just typed: when it can't go in,
+    /// it is held to be tried again instead of being lost with the card. The
+    /// reason returned says so, for the tray.
+    /// </summary>
+    internal static string? AppendOrHold(NotesStore store, Color accent, string game, string heading, string text)
+    {
+        string? error = AppendToFile(store, accent, game, heading, text);
+        return error is not null && store.HoldNote(game, heading, text)
+            ? $"{error}. It is kept, and goes in by itself once the file can be read"
+            : error;
     }
 
     /// <summary>A note's lines, however its line breaks were typed.</summary>
@@ -2821,6 +3024,11 @@ public partial class NotesWindow : PanelWindow
         if (!string.Equals(game, _currentGame, StringComparison.OrdinalIgnoreCase))
             return $"the notes switched to {_currentGame} - open {game} and try again";
 
+        // Said here too: InsertPicture refuses this in the status line, and
+        // returning null after it told the pictures window it had gone in.
+        if (_unreadable)
+            return "these notes can't be read right now";
+
         // Shown if it had been put away, so the picture is seen going back in.
         if (!IsOpen)
             Show();
@@ -2855,10 +3063,19 @@ public partial class NotesWindow : PanelWindow
             return;
         }
 
-        if (_pictures.Replace(fullPath, preview))
+        // Guarded as the decode is: this is async void, so anything thrown
+        // after the await would go past every caller to the crash handler.
+        try
         {
-            MarkDirty();
-            ShowStatus($"{Path.GetFileName(fullPath)} marked up - the notes show it as it is now");
+            if (_pictures.Replace(fullPath, preview))
+            {
+                MarkDirty();
+                ShowStatus($"{Path.GetFileName(fullPath)} marked up - the notes show it as it is now");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"The marked picture couldn't be shown in the notes: {ex.Message}", problem: true);
         }
     }
 
@@ -2946,6 +3163,14 @@ public partial class NotesWindow : PanelWindow
 
     private void InsertPicture(BitmapSource preview, string fullPath, string status)
     {
+        // Dropped into the blank stand-in, it would vanish with the next try
+        // at reading the file - and look as if it had gone into the notes.
+        if (_unreadable)
+        {
+            ShowStatus($"These notes can't be read right now, so the picture wasn't added - it is saved in {Path.GetDirectoryName(fullPath)}", problem: true);
+            return;
+        }
+
         bool working = IsActive;
         if (!working)
             Editor.CaretPosition = Editor.Document.ContentEnd;
@@ -3173,20 +3398,41 @@ public partial class NotesWindow : PanelWindow
         LoadActivityLater(_listed);
     }
 
-    /// <summary>The card itself, for a load - see <see cref="RefreshLastSession"/>.</summary>
-    private void ShowLastSession()
+    /// <summary>Counts reads of the log, so a slow one finishing after a switch doesn't show the wrong game's session.</summary>
+    private int _lastSessionTicket;
+
+    /// <summary>
+    /// The card itself, for a load - see <see cref="RefreshLastSession"/>. The
+    /// log is read on a worker: this runs in every load, so as a game started
+    /// or quit a whole log went through the disk on the UI thread, with
+    /// antivirus on the file. Caught here as this is async void.
+    /// </summary>
+    private async void ShowLastSession()
     {
-        bool general = string.Equals(_currentGame, NotesStore.GeneralNotes, StringComparison.OrdinalIgnoreCase);
-        var last = general ? null : _sessions.LastSession(_currentGame);
+        int ticket = ++_lastSessionTicket;
+        string game = _currentGame;
 
-        if (last is null)
+        try
         {
-            SessionStrip.Visibility = Visibility.Collapsed;
-            return;
-        }
+            bool general = string.Equals(game, NotesStore.GeneralNotes, StringComparison.OrdinalIgnoreCase);
+            var last = general ? null : await Task.Run(() => _sessions.LastSession(game));
 
-        ShowSession(last);
-        SessionStrip.Visibility = Visibility.Visible;
+            if (ticket != _lastSessionTicket)
+                return;
+
+            if (last is null)
+            {
+                SessionStrip.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            ShowSession(last);
+            SessionStrip.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            App.Log("showing the last session", ex);
+        }
     }
 
     /// <summary>
@@ -3270,9 +3516,22 @@ public partial class NotesWindow : PanelWindow
         // The session in full on hover, the same tooltip as the session
         // history's (see Ui/SessionTip): the card only had room for the date,
         // length and peaks, and the score, lows and stutters were a window
-        // away. One each - a ToolTip can only belong to one element.
-        SessionText.ToolTip = DeskMon.Ui.SessionTip.Make(_theme, _settings, session);
-        SessionPeaks.ToolTip = DeskMon.Ui.SessionTip.Make(_theme, _settings, session);
+        // away. Empty for now, which is still enough for it to open - see
+        // SessionTip_Opening, which makes it.
+        _cardSession = session;
+        SessionText.ToolTip = string.Empty;
+        SessionPeaks.ToolTip = string.Empty;
+    }
+
+    /// <summary>
+    /// The session card's tooltip, made as it is about to show. Replaces the
+    /// empty text ShowSession left, before anything is drawn. One each - a
+    /// ToolTip can only belong to one element.
+    /// </summary>
+    private void SessionTip_Opening(object sender, ToolTipEventArgs e)
+    {
+        if (_cardSession is { } session && sender is FrameworkElement element)
+            element.ToolTip = DeskMon.Ui.SessionTip.Make(_theme, _settings, session);
     }
 
     /// <summary>

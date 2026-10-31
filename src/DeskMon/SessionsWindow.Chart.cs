@@ -785,10 +785,12 @@ public partial class SessionsWindow
     /// while drawing. A new target frame rate changes every score - in the
     /// cards, the table and a chart of scores - so it shows the lot again;
     /// only then, since this runs on every keystroke in the settings window.
+    /// Not while hidden: nobody sees it, each step rebuilt the bars and their
+    /// glow all the same, and opening the window reads everything anyway.
     /// </summary>
     public void RedrawChart()
     {
-        if (!IsLoaded)
+        if (!IsLoaded || !IsVisible)
             return;
 
         if (_scoredFor != PerformanceScore.Target)

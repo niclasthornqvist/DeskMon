@@ -3,8 +3,8 @@
                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                 xmlns:ui="clr-namespace:DeskMon.Ui"
                 Title="Versions"
-                Width="440" Height="400"
-                MinWidth="300" MinHeight="180"
+                Width="620" Height="600"
+                MinWidth="360" MinHeight="180"
                 ShowInTaskbar="False"
                 ShowActivated="False"
                 TextOptions.TextFormattingMode="Display"
@@ -54,11 +54,15 @@
             <!-- Scrolls rather than sizing to content: the list only grows, and
                  a window that grew with it would eventually be taller than the
                  screen. Built in code - a heading per day that folds its
-                 releases away - see BuildHistory. -->
+                 releases away - see BuildHistory.
+
+                 MaxWidth, which leaves the column centred in a wide window:
+                 sentences running the width of a large window are hard to
+                 follow from the end of one line to the start of the next. -->
             <ScrollViewer VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           Margin="12,6,4,10">
-                <StackPanel x:Name="History" Margin="0,0,8,0" />
+                <StackPanel x:Name="History" Margin="0,0,8,0" MaxWidth="820" />
             </ScrollViewer>
         </DockPanel>
     </Border>

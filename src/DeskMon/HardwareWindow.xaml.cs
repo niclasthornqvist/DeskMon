@@ -508,8 +508,16 @@ public partial class HardwareWindow : PanelWindow
     private void ShowRegions(IReadOnlyList<SystemInfo.Check> checks, int generation)
     {
         for (int i = 0; i < _regionRows.Count && i < checks.Count; i++)
-            if (SetStatus(_regionRows[i], checks[i], generation) is { } done)
+            if (SetStatus(_regionRows[i], checks[i], generation, redraw: false) is { } done)
                 _regionRows[i] = done;
+        RedrawRows(generation);
+    }
+
+    /// <summary>The rows drawn again after a batch of SetStatus - all at once, as each redraw rebuilds the whole list.</summary>
+    private void RedrawRows(int generation)
+    {
+        if (generation == _loadGeneration)
+            Rows.Items.Refresh();
     }
 
     /// <summary>
@@ -578,8 +586,9 @@ public partial class HardwareWindow : PanelWindow
         // The regions again too, side by side with the ping: a fresh look
         // at the connection is a fresh look at all of it.
         for (int i = 0; i < _regionRows.Count; i++)
-            if (SetStatus(_regionRows[i], Checking($"Measuring the way to {NetworkCheck.Regions[i].Name}…"), generation) is { } waiting)
+            if (SetStatus(_regionRows[i], Checking($"Measuring the way to {NetworkCheck.Regions[i].Name}…"), generation, redraw: false) is { } waiting)
                 _regionRows[i] = waiting;
+        RedrawRows(generation);
         var regionsTask = _regionRows.Count == 0 ? null : NetworkCheck.RegionsAsync();
 
         try
@@ -614,7 +623,8 @@ public partial class HardwareWindow : PanelWindow
     /// rebuilt the rows (IndexOf would miss anyway; checked so the intent
     /// doesn't hang on that coincidence).
     /// </summary>
-    private InfoRow? SetStatus(InfoRow item, SystemInfo.Check? status, int generation, bool pingAgain = false)
+    /// <param name="redraw">False in a batch, whose caller draws once at the end - see RedrawRows.</param>
+    private InfoRow? SetStatus(InfoRow item, SystemInfo.Check? status, int generation, bool pingAgain = false, bool redraw = true)
     {
         if (generation != _loadGeneration)
             return null;
@@ -636,7 +646,8 @@ public partial class HardwareWindow : PanelWindow
 
         // A note put in or taken out moves where a group ends.
         MarkGroupEnds();
-        Rows.Items.Refresh();
+        if (redraw)
+            Rows.Items.Refresh();
         return done;
     }
 

@@ -12,8 +12,9 @@ namespace DeskMon.Metrics;
 /// only to someone looking at the widget; mid-game nobody is.
 ///
 /// Which readings: every row in MetricRegistry with a Crit level that isn't
-/// inverted. That leaves out the frame rates - a game running slowly is the
-/// game's business, not a sign of trouble with the PC. A row added to the
+/// inverted, unless it says Alerts: false. That leaves out the frame rates - a
+/// game running slowly is the game's business, not a sign of trouble with the
+/// PC - and VRAM and LAT, whose red is only a colour. A row added to the
 /// registry with a Crit level can alert without anything here changing.
 /// </summary>
 public sealed class AlertWatcher
@@ -43,7 +44,7 @@ public sealed class AlertWatcher
         _settings = settings;
         _watched = MetricRegistry.Sections
             .SelectMany(s => s.Metrics.Select(m => (Section: s, Metric: m)))
-            .Where(x => !double.IsInfinity(x.Metric.Crit) && !x.Metric.Invert)
+            .Where(x => !double.IsInfinity(x.Metric.Crit) && !x.Metric.Invert && x.Metric.Alerts)
             .Select(x => (x.Metric, x.Metric.AlertName ?? $"{x.Metric.Label} {x.Section.Title.ToLowerInvariant()}"))
             .ToList();
     }

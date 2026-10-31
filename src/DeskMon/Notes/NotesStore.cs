@@ -71,19 +71,38 @@ public sealed class NotesStore
         }
     }
 
-    /// <summary>The stored RTF, or null if this game has none yet.</summary>
+    /// <summary>
+    /// The stored RTF, or null if this game has none yet. Throws when the file
+    /// is there but can't be read: it used to come back null as well, which
+    /// read as "no notes yet", and the next save or session note then wrote
+    /// over the real file - with no backup, as there seemed to be nothing to
+    /// keep. Shared for writers, and tried a few times, so a word processor
+    /// holding the note open or a passing scan doesn't count as unreadable.
+    /// </summary>
     public byte[]? LoadRtf(string gameName)
     {
-        try
+        string path = PathFor(gameName);
+        for (int attempt = 1; ; attempt++)
         {
-            string path = PathFor(gameName);
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
-        }
-        catch
-        {
-            return null;
+            try
+            {
+                if (!File.Exists(path))
+                    return null;
+
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                                  FileShare.ReadWrite | FileShare.Delete);
+                var data = new byte[stream.Length];
+                stream.ReadExactly(data);
+                return data;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < ReadAttempts)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
         }
     }
+
+    private const int ReadAttempts = 3;
 
     /// <summary>Plain text from an older .txt file, or null if there isn't one.</summary>
     public string? LoadLegacyText(string gameName)
@@ -127,6 +146,83 @@ public sealed class NotesStore
         }
     }
 
+    /// <summary>A session note waiting for its game's notes file to be readable - see <see cref="HoldNote"/>.</summary>
+    public sealed record HeldNote(string Game, string Heading, string Text)
+    {
+        /// <summary>Its own file, for <see cref="LetGo"/>. Not stored: it is where it was read from.</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string Path { get; init; } = string.Empty;
+    }
+
+    /// <summary>A subfolder like the backups, so a held note is never listed as a game.</summary>
+    private string HeldFolder => Path.Combine(_folder, "held-notes");
+
+    /// <summary>
+    /// Keeps a session note that couldn't go into its notes. Its text exists
+    /// nowhere else once the card has closed, and the tray could only say it
+    /// was gone. On disk, as the file may stay held past DeskMon's exit. False
+    /// if this failed too.
+    /// </summary>
+    public bool HoldNote(string game, string heading, string text)
+    {
+        try
+        {
+            string name = $"{SafeFileName(game)}~{Guid.NewGuid():N}.json";
+            AtomicFile.WriteAllText(Path.Combine(HeldFolder, name),
+                                    System.Text.Json.JsonSerializer.Serialize(new HeldNote(game, heading, text)));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            App.Log("keeping a session note", ex);
+            return false;
+        }
+    }
+
+    /// <summary>The notes waiting, oldest first, so they go in in the order they were written.</summary>
+    public IReadOnlyList<HeldNote> HeldNotes()
+    {
+        var notes = new List<HeldNote>();
+        try
+        {
+            if (!Directory.Exists(HeldFolder))
+                return notes;
+
+            foreach (string file in Directory.EnumerateFiles(HeldFolder, "*.json").OrderBy(File.GetLastWriteTimeUtc))
+            {
+                // One that can't be read stays on disk and doesn't stop the rest.
+                try
+                {
+                    if (System.Text.Json.JsonSerializer.Deserialize<HeldNote>(File.ReadAllText(file)) is { } note)
+                        notes.Add(note with { Path = file });
+                }
+                catch (Exception ex)
+                {
+                    App.Log("reading a kept session note", ex);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log("reading the kept session notes", ex);
+        }
+
+        return notes;
+    }
+
+    /// <summary>A held note that has gone in. Failing that it would only go in again, so it is logged.</summary>
+    public void LetGo(HeldNote note)
+    {
+        try
+        {
+            File.Delete(note.Path);
+        }
+        catch (Exception ex)
+        {
+            App.Log("clearing a kept session note", ex);
+        }
+    }
+
     /// <summary>
     /// Where a full-size screenshot for this game's notes goes:
     /// notes\screenshots\Game\2026-10-17_210412.png. A subfolder per game, so
@@ -150,12 +246,19 @@ public sealed class NotesStore
     /// is never taken for unused and deleted from under them. Names, not
     /// paths: they are unique (the time to the second), and a notes folder
     /// that has been moved since would leave every stored path stale.
+    ///
+    /// Null when some notes couldn't be read, so the answer isn't known. Fewer
+    /// names is not the safe way to be wrong, as this once said: a name missing
+    /// from here is a picture offered as unused.
     /// </summary>
-    public HashSet<string> ScreenshotNamesInNotes(string? exceptGame)
+    public HashSet<string>? ScreenshotNamesInNotes(string? exceptGame)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
+            if (!Directory.Exists(_folder))
+                return names;   // no notes at all: known, and nothing shows a picture
+
             string? skip = exceptGame is null ? null : PathFor(exceptGame);
 
             foreach (string rtf in Directory.EnumerateFiles(_folder, "*.rtf"))
@@ -163,20 +266,12 @@ public sealed class NotesStore
                 if (skip is not null && string.Equals(rtf, skip, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                try
-                {
-                    names.UnionWith(NamesIn(rtf));
-                }
-                catch
-                {
-                    // Unreadable notes: fewer names known, so fewer pictures
-                    // are offered as unused - the safe way to be wrong.
-                }
+                names.UnionWith(NamesIn(rtf));
             }
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // The folder itself couldn't be listed; the same safe way to be wrong.
+            return null;
         }
 
         return names;
@@ -198,8 +293,13 @@ public sealed class NotesStore
         }
 
         // Latin-1, a byte per character: RTF is 7-bit text, and the names are
-        // plain digits whatever the rest of the file holds.
-        string text = File.ReadAllText(rtf, System.Text.Encoding.Latin1);
+        // plain digits whatever the rest of the file holds. Shared for writers
+        // as LoadRtf is: a word processor holding a note open isn't a failure.
+        string text;
+        using (var stream = new FileStream(rtf, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        using (var reader = new StreamReader(stream, System.Text.Encoding.Latin1, detectEncodingFromByteOrderMarks: false))
+            text = reader.ReadToEnd();
+
         string[] names = ScreenshotName.Matches(text).Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
         lock (_namesCache)

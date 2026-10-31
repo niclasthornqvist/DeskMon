@@ -306,9 +306,11 @@ public partial class App : Application
                 if (existing.Exists && existing.Length > MaxLogBytes)
                     File.Move(path, path + ".old", overwrite: true);
 
-                File.AppendAllText(
-                    path,
-                    $"{DateTime.Now:u}  [{context}]  {error}{Environment.NewLine}{Environment.NewLine}");
+                // Spelled out rather than "u", which puts a Z on it: that says
+                // UTC, and this is local time, so every line read an hour or
+                // two off against anything else on the PC.
+                string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+                File.AppendAllText(path, $"{now}  [{context}]  {error}{Environment.NewLine}{Environment.NewLine}");
             }
             catch { /* nothing useful left to do */ }
         }

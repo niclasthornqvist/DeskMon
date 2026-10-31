@@ -365,6 +365,16 @@ public partial class MainWindow : Window
                 ? $"Couldn't move your data to %APPDATA%\\DeskMon: {problem} It stays in app\\ for now; the next start tries again."
                 : problem, warning: true);
 
+        // Said for the same reason: this run's folders are the defaults, so
+        // with custom ones set the notes and sessions seem to have vanished.
+        if (_settings.NotLoaded)
+            _tray.Notify("DeskMon", "settings.json couldn't be read, so this run uses the default settings and folders. " +
+                                    "The file is unchanged - restart DeskMon to load it.", warning: true);
+
+        _heldNotes.Tick += (_, _) => AddHeldNotes();
+        if (_notesStore.HeldNotes().Count > 0)
+            _heldNotes.Start();
+
         _tray.ToggleWidget += show =>
         {
             _userHidden = !show;
@@ -471,14 +481,21 @@ public partial class MainWindow : Window
     /// Rebuilds the drawn list for the current game state, dropping game-only
     /// sections when no game is running and fixing up which section shows a
     /// separator, since that depends on what ends up above it.
+    ///
+    /// Nothing is redrawn when the list comes out the same. Clearing it remakes
+    /// every row's template and lays the window out twice, on the UI thread,
+    /// and a game starting or ending came here twice each - to no effect when
+    /// the desktop and game layouts show the same sections - which is part of
+    /// the 2-3 s stalls the log shows there.
     /// </summary>
-    private void RefreshVisibleItems()
+    /// <param name="refit">Re-fit the window even if the list is unchanged: its size is what is being put right.</param>
+    private void RefreshVisibleItems(bool refit = false)
     {
-        _visibleItems.Clear();
-        _spareItems.Clear();
-
         // Remembered so ApplySettings can tell whether the list needs redoing.
         _visibilityApplied = VisibilitySettings();
+
+        var wanted = new List<object>(_allItems.Count);
+        var spares = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
         bool isFirstSection = true;
         foreach (var entry in _allItems)
@@ -498,8 +515,8 @@ public partial class MainWindow : Window
                 // top of its column, under nothing.
                 section.SetSeparator(!isFirstSection && !Horizontal);
                 isFirstSection = false;
-                _visibleItems.Add(section);   // headings always stay, so a folded
-                continue;                     // section can be unfolded again
+                wanted.Add(section);   // headings always stay, so a folded
+                continue;              // section can be unfolded again
             }
 
             if (entry.Section is { IsCollapsed: true })
@@ -515,16 +532,31 @@ public partial class MainWindow : Window
                 // pinned to the unfolded layout already - see LockPanelWidth.
                 if (Horizontal)
                 {
-                    _spareItems.Add(entry.Item);
-                    _visibleItems.Add(entry.Item);
+                    spares.Add(entry.Item);
+                    wanted.Add(entry.Item);
                 }
                 continue;
             }
 
-            _visibleItems.Add(entry.Item);
+            wanted.Add(entry.Item);
         }
 
-        ResizeToContent();
+        // By reference, as _spareItems is: two rows can be equal in every value.
+        bool same = wanted.Count == _visibleItems.Count && _spareItems.SetEquals(spares);
+        for (int i = 0; same && i < wanted.Count; i++)
+            same = ReferenceEquals(wanted[i], _visibleItems[i]);
+
+        if (!same)
+        {
+            _visibleItems.Clear();
+            _spareItems.Clear();
+            _spareItems.UnionWith(spares);
+            foreach (object item in wanted)
+                _visibleItems.Add(item);
+        }
+
+        if (!same || refit)
+            ResizeToContent();
     }
 
     /// <summary>
@@ -582,7 +614,7 @@ public partial class MainWindow : Window
         // callers expect: the first one has just added the detail rows.
         if (Horizontal)
         {
-            RefreshVisibleItems();
+            RefreshVisibleItems(refit: true);
             return;
         }
 
@@ -600,7 +632,7 @@ public partial class MainWindow : Window
         _widthLocked = true;
         Width = widest;
 
-        RefreshVisibleItems();   // puts back what should actually be on screen
+        RefreshVisibleItems(refit: true);   // puts back what should actually be on screen
     }
 
     // --- Vertical or horizontal ---------------------------------------------
@@ -648,7 +680,7 @@ public partial class MainWindow : Window
         {
             _widthLocked = false;
             Width = double.NaN;
-            RefreshVisibleItems();
+            RefreshVisibleItems(refit: true);
         }
         else if (_detailsBuilt)
         {
@@ -656,7 +688,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            RefreshVisibleItems();   // the width is pinned once the sensor lists exist
+            RefreshVisibleItems(refit: true);   // the width is pinned once the sensor lists exist
         }
     }
 
@@ -959,6 +991,8 @@ public partial class MainWindow : Window
                 if (_detailsBuilt && _rows.Exists(row => row.DetailsChanged))
                     RebuildDetailRows(snapshot);
 
+                KeepColumnsInside();
+
                 if (_alerts is not null)
                     foreach (string alert in _alerts.Check(snapshot))
                         Alert(alert);
@@ -990,6 +1024,33 @@ public partial class MainWindow : Window
         {
             _reading = false;
         }
+    }
+
+    /// <summary>When the strip may next be re-fitted - see <see cref="KeepColumnsInside"/>.</summary>
+    private DateTime _nextColumnFit;
+
+    /// <summary>
+    /// Side by side, the window opens narrow and grows over the next layout
+    /// passes, as the columns settle on their widths. When the last of those
+    /// was missed, as could happen while Windows was starting, the strip
+    /// stayed narrow with its last column cut off - the GAME section gone -
+    /// until the next fold or game redrew it. So each tick checks, and does
+    /// what a fold does.
+    ///
+    /// Held to once in ten seconds: a strip wider than every screen together
+    /// can never fit, and must not redraw the whole list on each tick.
+    /// </summary>
+    private void KeepColumnsInside()
+    {
+        if (_sectionsPanel is not { Columns: true } panel || !IsVisible)
+            return;
+
+        double right = panel.TranslatePoint(new Point(panel.NeededWidth, 0), this).X;
+        if (right <= ActualWidth + 1 || DateTime.UtcNow < _nextColumnFit)
+            return;
+
+        _nextColumnFit = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        RefreshVisibleItems(refit: true);
     }
 
     /// <summary>
@@ -1115,11 +1176,18 @@ public partial class MainWindow : Window
     /// takes seconds a page. The memory is in use anyway; this only stops it
     /// going. Clamped, so a bloated moment can't pin hundreds of MB for good.
     /// </summary>
+    /// <remarks>
+    /// A fixed floor. It was the working set at the first tick, up to 256 MB -
+    /// but that is still the startup peak, as TrimMemory frees the heap and not
+    /// the pages, and the widget was seen holding 268 MB it could never give
+    /// to a game short of RAM. The tick's own pages are the recently used ones,
+    /// which are what a floor keeps, so it need only be as big as they are.
+    /// </remarks>
     private static void KeepResident()
     {
         try
         {
-            long floor = Math.Clamp(Environment.WorkingSet, 64L << 20, 256L << 20);
+            const long floor = 96L << 20;
 
             // The maximum stays soft (MAX_DISABLE), so the widget can still
             // grow past the floor - opening the sessions window, say.
@@ -1188,7 +1256,7 @@ public partial class MainWindow : Window
             LogExitedSession();
         }
 
-        if (_sessionExitedAt is { } exitedAt && DateTime.Now - exitedAt >= RelaunchGrace)
+        if (_sessionExitedAt is { } exitedAt && Elapsed(exitedAt, DateTime.Now) >= RelaunchGrace)
             FinishSession();
 
         var foreground = ForegroundState.Inspect(_handle);
@@ -1235,7 +1303,9 @@ public partial class MainWindow : Window
 
         if (isGame)
         {
-            TrackGame(foreground.Pid, listed);
+            // Picked up a tick later, once its name is known - see NameReady.
+            if ((_inGame && foreground.Pid == _gamePid) || NameReady(foreground.Pid))
+                TrackGame(foreground.Pid, listed);
             return;
         }
 
@@ -1358,13 +1428,33 @@ public partial class MainWindow : Window
         if (_gameProcess is null)
             return true;
 
+        return HasExited(_gameProcess);
+    }
+
+    /// <summary>
+    /// Whether a process has gone. HasExited can throw for a process very much
+    /// alive, when anti-cheat refuses the handle it asks for; counted as gone,
+    /// that ended the session on its first tick. So on an error, whether the
+    /// id is still running decides - which a reused id can get wrong for as
+    /// long as that process lasts, but only in this already rare case.
+    /// </summary>
+    private static bool HasExited(Process process)
+    {
         try
         {
-            return _gameProcess.HasExited;
+            return process.HasExited;
         }
         catch
         {
-            return true;
+            try
+            {
+                using var same = Process.GetProcessById(process.Id);
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
         }
     }
 
@@ -1433,10 +1523,11 @@ public partial class MainWindow : Window
 
             // Free the heap right when the game wants memory - once per game,
             // not on every return from Alt+Tab: it is a full blocking,
-            // compacting collection, too costly to repeat each time.
-            TrimMemory();
+            // compacting collection, too costly to repeat each time. After the
+            // tick rather than in it, on top of everything else a game's start
+            // does there, and the rows' first draw.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(TrimMemory));
         }
-        RefreshVisibleItems();
         UpdateTooltip();
 
         // Bring up this game's notepad. ShowFor deliberately does not activate
@@ -1507,6 +1598,57 @@ public partial class MainWindow : Window
         }
 
         return _friendlyName;
+    }
+
+    /// <summary>The process a name is being worked out for, and the last one that has been, found or not.</summary>
+    private int _namingPid, _namedTriedPid;
+
+    /// <summary>
+    /// Whether the process's name has been looked up, starting that off on a
+    /// worker when it hasn't. FileVersionInfo opens the game's exe, which goes
+    /// through the disk and the antivirus, and inside the tick that was part
+    /// of the seconds every window stalled as a game started. A game can wait
+    /// a tick to be picked up; the name is then the cached one.
+    /// </summary>
+    private bool NameReady(int pid)
+    {
+        if (pid == _friendlyPid || pid == _namedTriedPid)
+            return true;
+
+        if (pid != _namingPid)
+        {
+            _namingPid = pid;
+            _ = LookUpNameAsync(pid);
+        }
+
+        return false;
+    }
+
+    private async Task LookUpNameAsync(int pid)
+    {
+        try
+        {
+            var (started, name) = await Task.Run(() =>
+            {
+                using var process = Process.GetProcessById(pid);
+                return (process.StartTime, FriendlyName(process));
+            });
+
+            _friendlyPid = pid;
+            _friendlyStart = started;
+            _friendlyName = name;
+        }
+        catch
+        {
+            // Gone, or a start time it won't give: CachedFriendlyName does what
+            // it can as tracking starts.
+        }
+        finally
+        {
+            _namedTriedPid = pid;
+            if (_namingPid == pid)
+                _namingPid = 0;
+        }
     }
 
     /// <summary>
@@ -1606,13 +1748,29 @@ public partial class MainWindow : Window
 
         // Back to the general notes now that no game is running. SwitchTo, not
         // ShowFor: the notes that were open should change, but a closed window
-        // must not spring open just because a game exited.
-        _notes?.SwitchTo(null);
-
+        // must not spring open just because a game exited. Not with refresh
+        // off: another game is taking over, or DeskMon is closing.
         if (refresh)
         {
-            RefreshVisibleItems();
+            _ = ShowGeneralNotesAsync();
             UpdateTooltip();
+        }
+    }
+
+    /// <summary>
+    /// The notes window on General with the file read off the tick - see
+    /// NotesWindow.SwitchToAsync - unless a game started while it was read.
+    /// </summary>
+    private async Task ShowGeneralNotesAsync()
+    {
+        try
+        {
+            if (_notes is { } notes)
+                await notes.SwitchToAsync(null, () => !_inGame);
+        }
+        catch (Exception ex)
+        {
+            App.Log("switching the notes to General", ex);
         }
     }
 
@@ -1644,7 +1802,7 @@ public partial class MainWindow : Window
                 // Built again only when the minute moves - the finest the
                 // playtime is ever written in - rather than a new string
                 // every tick for a heading that changes every few minutes.
-                var played = _sessionPlayedBefore + (DateTime.Now - _sessionStartedAt);
+                var played = _sessionPlayedBefore + Elapsed(_sessionStartedAt, DateTime.Now);
                 long minute = (long)played.TotalMinutes;
                 if (!ReferenceEquals(name, _titleFor) || minute != _titleMinute || _titleText is null)
                 {
@@ -1948,7 +2106,7 @@ public partial class MainWindow : Window
         if (!_settings.LogSessionToFile || game is null)
             return;   // nothing to file it under, or switched off
 
-        if (ended - started < ShortestLoggedSession)
+        if (Elapsed(started, ended) < ShortestLoggedSession)
             return;
 
         // Queued, not written here: this runs in the tick, and a busy disk
@@ -1980,7 +2138,7 @@ public partial class MainWindow : Window
     {
         if (_sessionGame is null || _sessionExitedAt is not { } ended || !_settings.LogSessionToFile)
             return;
-        if (ended - _sessionStartedAt < ShortestLoggedSession)
+        if (Elapsed(_sessionStartedAt, ended) < ShortestLoggedSession)
             return;
 
         // What HarvestFrames would add, without taking it, as CheckpointSession
@@ -2064,9 +2222,12 @@ public partial class MainWindow : Window
             {
                 string? error = _notes is { } notes
                     ? await notes.AppendSessionNoteAsync(game, heading, note)
-                    : await Task.Run(() => NotesWindow.AppendToFile(_notesStore, _theme.AccentColor, game, heading, note));
+                    : await Task.Run(() => NotesWindow.AppendOrHold(_notesStore, _theme.AccentColor, game, heading, note));
                 if (error is not null)
+                {
                     _tray?.Notify("DeskMon", $"The session note couldn't be added to {game}'s notes: {error}.", warning: true);
+                    _heldNotes.Start();
+                }
             }
             catch (Exception ex)
             {
@@ -2111,14 +2272,63 @@ public partial class MainWindow : Window
         {
             string? error = _notes is { } notes
                 ? notes.AppendSessionNote(game, heading, note)
-                : NotesWindow.AppendToFile(_notesStore, _theme.AccentColor, game, heading, note);
+                : NotesWindow.AppendOrHold(_notesStore, _theme.AccentColor, game, heading, note);
             if (error is not null)
+            {
                 App.Log("adding a session note", error);
+                _heldNotes.Start();
+            }
         }
         catch (Exception ex)
         {
             App.Log("adding a session note", ex);
         }
+    }
+
+    /// <summary>
+    /// Tries the session notes that couldn't go in - see NotesStore.HoldNote -
+    /// once a minute, and only while there are some: nothing says when a file
+    /// is let go. Started by a failure, or at start for one a last run left.
+    /// </summary>
+    private readonly DispatcherTimer _heldNotes = new() { Interval = TimeSpan.FromMinutes(1) };
+
+    /// <summary>
+    /// One pass over the held notes. Stopped while it runs, so a slow pass
+    /// can't overlap the next, and started again only if some are left.
+    /// Caught in full as this is async void, on a timer in the UI thread.
+    /// </summary>
+    private async void AddHeldNotes()
+    {
+        _heldNotes.Stop();
+        bool left = false;
+
+        try
+        {
+            foreach (var note in await Task.Run(_notesStore.HeldNotes))
+            {
+                bool added = _notes is { } notes
+                    ? await notes.AddHeldNoteAsync(note)
+                    : await Task.Run(() => NotesWindow.AppendToFile(_notesStore, _theme.AccentColor, note.Game, note.Heading, note.Text) is null);
+
+                if (added)
+                {
+                    _notesStore.LetGo(note);
+                    _tray?.Notify("DeskMon", $"The kept session note is now in {note.Game}'s notes.", warning: false);
+                }
+                else
+                {
+                    left = true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log("adding a kept session note", ex);
+            left = true;
+        }
+
+        if (left)
+            _heldNotes.Start();
     }
 
     /// <summary>
@@ -2185,11 +2395,11 @@ public partial class MainWindow : Window
             return;
 
         var now = DateTime.Now;
-        if (now - _lastCheckpoint < CheckpointEvery)
+        if (Elapsed(_lastCheckpoint, now) < CheckpointEvery)
             return;
 
         var ended = _sessionExitedAt ?? now;
-        if (ended - _sessionStartedAt < ShortestLoggedSession)
+        if (Elapsed(_sessionStartedAt, ended) < ShortestLoggedSession)
             return;
 
         _lastCheckpoint = now;
@@ -2244,16 +2454,7 @@ public partial class MainWindow : Window
     /// exited" would end every session on the next tick.
     /// </summary>
     private bool SessionProcessExited()
-    {
-        try
-        {
-            return _sessionProcess is null || _sessionProcess.HasExited;
-        }
-        catch
-        {
-            return true;
-        }
-    }
+        => _sessionProcess is null || HasExited(_sessionProcess);
 
     /// <summary>When the process ended, or null while it is still running.</summary>
     private static DateTime? ExitTimeOf(Process? process)
@@ -2287,7 +2488,7 @@ public partial class MainWindow : Window
         // Invariant like the figures below: in a format string ':' means the
         // culture's time separator, and a culture that uses '.' would write a
         // line SessionRecord.Parse can't read back.
-        line.Append(FormattableString.Invariant($"{started:yyyy-MM-dd HH:mm}–{ended:HH:mm} · {Describe(ended - started)}"));
+        line.Append(FormattableString.Invariant($"{started:yyyy-MM-dd HH:mm}–{ended:HH:mm} · {Describe(Elapsed(started, ended))}"));
 
         // Frame times, averaged and then inverted - not an average of rates;
         // the same reasoning as FpsMonitor's percentiles.
@@ -2352,6 +2553,14 @@ public partial class MainWindow : Window
 
         return line.ToString();
     }
+
+    /// <summary>
+    /// The time between two local clock readings, by the real clock. Plain
+    /// subtraction goes wrong across a clock change: when the clocks go back,
+    /// a session from 02:50 to 02:20 came out negative and was dropped as too
+    /// short. The times written in the line stay local, as they read.
+    /// </summary>
+    private static TimeSpan Elapsed(DateTime from, DateTime to) => to.ToUniversalTime() - from.ToUniversalTime();
 
     /// <summary>"2 h 14 min", or just minutes below an hour.</summary>
     private static string Describe(TimeSpan length)
@@ -2617,6 +2826,11 @@ public partial class MainWindow : Window
 
     private void RestorePosition()
     {
+        // The saved place is the one from before this drag: a tick re-fitting
+        // the widget under the mouse would pull it back there.
+        if (_draggingWidget)
+            return;
+
         // Default spot: top-right of the primary work area.
         var work = SystemParameters.WorkArea;
         double left = _settings.Left ?? work.Right - ActualWidth - 24;
@@ -2672,6 +2886,7 @@ public partial class MainWindow : Window
         if (_settings.Locked)
             return;
 
+        _draggingWidget = true;
         try
         {
             DragMove();   // blocks until the button is released
@@ -2679,6 +2894,10 @@ public partial class MainWindow : Window
         catch (InvalidOperationException)
         {
             return;       // button was already up; nothing moved
+        }
+        finally
+        {
+            _draggingWidget = false;
         }
 
         _settings.Left = Left;
@@ -2696,6 +2915,9 @@ public partial class MainWindow : Window
 
     /// <summary>The press has moved far enough to be a drag rather than a click.</summary>
     private bool _draggingSection;
+
+    /// <summary>The widget itself is being dragged - see RestorePosition.</summary>
+    private bool _draggingWidget;
 
     /// <summary>
     /// Moves the pressed section as the mouse goes - live, so the panel itself
@@ -3969,7 +4191,7 @@ public partial class MainWindow : Window
 
         if (_notes is not null)
         {
-            _notes.SaveNow();
+            _notes.SaveForExit();
             _notes.AllowClose();
         }
 
@@ -3983,29 +4205,47 @@ public partial class MainWindow : Window
 
     // --- Idle handling ----------------------------------------------------
 
+    // Why nobody can see the screen, each on its own: with one flag, waking a
+    // PC that locks on sleep cleared the pause with the lock screen still up.
+    // Only the UI thread touches these - see UpdatePaused.
+    private bool _locked, _disconnected, _asleep;
+
     private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
-        => SetPaused(e.Reason is SessionSwitchReason.SessionLock
-                                or SessionSwitchReason.ConsoleDisconnect
-                                or SessionSwitchReason.RemoteDisconnect);
+    {
+        switch (e.Reason)
+        {
+            case SessionSwitchReason.SessionLock: UpdatePaused(() => _locked = true); break;
+            case SessionSwitchReason.SessionUnlock: UpdatePaused(() => _locked = false); break;
+            case SessionSwitchReason.ConsoleDisconnect or SessionSwitchReason.RemoteDisconnect:
+                UpdatePaused(() => _disconnected = true);
+                break;
+            case SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect:
+                UpdatePaused(() => _disconnected = false);
+                break;
+        }
+    }
 
     private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
     {
-        if (e.Mode == PowerModes.Suspend) SetPaused(true);
-        if (e.Mode == PowerModes.Resume) SetPaused(false);
+        if (e.Mode == PowerModes.Suspend) UpdatePaused(() => _asleep = true);
+        if (e.Mode == PowerModes.Resume) UpdatePaused(() => _asleep = false);
     }
 
     /// <summary>
-    /// Stops or restarts polling. Pausing also marks the CPU-time baseline
-    /// stale, because nothing samples those counters while paused - see the
-    /// prime in <see cref="OnTick"/>.
+    /// Stops or restarts polling after <paramref name="change"/>. Pausing also
+    /// marks the CPU-time baseline stale, because nothing samples those
+    /// counters while paused - see the prime in <see cref="OnTick"/>.
     /// </summary>
-    private void SetPaused(bool paused)
+    private void UpdatePaused(Action change)
     {
         // All of it through the dispatcher: SystemEvents may call from a
         // thread of its own, and the flags are read by the tick on the UI
         // thread with no barrier - as is the drift's clock.
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            change();
+
+            bool paused = _locked || _disconnected || _asleep;
             if (paused)
                 _needsPrime = true;
 
@@ -4030,6 +4270,7 @@ public partial class MainWindow : Window
         _relayout.Stop();
         _overlayTimer.Stop();
         _clockTimer.Stop();
+        _heldNotes.Stop();
 
         if (!_restarting)
         {
@@ -4054,7 +4295,7 @@ public partial class MainWindow : Window
 
         if (_notes is not null)
         {
-            _notes.SaveNow();
+            _notes.SaveForExit();
             _notes.AllowClose();
             _notes.Close();
         }

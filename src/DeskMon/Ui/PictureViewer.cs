@@ -31,9 +31,9 @@ namespace DeskMon.Ui;
 ///   Esc            close - or leave mark-up without saving
 ///
 /// Mark-up draws arrows, circles, boxes, freehand lines and text over the
-/// picture and saves the result as a copy beside it. The screenshot itself is
-/// never changed: the notes and the pictures window may show it, and a mark
-/// drawn in the wrong place should cost nothing.
+/// picture. SAVE COPY keeps the result beside it; SAVE marks the picture
+/// itself, with the unmarked one sent to the Recycle Bin, so a mark drawn in
+/// the wrong place costs little either way.
 /// </summary>
 public sealed class PictureViewer : Window
 {
@@ -696,6 +696,7 @@ public sealed class PictureViewer : Window
             return;
 
         _markup = true;
+        _askedToLeave = false;
         Fit();
         _viewTools.Visibility = Visibility.Collapsed;
         _markTools.Visibility = Visibility.Visible;
@@ -704,6 +705,28 @@ public sealed class PictureViewer : Window
         _hint.Text = "Drag to draw   ·   Ctrl+Z  undo   ·   Esc  leave without saving   ·   SAVE marks this picture, SAVE COPY keeps it as it is";
         PickTool(_tool);
         PickColour(_colour);
+    }
+
+    /// <summary>The ✕ was pressed once with marks unsaved - see OnClosing.</summary>
+    private bool _askedToLeave;
+
+    /// <summary>
+    /// The ✕ with marks on the picture asks once first: Esc and CANCEL say
+    /// they leave without saving, but the ✕ dropped the marks with no word.
+    /// A second press goes. Not a dialog: it would be one more white window
+    /// over a game, and the note says all there is to say.
+    /// </summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (_markup && _marks.Children.Count > 0 && !_askedToLeave)
+        {
+            _askedToLeave = true;
+            e.Cancel = true;
+            Note("These marks aren't saved - SAVE keeps them, ✕ again leaves without them", warn: true);
+            return;
+        }
+
+        base.OnClosing(e);
     }
 
     private void EndMarkup()
@@ -980,10 +1003,12 @@ public sealed class PictureViewer : Window
                 {
                     var written = File.GetLastWriteTime(original);
                     string temp = original + ".marking";
-                    Write(marked, temp, original);
 
+                    // The write inside the try too: a full disk leaves a part
+                    // of a file behind, and no name a window would list it by.
                     try
                     {
+                        Write(marked, temp, original);
                         File.Replace(temp, original, unmarked);
                     }
                     catch
