@@ -31,6 +31,11 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.76.0", "2026-11-02",
+            "Setup: DeskMon offers to install PresentMon and PawnIO when they are missing, a yes or a no on the first start - for FPS and CPU temperature without typing commands",
+            "Versions: an INSTALL button when something is missing, for when you said no and changed your mind",
+            "Updated the libraries behind game logos and the Hardware window's memory details - SteamKit2 3.5 and System.Management 10.0.14",
+            "Runs on .NET 10 - .NET 8 stops getting security fixes on 10 November 2026, so install the .NET 10 Desktop Runtime if Windows asks"),
         new("1.75.1", "2026-11-02",
             "Fixes: DeskMon tells everyone when a new version is out - the check was only on for those who had filled in the release page"),
         new("1.75.0", "2026-11-02",

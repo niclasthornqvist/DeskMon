@@ -19,8 +19,13 @@ public static class Prerequisites
 {
     /// <param name="Name">The program, as you would search for it.</param>
     /// <param name="Effect">What doesn't work without it.</param>
-    /// <param name="Install">The winget command that installs it.</param>
-    public sealed record Missing(string Name, string Effect, string Install);
+    /// <param name="Package">Its id in winget - see ToolInstaller. Fixed here, never anything typed in, as DeskMon installs it as administrator.</param>
+    /// <param name="Gives">What it is for, for the offer to install it: said to someone who has never heard of it.</param>
+    public sealed record Missing(string Name, string Effect, string Package, string Gives)
+    {
+        /// <summary>The winget command that installs it.</summary>
+        public string Install => "winget install " + Package;
+    }
 
     /// <summary>
     /// What is missing, or an empty list. Touches the disk and the registry,
@@ -31,14 +36,14 @@ public static class Prerequisites
         var missing = new List<Missing>();
 
         if (!PawnIoInstalled())
-            missing.Add(new Missing("PawnIO", "CPU temperature shows n/a",
-                                    "winget install namazso.PawnIO"));
+            missing.Add(new Missing("PawnIO", "CPU temperature shows n/a", "namazso.PawnIO",
+                                    "CPU temperature. A small signed system driver."));
 
         // Only when FPS is wanted: with MeasureFps off, PresentMon not being
         // here is the expected state, not something to be told about.
         if (settings.MeasureFps && FpsMonitor.ResolvePresentMon(settings.PresentMonPath) is null)
-            missing.Add(new Missing("PresentMon", "FPS, LOW, WORST and LAT show n/a",
-                                    "winget install Intel.PresentMon.Console"));
+            missing.Add(new Missing("PresentMon", "FPS, LOW, WORST and LAT show n/a", "Intel.PresentMon.Console",
+                                    "FPS and 1% lows in your games. Made by Intel."));
 
         return missing;
     }

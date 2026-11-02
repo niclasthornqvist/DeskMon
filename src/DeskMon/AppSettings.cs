@@ -503,6 +503,13 @@ public sealed class AppSettings
     public string PreferredGpu { get; set; } = "auto";
 
     // --- Per-game notes ---
+    /// <summary>
+    /// The offer to install what is missing has had its answer - see
+    /// ToolsPrompt. A no is taken as a no, not asked again at every start; the
+    /// versions window still has the button. Set in settings.json only.
+    /// </summary>
+    public bool ToolsOffered { get; set; }
+
     /// <summary>Open the notes window by itself whenever a game is detected.</summary>
     public bool AutoOpenNotesWithGame { get; set; } = true;
     /// <summary>Keep notes above the game, so a borderless game doesn't bury them.</summary>
@@ -945,7 +952,7 @@ public sealed class AppSettings
         nameof(AlwaysOnTop), nameof(Locked),
         nameof(ShowFpsOverlay),   // flipped by its hotkey
         nameof(CollapsedSections), nameof(SectionOrder), nameof(ExpandedMetrics),
-        nameof(CollapsedSectionsInGame), nameof(UpdateAnnounced), nameof(SessionsGame),
+        nameof(CollapsedSectionsInGame), nameof(UpdateAnnounced), nameof(SessionsGame), nameof(ToolsOffered),
         nameof(NotesLeft), nameof(NotesTop), nameof(NotesWidth), nameof(NotesHeight), nameof(NotesListWidened), nameof(NotesListFolded),
         nameof(HardwareLeft), nameof(HardwareTop), nameof(HardwareWidth), nameof(HardwareHeight),
         nameof(VersionsLeft), nameof(VersionsTop), nameof(VersionsWidth), nameof(VersionsHeight),

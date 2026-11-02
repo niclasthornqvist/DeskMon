@@ -32,27 +32,31 @@ DeskMon is one file, `DeskMon.exe`, and there's no installer. Your data stays on
 
 ## Get started
 
-**1. Install what DeskMon needs.** Open PowerShell and run:
+**1. Install .NET 10.** DeskMon needs the .NET 10 Desktop Runtime to start. Open PowerShell and run the command below, or start DeskMon and Windows will offer the download.
 
 ```powershell
-winget install Microsoft.DotNet.DesktopRuntime.8
-winget install Intel.PresentMon.Console
-winget install namazso.PawnIO
+winget install Microsoft.DotNet.DesktopRuntime.10
 ```
 
-| Install | Needed for | Without it |
+| DeskMon version | .NET you need | Install command |
 |---|---|---|
-| .NET 8 Desktop Runtime | Running DeskMon | DeskMon won't start. Windows offers the download. |
-| Intel PresentMon | FPS and lows | Those rows show `n/a`. |
-| PawnIO | CPU temperature | That row shows `n/a`. |
+| 1.76.0 and newer | .NET 10 Desktop Runtime | `winget install Microsoft.DotNet.DesktopRuntime.10` |
+| 1.75.1 and older | .NET 8 Desktop Runtime | `winget install Microsoft.DotNet.DesktopRuntime.8` |
 
 **2. Download `DeskMon.exe`** from the [latest release](https://github.com/niclasthornqvist/DeskMon/releases/latest) and put it in a folder of its own.
 
 **3. Start it** and choose **Yes** when Windows asks for administrator rights. The widget appears on your desktop, with an icon in the notification area. If you can't see the icon, look under the `^` arrow on the taskbar.
 
-**4. Start with Windows (optional).** Open `CFG` on the widget, then **Widget**, and tick **Start with Windows**. DeskMon then starts at logon without asking for administrator rights each time.
+**4. Choose Install when DeskMon offers its tools.** It only asks about what's missing. If you choose **No thanks**, DeskMon still works and you can install them later from the Versions window.
 
-**5. Play a game.** DeskMon notices it on its own and starts measuring.
+| Tool | Needed for | Without it |
+|---|---|---|
+| Intel PresentMon | FPS and lows | Those rows show `n/a`. |
+| PawnIO | CPU temperature | That row shows `n/a`. |
+
+**5. Start with Windows (optional).** Open `CFG` on the widget, then **Widget**, and tick **Start with Windows**. DeskMon then starts at logon without asking for administrator rights each time.
+
+**6. Play a game.** DeskMon notices it on its own and starts measuring.
 
 ## Using DeskMon
 
@@ -107,7 +111,7 @@ Everything can be changed in the settings window, and most changes apply at once
 - fetch game art from the Steam store, which sends the game's name;
 - ping a server, if you've set one.
 
-**How do I update?** DeskMon tells you when a new version is out but never installs anything by itself. Exit DeskMon, download the new `DeskMon.exe` and replace the old one. If you don't want the check, turn off **Check for updates** in `CFG`, under **Alerts and updates**.
+**How do I update?** DeskMon tells you when a new version is out but never installs anything by itself. Exit DeskMon, download the new `DeskMon.exe` and replace the old one. If you're updating from 1.75.1 or older, install .NET 10 first, or the new version won't start. If you don't want the check, turn off **Check for updates** in `CFG`, under **Alerts and updates**.
 
 **Where is my data?** In `%APPDATA%\DeskMon`. Game art is cached in `%LOCALAPPDATA%\DeskMon`.
 

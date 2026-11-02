@@ -833,8 +833,43 @@ public partial class MainWindow : Window
         //
         // Checked once at startup: installing either program means restarting
         // DeskMon anyway for it to be picked up, so a stale answer can't linger.
-        _missingNote = Prerequisites.Describe(await Task.Run(() => Prerequisites.Check(_settings)));
+        var missing = await Task.Run(() => Prerequisites.Check(_settings));
+        _missingNote = Prerequisites.Describe(missing);
         UpdateTooltip();
+
+        if (!_settings.ToolsOffered)
+            OfferTools(missing);
+    }
+
+    private ToolsPrompt? _toolsPrompt;
+
+    /// <summary>
+    /// Offers to install what is missing - at the first start, and from the
+    /// versions window. Nothing is shown with nothing missing, and a second
+    /// asking brings the one that is open forward rather than opening another,
+    /// which could then run winget twice at once.
+    /// </summary>
+    private void OfferTools(IReadOnlyList<Prerequisites.Missing> missing)
+    {
+        if (_toolsPrompt is not null)
+        {
+            _toolsPrompt.Activate();
+            return;
+        }
+        if (missing.Count == 0)
+            return;
+
+        var prompt = new ToolsPrompt(_theme, _settings, missing,
+            canRestart: () => !_inGame,   // restarting would cut the game's session short
+            restart: RestartForSettings,
+            answered: () =>
+            {
+                _settings.ToolsOffered = true;
+                _settings.Save();
+            });
+        prompt.Closed += (_, _) => _toolsPrompt = null;
+        _toolsPrompt = prompt;
+        prompt.Show();
     }
 
     /// <summary>
@@ -3965,7 +4000,11 @@ public partial class MainWindow : Window
     /// </summary>
     private void ShowVersions()
     {
-        _versions ??= Track(new VersionsWindow(_settings, _theme));
+        if (_versions is null)
+        {
+            _versions = Track(new VersionsWindow(_settings, _theme));
+            _versions.InstallRequested += OfferTools;
+        }
         _versions.ShowAndFocus();
     }
 

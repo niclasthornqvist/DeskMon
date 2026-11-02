@@ -513,12 +513,32 @@ public partial class VersionsWindow : PanelWindow
                 Margin = new Thickness(0, 0, 0, 6),
             });
         }
+
+        // For a "no thanks" at the first start that was thought better of, or
+        // a tool that went missing since. The offer itself stays the one place
+        // that says what will be installed.
+        if (Requirements.Children.Count > 0)
+        {
+            var install = new Button
+            {
+                Style = (Style)FindResource("AccentButton"),
+                Content = "INSTALL",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(12, 3, 12, 3),
+                Margin = new Thickness(0, 0, 0, 8),
+            };
+            install.Click += (_, _) => InstallRequested?.Invoke(missing);
+            Requirements.Children.Add(install);
+        }
     }
+
+    /// <summary>INSTALL was pressed, with what is missing.</summary>
+    public event Action<IReadOnlyList<Prerequisites.Missing>>? InstallRequested;
 
     /// <summary>
     /// The cards along the top - RUNNING, UPDATE, then one per thing DeskMon
     /// needs - drawn like the session history's (see StatCard). They were two
-    /// lines of small text, "Needs .NET 8 ✓ PawnIO ✓ …" and "Update …", which
+    /// lines of small text, "Needs .NET 10 ✓ PawnIO ✓ …" and "Update …", which
     /// read as fine print. Built again whole when either half changes: five
     /// cards, nothing worth keeping between.
     /// </summary>
@@ -531,7 +551,7 @@ public partial class VersionsWindow : PanelWindow
         Stats.Children.Add(UpdateCard());
 
         // The runtime is always there: this window could not be on screen without it.
-        Stats.Children.Add(RequirementCard(".NET 8", Status.Installed,
+        Stats.Children.Add(RequirementCard(".NET 10", Status.Installed,
                                            ".NET 8 Desktop Runtime\nNeeded to run DeskMon at all."));
         Stats.Children.Add(RequirementCard("PAWNIO", StatusOf("PawnIO"),
                                            "PawnIO\nNeeded for the CPU temperature."));
