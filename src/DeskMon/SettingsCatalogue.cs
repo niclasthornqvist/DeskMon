@@ -107,6 +107,9 @@ public static class SettingsCatalogue
         /// <summary>A path to an .exe, with a Browse button that opens the file dialog.</summary>
         Program,
 
+        /// <summary>A dropdown of servers by place, with a box for any other address.</summary>
+        PingServer,
+
         /// <summary>Program names as removable tags, added from what is running.</summary>
         ProgramList,
 
@@ -209,7 +212,7 @@ public static class SettingsCatalogue
             new Setting("GameLayout", "Separate layout for games", "Sections folded in a game are remembered apart from the desktop's."),
             new Setting("GameStartCheck", "Check what runs beside a game", "After 20 s, warn about a heavy browser, Windows Update or a virus scan."),
             new Setting("AskNoteAfterGame", "Ask for a note when a game quits", "A small card by the widget; the note goes at the end of the game's notes."),
-            new Setting("PingHost", "Ping server", "Pinged every 2 s in games for the PING row. Empty pings nothing."),
+            new Setting("PingHost", "Ping server", "Timed every 2 s in games for the PING row. Pick where you play, or Custom for a game server's own address.", Kind: EditorKind.PingServer),
             new Setting("NotGames", "Never treat as a game", "Fullscreen browsers and video players, for example.", Wide: true, Kind: EditorKind.ProgramList),
             new Setting("AlwaysGames", "Always treat as a game", "Games played in a window, which aren't noticed otherwise.", Wide: true, Kind: EditorKind.ProgramList)),
             // PresentMonPath is left out on purpose: settings.json only. The

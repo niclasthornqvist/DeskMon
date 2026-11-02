@@ -43,9 +43,19 @@ public static class NetworkCheck
             using var ping = new Ping();
             for (int i = 0; i < Count; i++)
             {
-                var reply = await ping.SendPingAsync(host, TimeoutMs).ConfigureAwait(false);
-                if (reply.Status == IPStatus.Success)
-                    times.Add(reply.RoundtripTime);
+                long? time;
+                if (ConnectionsOnly(host))
+                {
+                    time = await ConnectionTimeAsync(host, TimeoutMs).ConfigureAwait(false);
+                }
+                else
+                {
+                    var reply = await ping.SendPingAsync(host, TimeoutMs).ConfigureAwait(false);
+                    time = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
+                }
+
+                if (time is long ms)
+                    times.Add(ms);
                 else
                     lost++;
 
@@ -92,6 +102,58 @@ public static class NetworkCheck
         ("London", "ec2.eu-west-2.amazonaws.com"),
         ("US East", "ec2.us-east-1.amazonaws.com"),
     };
+
+    /// <summary>
+    /// The servers offered for PingHost, by the place people know them by.
+    /// Amazon's for the same reason as <see cref="Regions"/>: a fixed place,
+    /// where 1.1.1.1 answers from whichever site is nearest, and where many
+    /// games host. They aren't a game's own server, which is what Custom is for.
+    /// </summary>
+    public static readonly (string Name, string Host)[] Servers =
+    {
+        ("Sweden (Stockholm)", "ec2.eu-north-1.amazonaws.com"),
+        ("Europe (Frankfurt)", "ec2.eu-central-1.amazonaws.com"),
+        ("Europe (Ireland)", "ec2.eu-west-1.amazonaws.com"),
+        ("UK (London)", "ec2.eu-west-2.amazonaws.com"),
+        ("US East", "ec2.us-east-1.amazonaws.com"),
+        ("US West", "ec2.us-west-2.amazonaws.com"),
+        ("Asia (Singapore)", "ec2.ap-southeast-1.amazonaws.com"),
+        ("Asia (Tokyo)", "ec2.ap-northeast-1.amazonaws.com"),
+        ("Australia (Sydney)", "ec2.ap-southeast-2.amazonaws.com"),
+        ("South America", "ec2.sa-east-1.amazonaws.com"),
+    };
+
+    /// <summary>One of <see cref="Servers"/>: none of them answers a ping, so they are timed by <see cref="ConnectionTimeAsync"/>.</summary>
+    public static bool ConnectionsOnly(string host)
+        => Servers.Any(server => string.Equals(server.Host, host.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// One trip to the server, as the opening of a connection - see
+    /// <see cref="RegionsAsync"/> for why that reads like a ping. Null for no
+    /// answer in time, which counts as a lost ping. A name that won't resolve
+    /// throws, as a ping does: that is no network, not a lossy line. Closed
+    /// again at once, as this is what the PING row sends every two seconds.
+    /// </summary>
+    public static async Task<long?> ConnectionTimeAsync(string host, int timeoutMs)
+    {
+        var addresses = await Dns.GetHostAddressesAsync(host.Trim()).ConfigureAwait(false);
+        var address = addresses.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork) ?? addresses.FirstOrDefault();
+        if (address is null)
+            return null;
+
+        using var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        using var timeout = new CancellationTokenSource(timeoutMs);
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(address, 443), timeout.Token).ConfigureAwait(false);
+            return clock.ElapsedMilliseconds;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or SocketException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Three connections each: the quickest is the trip itself, the others had a queue in the way.</summary>
     private const int RegionTries = 3;

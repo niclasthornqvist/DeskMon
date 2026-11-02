@@ -13,6 +13,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using DeskMon.Hardware;
 using DeskMon.Metrics;
 using DeskMon.Ui;
 
@@ -256,6 +257,7 @@ public partial class SettingsWindow : PanelWindow
             SettingsCatalogue.EditorKind.Folder => PathBox(setting, property, folder: true),
             SettingsCatalogue.EditorKind.Program => PathBox(setting, property, folder: false),
             SettingsCatalogue.EditorKind.ProgramList => ProgramTags(setting, property),
+            SettingsCatalogue.EditorKind.PingServer => PingServer(setting, property),
 
             _ => setting.Choices is { } choices
                 ? Choice(setting, property, choices)
@@ -1333,6 +1335,62 @@ public partial class SettingsWindow : PanelWindow
         };
 
         return combo;
+    }
+
+    /// <summary>
+    /// Where to ping, by place: an address like ec2.eu-north-1.amazonaws.com
+    /// says nothing to someone who wants "Sweden", and they would have no way
+    /// to find it. What is stored stays the address, so one typed by hand into
+    /// settings.json, or kept from before, simply shows as Custom.
+    /// </summary>
+    private FrameworkElement PingServer(SettingsCatalogue.Setting setting, PropertyInfo property)
+    {
+        string current = (property.GetValue(_settings) as string ?? string.Empty).Trim();
+
+        var combo = new ComboBox
+        {
+            Style = (Style)FindResource("DarkCombo"),
+            Height = 24,
+            Foreground = _theme.NotesText,
+        };
+        combo.Items.Add(new ComboBoxItem { Content = "Off", Tag = string.Empty });
+        combo.Items.Add(new ComboBoxItem { Content = "Nearest", Tag = NetworkCheck.DefaultHost,
+                                           ToolTip = "Your line to the internet in general, not any one place" });
+        foreach (var (name, host) in NetworkCheck.Servers)
+            combo.Items.Add(new ComboBoxItem { Content = name, Tag = host });
+        var custom = new ComboBoxItem { Content = "Custom" };   // no Tag: the box says where
+        combo.Items.Add(custom);
+
+        var known = combo.Items.Cast<ComboBoxItem>()
+                         .FirstOrDefault(item => string.Equals(item.Tag as string, current, StringComparison.OrdinalIgnoreCase));
+        combo.SelectedItem = known ?? custom;
+
+        var box = NewBox(known is null ? current : string.Empty, "A game server's address. It has to answer pings.");
+        box.Margin = new Thickness(0, 4, 0, 0);
+        box.Visibility = known is null ? Visibility.Visible : Visibility.Collapsed;
+        box.TextChanged += (_, _) =>
+        {
+            if (combo.SelectedItem == custom)
+                Commit(setting, property, box.Text.Trim());
+        };
+
+        combo.SelectionChanged += (_, _) =>
+        {
+            bool typing = combo.SelectedItem == custom;
+            box.Visibility = typing ? Visibility.Visible : Visibility.Collapsed;
+
+            // Choosing Custom changes nothing until there is an address: an
+            // empty box isn't a wish to stop pinging. One already in the box,
+            // from before a region was tried, is used - the box would say it
+            // was, with DeskMon still pinging the region.
+            string typed = box.Text.Trim();
+            if (!typing && combo.SelectedItem is ComboBoxItem { Tag: string host })
+                Commit(setting, property, host);
+            else if (typing && typed.Length > 0)
+                Commit(setting, property, typed);
+        };
+
+        return new StackPanel { Children = { combo, box } };
     }
 
     /// <summary>A choice as the dropdown shows it: "Vertical", "Auto" - and the card makers as they write themselves.</summary>

@@ -209,10 +209,13 @@ public sealed class AppSettings
 
     /// <summary>
     /// A server to ping while a game runs, for the NETWORK section's PING row -
-    /// a game server's address, or 1.1.1.1 for the internet in general. Empty
-    /// pings nothing, and the row reads n/a.
+    /// one of NetworkCheck.Servers, a game server's address, or 1.1.1.1 for the
+    /// internet in general. Empty pings nothing, and the row reads n/a.
+    /// Nearest to begin with, so the row and the session's lag figures work
+    /// without a visit to Settings. A blank in settings.json stays blank, unlike
+    /// <see cref="UpdateRepository"/>: here it is what Off saves.
     /// </summary>
-    public string PingHost { get; set; } = string.Empty;
+    public string PingHost { get; set; } = Hardware.NetworkCheck.DefaultHost;
 
     /// <summary>
     /// Whether the widget keeps a second layout for games: which sections are

@@ -31,6 +31,10 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.77.0", "2026-11-02",
+            "Settings: pick your ping server by place - Sweden, Europe, US, Asia and more, Nearest for your line in general, or Custom for a game server's own address",
+            "Settings: new installs start on Nearest, so the PING row works straight away - turn it off with Off",
+            "Hardware: the ping test works with the new servers, which are timed by opening a connection as they don't answer pings"),
         new("1.76.0", "2026-11-02",
             "Setup: DeskMon offers to install PresentMon and PawnIO when they are missing, a yes or a no on the first start - for FPS and CPU temperature without typing commands",
             "Versions: an INSTALL button when something is missing, for when you said no and changed your mind",

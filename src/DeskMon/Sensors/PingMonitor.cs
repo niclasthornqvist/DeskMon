@@ -2,6 +2,7 @@ using System;
 using System.Net.NetworkInformation;
 using System.Threading;
 using System.Threading.Tasks;
+using DeskMon.Hardware;
 
 namespace DeskMon.Sensors;
 
@@ -69,11 +70,23 @@ internal sealed class PingMonitor : IDisposable
         var step = Activity.Begin("ping to " + host);
         try
         {
-            var reply = await _ping.SendPingAsync(host, TimeoutMs);
+            // The servers offered by region ignore pings, and every one would
+            // read as lost - see NetworkCheck.Servers.
+            double? rtt;
+            if (NetworkCheck.ConnectionsOnly(host))
+            {
+                rtt = await NetworkCheck.ConnectionTimeAsync(host, TimeoutMs);
+            }
+            else
+            {
+                var reply = await _ping.SendPingAsync(host, TimeoutMs);
+                rtt = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
+            }
+
             if (host == _host)
             {
-                Latest = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
-                Count(reply.Status == IPStatus.Success ? reply.RoundtripTime : null);
+                Latest = rtt;
+                Count(rtt);
             }
         }
         catch

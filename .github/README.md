@@ -22,7 +22,7 @@ DeskMon is one file, `DeskMon.exe`, and there's no installer. Your data stays on
 | Part | What it does |
 |---|---|
 | **Widget** | Live CPU, RAM, swap, temperatures, disk and network, each with a bar and its peak. Fold what you don't need, and give games their own layout. |
-| **While you play** | FPS, 1% lows, GPU load, VRAM and playtime, plus an optional large FPS counter over the game. Ping too, if you choose a server to ping. |
+| **While you play** | FPS, 1% lows, GPU load, VRAM and playtime, plus an optional large FPS counter over the game. Ping too, to the nearest server, a region you pick, or a game server's own address. |
 | **Sessions** | A log of every session, with a score out of 100, a minute-by-minute timeline, what held the frame rate back, and what else was busy during a dip. |
 | **Notes** | Notes for each game, with formatting, checklists, links and in-game screenshots. |
 | **Pictures** | Browse your screenshots, star favourites, and mark them up with arrows, circles, boxes, a pen and text. |
@@ -109,7 +109,7 @@ Everything can be changed in the settings window, and most changes apply at once
 - check GitHub for a new DeskMon version once a day;
 - check for newer drivers and BIOS versions;
 - fetch game art from the Steam store, which sends the game's name;
-- ping a server, if you've set one.
+- ping a server while a game runs. That's Cloudflare's 1.1.1.1 unless you pick another, and you can turn it off in Settings.
 
 **How do I update?** DeskMon tells you when a new version is out but never installs anything by itself. Exit DeskMon, download the new `DeskMon.exe` and replace the old one. If you're updating from 1.75.1 or older, install .NET 10 first, or the new version won't start. If you don't want the check, turn off **Check for updates** in `CFG`, under **Alerts and updates**.
 
