@@ -159,8 +159,9 @@ internal readonly record struct PingTotals(long Sent, long Lost, double RttSum, 
     /// "ping 18 ms ±6 loss 0.4 %" for the log, or null with too few pings to
     /// say anything - under a minute's worth at one every 2 s.
     /// </summary>
-    public string? ToLogPart()
+    /// <param name="name">What was pinged: "ping" for the internet, "router" for the second monitor beside it.</param>
+    public string? ToLogPart(string name = "ping")
         => Sent < 30 || AverageMs is not double average
             ? null
-            : System.FormattableString.Invariant($"ping {average:0} ms ±{JitterMs ?? 0:0} loss {LossPercent:0.#} %");
+            : System.FormattableString.Invariant($"{name} {average:0} ms ±{JitterMs ?? 0:0} loss {LossPercent:0.#} %");
 }

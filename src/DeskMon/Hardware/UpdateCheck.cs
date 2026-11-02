@@ -25,7 +25,7 @@ namespace DeskMon.Hardware;
 public static class UpdateCheck
 {
     /// <summary>What to tell the user, and how up to date it is - which sets its colour.</summary>
-    /// <param name="Short">The word or two the hardware window shows at the right of its row ("Newest", "Update available"); the full text is for the note under it and Copy.</param>
+    /// <param name="Short">The word or two the hardware window shows at the right of its row ("Up to date", "Update available"); the full text is for the note under it and Copy. One wording for every row that has nothing to update: "Newest" beside "Up to date" read as two different answers.</param>
     public sealed record Verdict(string Text, Freshness Level, string? Short = null)
     {
         public string ShortText => Short ?? Text;
@@ -144,7 +144,7 @@ public static class UpdateCheck
                     // Only newer counts. A Studio or hotfix driver can be ahead of
                     // the newest Game Ready one, and is not something to "update" from.
                     if (newest <= have)
-                        return new Verdict("Newest driver from NVIDIA", Freshness.Current, "Newest");
+                        return new Verdict("Driver is up to date with NVIDIA", Freshness.Current, "Up to date");
 
                     string when = latest.Value.Released is { } date ? $" ({date:yyyy-MM-dd})" : string.Empty;
                     return new Verdict($"Newer driver available: {latest.Value.Version}{when}", Behind(installedDate), "Update available");
@@ -186,7 +186,7 @@ public static class UpdateCheck
                     && int.TryParse(latest.Value.Version, NumberStyles.None, CultureInfo.InvariantCulture, out int newest))
                 {
                     if (newest <= have)
-                        return new Verdict("Newest BIOS from ASUS", Freshness.Current, "Newest");
+                        return new Verdict("BIOS is up to date with ASUS", Freshness.Current, "Up to date");
 
                     string when = latest.Value.Released is { } date ? $" ({date:yyyy-MM-dd})" : string.Empty;
                     return new Verdict($"Newer BIOS available: {latest.Value.Version}{when}", Behind(installedDate), "Update available");
@@ -230,7 +230,7 @@ public static class UpdateCheck
                     && Version.TryParse(match.Groups["version"].Value, out var newest))
                 {
                     if (newest <= have)
-                        return new Verdict("Newest driver from AMD", Freshness.Current, "Newest");
+                        return new Verdict("Driver is up to date with AMD", Freshness.Current, "Up to date");
 
                     // "261018" is 2026-10-18.
                     string when = DateTime.TryParseExact(match.Groups["date"].Value, "yyMMdd", CultureInfo.InvariantCulture,
@@ -274,7 +274,7 @@ public static class UpdateCheck
                 && Version.TryParse(match.Groups["version"].Value, out var newest))
             {
                 if (newest <= have)
-                    return new Verdict("Newest chipset driver from AMD", Freshness.Current, "Newest");
+                    return new Verdict("Chipset driver is up to date with AMD", Freshness.Current, "Up to date");
 
                 // The page's "Release Date 2026-10-21" sits just before the
                 // download link; looked for there rather than anywhere on the
@@ -348,9 +348,13 @@ public static class UpdateCheck
     /// <summary>How long a Windows Update answer is reused - see WindowsAsync.</summary>
     private static readonly TimeSpan WindowsKept = TimeSpan.FromMinutes(5);
 
+    /// <summary>How old Windows' own search may be and still be used - see SearchedLately.</summary>
+    private static readonly TimeSpan WindowsSearchTrusted = TimeSpan.FromDays(2);
+
     private static readonly object SearchLock = new();
     private static Task<(System.Collections.Generic.List<string> Waiting, bool Restart)>? _search;
     private static DateTime _searchAt;
+    private static bool _searchOnline;
 
     /// <summary>
     /// Whether Windows has updates waiting, asked of Windows Update itself
@@ -358,7 +362,13 @@ public static class UpdateCheck
     /// channel and Insider build, where comparing a build number with
     /// Microsoft's release list would call an Insider build unknown.
     /// </summary>
-    public static async Task<Verdict> WindowsAsync()
+    /// <param name="online">
+    /// Ask Microsoft now, past the kept answer and Windows' own last search -
+    /// the point of pressing Refresh all, which would otherwise hear the same
+    /// thing again. A click while such a search runs waits on that one: they
+    /// can't be cancelled, so repeated clicks must not stack them up.
+    /// </param>
+    public static async Task<Verdict> WindowsAsync(bool online = false)
     {
         // One search shared by every opening of the window: one still running
         // is waited on again rather than started twice, and an answer is kept
@@ -369,13 +379,15 @@ public static class UpdateCheck
         lock (SearchLock)
         {
             if (_search is null
-                || (_search.IsCompleted && (_search.IsFaulted || DateTime.UtcNow - _searchAt > WindowsKept)))
+                || (_search.IsCompleted && (_search.IsFaulted || DateTime.UtcNow - _searchAt > WindowsKept))
+                || (online && (_search.IsCompleted || !_searchOnline)))
             {
                 // A thread of its own: the search can run for minutes, and
                 // the pool's threads are the ones the widget's readings use.
-                _search = Task.Factory.StartNew(SearchWindowsUpdate, CancellationToken.None,
+                _search = Task.Factory.StartNew(() => SearchWindowsUpdate(online), CancellationToken.None,
                                                 TaskCreationOptions.LongRunning, TaskScheduler.Default);
                 _searchAt = DateTime.UtcNow;
+                _searchOnline = online;
             }
 
             search = _search;
@@ -414,7 +426,7 @@ public static class UpdateCheck
     /// above already covers the one that matters, and Windows offers older
     /// driver versions than the makers do.
     /// </summary>
-    private static (System.Collections.Generic.List<string> Waiting, bool Restart) SearchWindowsUpdate()
+    private static (System.Collections.Generic.List<string> Waiting, bool Restart) SearchWindowsUpdate(bool online)
     {
         var waiting = new System.Collections.Generic.List<string>();
 
@@ -429,6 +441,11 @@ public static class UpdateCheck
         {
             dynamic updateSession = Keep(held, Activator.CreateInstance(session)!);
             dynamic searcher = Keep(held, updateSession.CreateUpdateSearcher());
+
+            // From what Windows found at its own last search when that is
+            // recent: a second, where going online took 5 to 15 s and left
+            // the row on "Checking…". It is also what Settings shows.
+            searcher.Online = online || !SearchedLately(held);
             dynamic result = Keep(held, searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'"));
             dynamic updates = Keep(held, result.Updates);
 
@@ -466,6 +483,29 @@ public static class UpdateCheck
                 }
                 catch { /* already released */ }
             }
+        }
+    }
+
+    /// <summary>
+    /// Whether Windows' own search is recent enough to go by. It searches about
+    /// once a day, but not with updates paused or on a PC just woken from
+    /// weeks off - there the local answer could say "up to date" from old
+    /// news, so a date that can't be read counts as not recent.
+    /// </summary>
+    private static bool SearchedLately(System.Collections.Generic.List<object> held)
+    {
+        try
+        {
+            if (Type.GetTypeFromProgID("Microsoft.Update.AutoUpdate") is not { } auto)
+                return false;
+
+            dynamic autoUpdate = Keep(held, Activator.CreateInstance(auto)!);
+            dynamic results = Keep(held, autoUpdate.Results);
+            return DateTime.UtcNow - (DateTime)results.LastSearchSuccessDate < WindowsSearchTrusted;   // in UTC
+        }
+        catch
+        {
+            return false;
         }
     }
 

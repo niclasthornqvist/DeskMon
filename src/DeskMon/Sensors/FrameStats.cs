@@ -74,6 +74,52 @@ public sealed class FrameStats
     private int _cleanSeconds;
     private bool _secondClean = true;
 
+    // --- Compiling shaders -----------------------------------------------------
+    //
+    // A game's first start can compile its shaders for minutes, and neither
+    // check above sees that. Its progress screen is often a smooth 60 fps, so
+    // ten clean seconds took it for play; or it is slow but runs past the three
+    // minutes, and all of it counted after all. What it does have is a busy CPU
+    // beside an idle GPU, which neither a menu nor a game in play has. So while
+    // the run hasn't settled, a second looking like that is loading however
+    // smooth, and stays off the three-minute clock - or the first calm second
+    // after a long compile would give up and count the whole compile as play.
+    // It ends when the work does, however long that took.
+    //
+    // CPU load alone wasn't enough. At 75% Stalker 2 settled after 96 s of a
+    // compile that ran about 280 s, on a 60 fps screen - the compile doesn't
+    // take every thread - and three minutes of it counted as play.
+    //
+    // The whole PC's load, not the game's own: a game's process can refuse to
+    // be read, and another program flat out only delays settling a little. A
+    // cap, so a game that really runs this way isn't held back for good.
+
+    /// <summary>The CPU this busy is compiling whatever the GPU is doing - a game in play rarely gets there on all of a PC's threads.</summary>
+    private const double CompileFlatOutPercent = 75;
+
+    /// <summary>The CPU this busy is compiling when the GPU is also under <see cref="CompileGpuPercent"/>.</summary>
+    private const double CompileCpuPercent = 40;
+
+    /// <summary>Under this the GPU is only drawing a progress screen, not a game.</summary>
+    private const double CompileGpuPercent = 50;
+
+    /// <summary>The most compiling that stays off the clock. Long enough for the worst first starts.</summary>
+    private const double CompileCapMs = 30 * 60_000;
+
+    /// <summary>Whether these loads look like a compile. With no GPU reading, only the flat-out check can say.</summary>
+    public static bool LooksLikeCompiling(double? cpuLoad, double? gpuLoad)
+        => cpuLoad >= CompileFlatOutPercent || (cpuLoad >= CompileCpuPercent && gpuLoad < CompileGpuPercent);
+
+    /// <summary>
+    /// The PC looks like it is compiling now. Static: set from the widget's
+    /// tick, which has the loads, and read on PresentMon's thread by whichever
+    /// run is waiting - only one game is measured at a time.
+    /// </summary>
+    public static volatile bool CompilingNow;
+
+    /// <summary>Held-back time spent compiling, kept off <see cref="GiveUpMs"/> - up to the cap.</summary>
+    private double _compilingMs;
+
     // --- A loading screen locked at a frame rate -----------------------------
     //
     // The Witcher 3 draws its loading screens at a steady 30 fps - frames of
@@ -226,7 +272,13 @@ public sealed class FrameStats
             return;
         }
 
-        if (_secondClean && !locked)
+        // Past the cap it stops counting as compiling, so a game that simply
+        // runs this hot can settle and give up as any other.
+        bool compiling = CompilingNow && _compilingMs < CompileCapMs;
+        if (compiling)
+            _compilingMs += _second.TotalMs;
+
+        if (_secondClean && !locked && !compiling)
         {
             _streak.Add(_second);
             _cleanSeconds++;
@@ -252,7 +304,7 @@ public sealed class FrameStats
             LoadingMs += _loading.TotalMs;
             Settle();
         }
-        else if (_loading.TotalMs + _streak.TotalMs >= GiveUpMs)
+        else if (_loading.TotalMs + _streak.TotalMs - _compilingMs >= GiveUpMs)
         {
             // Never settled: count it all rather than lose the session.
             Add(_loading);

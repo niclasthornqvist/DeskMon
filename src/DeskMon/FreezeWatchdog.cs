@@ -66,6 +66,14 @@ internal static class FreezeWatchdog
     private static volatile bool _pending;
 
     /// <summary>
+    /// The disks are working hard, as the widget saw it on its last tick - see
+    /// MainWindow.NoteDiskLoad. Volatile: set on the UI thread, read on the
+    /// watchdog's. Read from here rather than asked at the freeze, as asking
+    /// would itself wait on the disk.
+    /// </summary>
+    public static volatile bool DiskBusy;
+
+    /// <summary>
     /// Starts watching the given UI thread. A background thread rather than a
     /// timer: a timer callback goes through the thread pool, which a busy
     /// sensor read can hold up, and would then report freezes that weren't.
@@ -143,6 +151,17 @@ internal static class FreezeWatchdog
             // is over - and by then whatever was stuck has returned. This
             // reads only DeskMon's own list, so it is written at once.
             App.Log("freeze", $"The widget stopped answering. {Activity.Describe()} {Memory()}");
+
+            // A dump on a saturated disk adds a couple of hundred MB to the
+            // load behind the freeze, and says nothing the line above doesn't.
+            // During a game install one sat at 0 bytes for 15 minutes and more:
+            // its snapshot stayed alive with DeskMon's memory shared
+            // copy-on-write, and this thread, stuck in it, watched nothing.
+            if (DiskBusy)
+            {
+                App.Log("freeze", $"The widget hasn't answered for {silent / 1000} s. No dump - the disk is saturated.");
+                continue;
+            }
 
             if (dumps >= MaxDumps)
             {

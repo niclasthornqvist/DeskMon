@@ -134,7 +134,46 @@ public sealed class FpsMonitor : IDisposable
             return total / take;
         }
 
+        /// <summary>A present this soon after the last is half of a frame generation pair - see <see cref="Add"/>.</summary>
+        private const double GeneratedUnderMs = 1;
+
+        /// <summary>
+        /// The frame after it must be at least this long to make it a pair. A
+        /// menu at 1200 fps is all frames under 1 ms, and none of them is generated.
+        /// </summary>
+        private const double RenderedAtLeastMs = 4;
+
+        /// <summary>A present under <see cref="GeneratedUnderMs"/>, held until the next says what it was. 0 with none.</summary>
+        private double _heldMs;
+
+        /// <summary>
+        /// One present from PresentMon, counted as one rendered frame. DLSS
+        /// frame generation hands over its two frames together: captured in
+        /// Stalker 2, gaps of 0.2 ms and 16.5 ms in turn, with both marked
+        /// "Application", as FrameType needs Intel's provider. Taken as they
+        /// come that read as 120 fps with a jitter of 8 ms from pairs that are
+        /// one steady 60 fps frame, so each pair is added back into one - and
+        /// the FPS, lows, jitter and stutters all describe what was rendered.
+        /// </summary>
         public void Add(double frameTime)
+        {
+            if (_heldMs > 0)
+            {
+                double held = _heldMs;
+                _heldMs = 0;
+                if (frameTime >= RenderedAtLeastMs)
+                    frameTime += held;
+                else
+                    Record(held);
+            }
+
+            if (frameTime < GeneratedUnderMs)
+                _heldMs = frameTime;
+            else
+                Record(frameTime);
+        }
+
+        private void Record(double frameTime)
         {
             _frames[_next] = frameTime;
             _next = (_next + 1) % HistoryFrames;

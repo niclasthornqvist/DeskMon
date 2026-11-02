@@ -115,17 +115,18 @@ internal static class GameStartCheck
         return flagged.OrderByDescending(f => f.Weight).Take(MostShown).Select(f => f.Text).ToList();
     }
 
-    private sealed record Look(int Pid, string Name, long Ram, TimeSpan Cpu);
+    /// <param name="Io">Bytes read and written so far - everything through the file system, as Task Manager's I/O columns count it.</param>
+    internal sealed record Look(int Pid, string Name, long Ram, TimeSpan Cpu, long Io);
 
     /// <summary>
-    /// Every process's memory and CPU time so far, by process id - from one
+    /// Every process's memory, CPU time and I/O so far, by process id - from one
     /// NtQuerySystemInformation snapshot, the list Task Manager reads, rather
     /// than by opening each process. Opening them missed exactly the ones
     /// worth catching: Defender's engine is a protected process that refuses
     /// its CPU time even to an administrator, so a scan never showed. The
     /// snapshot has every process, and opens none of them.
     /// </summary>
-    private static Dictionary<int, Look> Sample(int gamePid)
+    internal static Dictionary<int, Look> Sample(int gamePid)
     {
         var looks = new Dictionary<int, Look>();
 
@@ -156,7 +157,8 @@ internal static class GameStartCheck
                         // 100-ns units, user and kernel time together, as Process.TotalProcessorTime has it.
                         var cpu = TimeSpan.FromTicks(Marshal.ReadInt64(entry, 40) + Marshal.ReadInt64(entry, 48));
                         long ram = (long)Marshal.ReadIntPtr(entry, 144);   // WorkingSetSize
-                        looks[pid] = new Look(pid, name, ram, cpu);
+                        long io = Marshal.ReadInt64(entry, 232) + Marshal.ReadInt64(entry, 240);   // Read- and WriteTransferCount
+                        looks[pid] = new Look(pid, name, ram, cpu, io);
                     }
 
                     if (next == 0)
@@ -190,18 +192,19 @@ internal static class GameStartCheck
     // SYSTEM_PROCESS_INFORMATION, as laid out in a 64-bit process - which
     // DeskMon always is (win-x64 in the project). The offsets used above:
     // 0 NextEntryOffset, 40 UserTime, 48 KernelTime, 56 ImageName,
-    // 80 UniqueProcessId, 144 WorkingSetSize.
+    // 80 UniqueProcessId, 144 WorkingSetSize, 232 ReadTransferCount,
+    // 240 WriteTransferCount.
     private const int SystemProcessInformation = 5;
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
 
     [DllImport("ntdll.dll")]
     private static extern int NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returnLength);
 
-    private static string Name(string processName)
+    internal static string Name(string processName)
         => Known.TryGetValue(processName, out string? known) ? known : processName;
 
     /// <summary>The folder a game was started from, so its own helpers can be told apart from the rest.</summary>
-    private static string? FolderOf(int pid)
+    internal static string? FolderOf(int pid)
     {
         try
         {

@@ -51,6 +51,16 @@
                         <TextBlock Text="COPY" />
                     </StackPanel>
                 </Button>
+
+                <!-- A turning arrow, as on the ping test's own button. -->
+                <Button Style="{StaticResource ToolButton}"
+                        ToolTip="Refresh all&#x0a;Reads everything again and asks online for new updates - Windows Update too, which can take a few seconds." Click="Refresh_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M8.46,0.6 V3 H6.06 M8.46,3 A4,4 0 1 0 8.94,5.7" />
+                        <TextBlock Text="REFRESH ALL" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <!-- One row per fact. Values can be long (a full GPU name, a BIOS
@@ -168,26 +178,23 @@
                                                Foreground="{Binding DetailBrush}" />
                                 </StackPanel>
 
+                                <!-- Flush right, so every status ends on one edge
+                                     whatever its length - "Measuring…" coming and
+                                     going can't move the others. The same card
+                                     as the name's, so hovering either side of a
+                                     row tells the same story. -->
                                 <StackPanel Grid.Column="3" Orientation="Horizontal"
+                                            HorizontalAlignment="Right"
                                             VerticalAlignment="Center" Margin="10,0,0,0"
                                             Visibility="{Binding StatusVisibility}"
                                             Background="Transparent"
-                                            ToolTip="{Binding StatusFull}">
-                                    <Grid Width="13" Height="13" Margin="0,0,5,0" VerticalAlignment="Center">
-                                        <Ellipse Fill="{Binding StatusTint}" />
-                                        <Path Data="{Binding StatusMark}" Stroke="{Binding StatusBrush}"
-                                              Width="12" Height="12" StrokeThickness="1.5"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Grid>
-                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusTextBrush}"
-                                               VerticalAlignment="Center" />
-
+                                            ToolTip="{Binding ToolTip}">
                                     <!-- Ping again, on the ping test's row once it
-                                         has an answer, right after the result it
-                                         repeats. -->
+                                         has an answer. Before the result rather
+                                         than after it: at the end, it would push
+                                         that one result off the shared edge. -->
                                     <Button Style="{StaticResource PanelButton}"
-                                            Width="18" Height="16" Margin="4,0,0,0"
+                                            Width="18" Height="16" Margin="0,0,6,0"
                                             VerticalAlignment="Center"
                                             Visibility="{Binding RetryVisibility}"
                                             ToolTip="Ping again&#x0a;Measures the ping and the regions again, without reading the rest of the window."
@@ -197,6 +204,16 @@
                                               StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                                               Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                     </Button>
+
+                                    <Grid Width="13" Height="13" Margin="0,0,5,0" VerticalAlignment="Center">
+                                        <Ellipse Fill="{Binding StatusTint}" />
+                                        <Path Data="{Binding StatusMark}" Stroke="{Binding StatusBrush}"
+                                              Width="12" Height="12" StrokeThickness="1.5"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusTextBrush}"
+                                               VerticalAlignment="Center" />
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -247,7 +264,7 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal" Margin="0,2,10,2"
-                                                    Background="Transparent" ToolTip="{Binding Full}">
+                                                    Background="Transparent" ToolTip="{Binding Tip}">
                                             <Grid Width="13" Height="13" Margin="0,0,6,0" VerticalAlignment="Center">
                                                 <Ellipse Fill="{Binding MarkTint}" />
                                                 <Path Data="{Binding Mark}" Stroke="{Binding MarkBrush}"

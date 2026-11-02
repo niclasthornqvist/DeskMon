@@ -28,8 +28,18 @@ public sealed class SessionTimeline
     /// <param name="Loading">Taken while FrameStats was still leaving the loading screen out - shaded on the chart.</param>
     /// <param name="Ping">The average ping over the point, ms; null with no ping host or no answer.</param>
     /// <param name="Limit">What held the frame rate back for most of the point - see Bottleneck.</param>
+    /// <param name="Router">The average ping to the router over the point, ms - beside Ping, it says whether lag was at home. See LagWatch.</param>
+    /// <param name="Busy">What was busiest beside the game - see BusyWatch. Null when nothing stood out.</param>
+    /// <param name="CpuLoad">The average CPU load over the point, %. Kept so a shader compile's loads can be read afterwards - temperatures only hinted at them. See FrameStats.</param>
+    /// <param name="GpuLoad">The same for the GPU.</param>
     public sealed record Point(TimeSpan At, double? Fps, double? Low, double? CpuTemp, double? GpuTemp, bool Loading,
-                               double? Ping = null, Bottleneck.Kind? Limit = null);
+                               double? Ping = null, Bottleneck.Kind? Limit = null, double? Router = null, string? Busy = null,
+                               double? CpuLoad = null, double? GpuLoad = null);
+
+    /// <summary>The session's worst moment - see <see cref="WorstDip"/>.</summary>
+    /// <param name="Usual">The frame rate it fell from: the session's median.</param>
+    /// <param name="Busy">What was busiest beside the game then; null when nothing stood out.</param>
+    public sealed record Dip(TimeSpan At, double Fps, double Usual, string? Busy);
 
     public DateTime Start { get; }
 
@@ -51,14 +61,16 @@ public sealed class SessionTimeline
     // dip that wasn't there.
 
     private DateTime _bucketStart;
-    private double _fps, _low, _cpu, _gpu, _ping;
-    private int _fpsCount, _lowCount, _cpuCount, _gpuCount, _pingCount;
+    private double _fps, _low, _cpu, _gpu, _ping, _router, _cpuLoad, _gpuLoad;
+    private int _fpsCount, _lowCount, _cpuCount, _gpuCount, _pingCount, _routerCount, _cpuLoadCount, _gpuLoadCount;
     private readonly Dictionary<Bottleneck.Kind, int> _limits = new();
     private bool _loading;
+    private string? _busy;
 
     /// <summary>One tick's readings; a point is written each time <see cref="Every"/> has passed.</summary>
     public void Sample(DateTime now, double? fps, double? low, double? cpuTemp, double? gpuTemp, bool loading,
-                       double? ping = null, Bottleneck.Kind? limit = null)
+                       double? ping = null, Bottleneck.Kind? limit = null, double? router = null, string? busy = null,
+                       double? cpuLoad = null, double? gpuLoad = null)
     {
         if (_bucketStart == default)
             _bucketStart = now;
@@ -68,8 +80,15 @@ public sealed class SessionTimeline
         if (cpuTemp is double c) { _cpu += c; _cpuCount++; }
         if (gpuTemp is double g) { _gpu += g; _gpuCount++; }
         if (ping is double p) { _ping += p; _pingCount++; }
+        if (router is double r) { _router += r; _routerCount++; }
+        if (cpuLoad is double cl) { _cpuLoad += cl; _cpuLoadCount++; }
+        if (gpuLoad is double gl) { _gpuLoad += gl; _gpuLoadCount++; }
         if (limit is Bottleneck.Kind k) _limits[k] = _limits.GetValueOrDefault(k) + 1;
         _loading |= loading && fps is not null;
+
+        // Not averaged: it is a name, and BusyWatch only has a new one every
+        // 10 s anyway. The latest, so a point can't blame what had already stopped.
+        _busy = busy;
 
         // In UTC: when the clocks go back, local time runs backwards for a
         // moment and no point would be written for the hour that followed.
@@ -85,13 +104,70 @@ public sealed class SessionTimeline
                               _loading,
                               _pingCount > 0 ? _ping / _pingCount : null,
                               // The verdict most ticks of the point had.
-                              _limits.Count > 0 ? _limits.MaxBy(l => l.Value).Key : null));
+                              _limits.Count > 0 ? _limits.MaxBy(l => l.Value).Key : null,
+                              _routerCount > 0 ? _router / _routerCount : null,
+                              _busy,
+                              _cpuLoadCount > 0 ? _cpuLoad / _cpuLoadCount : null,
+                              _gpuLoadCount > 0 ? _gpuLoad / _gpuLoadCount : null));
 
         _bucketStart = now;
-        _fps = _low = _cpu = _gpu = _ping = 0;
-        _fpsCount = _lowCount = _cpuCount = _gpuCount = _pingCount = 0;
+        _fps = _low = _cpu = _gpu = _ping = _router = _cpuLoad = _gpuLoad = 0;
+        _fpsCount = _lowCount = _cpuCount = _gpuCount = _pingCount = _routerCount = _cpuLoadCount = _gpuLoadCount = 0;
         _limits.Clear();
         _loading = false;
+        _busy = null;
+    }
+
+    // --- The worst dip -------------------------------------------------------------
+
+    /// <summary>Under this share of the usual frame rate it is a dip; above it, a session just varying.</summary>
+    private const double DipBelow = 0.75;
+
+    /// <summary>About two minutes of play: on less, the "usual" is itself only a moment.</summary>
+    private const int DipNeedsPoints = 12;
+
+    /// <summary>
+    /// The lowest point of play, when it fell clearly below the session's
+    /// usual - or null, for a steady session. The median as the usual, not the
+    /// average, which the dips themselves pull down. Loading screens are left
+    /// out, as a dip there is what a loading screen does.
+    /// </summary>
+    public Dip? WorstDip()
+    {
+        int worst = -1;
+        var rates = new List<double>();
+        for (int i = 0; i < _points.Count; i++)
+        {
+            if (_points[i].Loading || _points[i].Fps is not double fps || fps <= 0)
+                continue;
+            rates.Add(fps);
+            if (worst < 0 || fps < _points[worst].Fps)
+                worst = i;
+        }
+
+        if (rates.Count < DipNeedsPoints)
+            return null;
+
+        rates.Sort();
+        double usual = rates[rates.Count / 2];
+        var dip = _points[worst];
+        if (dip.Fps is not double lowest || lowest > usual * DipBelow)
+            return null;
+
+        // The point after it as well: a look reports the ten seconds before it,
+        // so what caused a dip can land in the next point.
+        string? busy = dip.Busy ?? (worst + 1 < _points.Count ? _points[worst + 1].Busy : null);
+        return new Dip(dip.At, lowest, usual, busy);
+    }
+
+    /// <summary>"dip 21:40 62 fps of 120: Defender scan 35% CPU" for the log, or null without a dip.</summary>
+    public string? DipLogPart()
+    {
+        if (WorstDip() is not { } dip)
+            return null;
+
+        string part = FormattableString.Invariant($"dip {Start + dip.At:HH:mm} {dip.Fps:0} fps of {dip.Usual:0}");
+        return dip.Busy is { } busy ? $"{part}: {busy}" : part;
     }
 
     // --- File ----------------------------------------------------------------------
@@ -108,7 +184,7 @@ public sealed class SessionTimeline
     public static string FolderFor(string logPath) => Path.ChangeExtension(logPath, ".timeline");
 
     /// <summary>
-    /// The points as the file holds them: a heading, then "seconds,fps,low,cpu,gpu,loading"
+    /// The points as the file holds them: a heading, then the columns it names
     /// per line, empty where nothing was read. Static, from a copy of the
     /// points, so AtomicFile's writer can make it while the tick adds more.
     /// </summary>
@@ -117,13 +193,14 @@ public sealed class SessionTimeline
         var inv = CultureInfo.InvariantCulture;
         var text = new StringBuilder();
         text.AppendLine($"{StartedPrefix}{start.ToString("yyyy-MM-dd HH:mm:ss", inv)} · a point every {Every.TotalSeconds:0} s");
-        text.AppendLine("# seconds,fps,1% low,cpu °C,gpu °C,loading,ping ms,limit");
+        text.AppendLine("# seconds,fps,1% low,cpu °C,gpu °C,loading,ping ms,limit,router ms,busy,cpu %,gpu %");
 
         static string Cell(double? value) => value?.ToString("0.#", CultureInfo.InvariantCulture) ?? string.Empty;
         foreach (var p in points)
             text.AppendLine(string.Join(",", ((int)p.At.TotalSeconds).ToString(inv), Cell(p.Fps), Cell(p.Low),
                                         Cell(p.CpuTemp), Cell(p.GpuTemp), p.Loading ? "1" : "0",
-                                        Cell(p.Ping), p.Limit is Bottleneck.Kind k ? LimitLetter(k) : string.Empty));
+                                        Cell(p.Ping), p.Limit is Bottleneck.Kind k ? LimitLetter(k) : string.Empty,
+                                        Cell(p.Router), p.Busy ?? string.Empty, Cell(p.CpuLoad), Cell(p.GpuLoad)));
         return text.ToString();
     }
 
@@ -163,12 +240,16 @@ public sealed class SessionTimeline
 
                 static double? Read(string cell)
                     => double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : null;
-                // Ping and limit from 1.73's second build on; a file without
-                // them reads as before.
+                // Ping and limit from 1.73's second build on, router, busy and
+                // the loads from 1.75; a file without them reads as before.
                 points.Add(new Point(TimeSpan.FromSeconds(seconds), Read(cells[1]), Read(cells[2]),
                                      Read(cells[3]), Read(cells[4]), cells[5] == "1",
                                      cells.Length > 6 ? Read(cells[6]) : null,
-                                     cells.Length > 7 ? LimitFrom(cells[7]) : null));
+                                     cells.Length > 7 ? LimitFrom(cells[7]) : null,
+                                     cells.Length > 8 ? Read(cells[8]) : null,
+                                     cells.Length > 9 && cells[9].Length > 0 ? cells[9] : null,
+                                     cells.Length > 10 ? Read(cells[10]) : null,
+                                     cells.Length > 11 ? Read(cells[11]) : null));
             }
 
             return points.Count > 0 ? new SessionTimeline(exact, points) : null;

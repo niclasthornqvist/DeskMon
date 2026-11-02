@@ -307,9 +307,9 @@ public sealed class SensorHub : IDisposable
         }
 
         // Windows' own counters, like the two above - none of them touches the
-        // hardware library. The lists refresh every few seconds on their own.
-        using (Activity.Begin("program list for RAM and SWAP"))
-            _memoryUsers.Refresh(MemoryListsShown);
+        // hardware library. The lists refresh every few seconds on their own,
+        // and name their own step for the freeze log, as the read has its own thread.
+        _memoryUsers.Refresh(MemoryListsShown);
         snapshot.TopRamUsers = _memoryUsers.ByRam;
         snapshot.TopCommitUsers = _memoryUsers.ByCommit;
 

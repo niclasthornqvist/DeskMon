@@ -46,6 +46,14 @@ public partial class MainWindow : Window
     /// <summary>Round trips to PingHost, only while a game runs - see PingMonitor.</summary>
     private readonly PingMonitor _ping = new();
 
+    /// <summary>The same to the router, beside it - see LagWatch. Only with a PingHost, as alone it says nothing about lag.</summary>
+    private readonly PingMonitor _router = new();
+    private string? _routerHost;
+    private bool _routerAsked;
+
+    /// <summary>What is busiest beside the session's game - see BusyWatch.</summary>
+    private readonly BusyWatch _busyWatch = new();
+
     /// <summary>Readings that stay in the red, said once - see AlertWatcher.</summary>
     private AlertWatcher? _alerts;
 
@@ -173,6 +181,13 @@ public partial class MainWindow : Window
 
     /// <summary>The ping's counts when the session began, so it logs its own share - see PingTotals.</summary>
     private PingTotals _pingAtStart;
+    private PingTotals _routerAtStart;
+
+    /// <summary>Where the open session's lag came from - see LagWatch. Null with no session open.</summary>
+    private LagWatch? _lag;
+
+    /// <summary>The ping count LagWatch last heard about: a tick is not a ping, and the same one twice would read as two in a row.</summary>
+    private long _lagSeen;
 
     /// <summary>
     /// Sessions shorter than this are not written to the history. A game that
@@ -260,6 +275,22 @@ public partial class MainWindow : Window
     /// <summary>The young-object GC in OnTick: when it last ran, and how often.</summary>
     private DateTime _lastYoungCollect = DateTime.UtcNow;
     private static readonly TimeSpan YoungCollectEvery = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// When the disks count as busy - see NoteDiskLoad. Far above the few MB/s
+    /// of everyday use, and well below the 70-350 MB/s of a game installing.
+    /// </summary>
+    private const double DiskBusyMbPerSecond = 50;
+
+    /// <summary>
+    /// Busy for this long after the last high reading: an installer's load
+    /// comes in waves, and letting go in a lull would lose the memory just
+    /// before the next one.
+    /// </summary>
+    private static readonly TimeSpan DiskBusyHold = TimeSpan.FromSeconds(60);
+
+    private DateTime _diskBusyAt = DateTime.MinValue;
+    private bool _diskBusy;
     private bool _detailsBuilt; // expandable rows have had their lists filled in
     private bool _widthLocked;  // panel width pinned, so only height follows content
     private bool _restarting; // restarting to reload settings.json
@@ -862,6 +893,26 @@ public partial class MainWindow : Window
         // while nothing changes, so this can be said every tick.
         _ping.Run(_inGame ? _settings.PingHost : null);
 
+        // The router found each time a game starts: a laptop may be on another
+        // network than last time. Off this thread, as listing adapters is slow.
+        bool pinging = _inGame && !string.IsNullOrWhiteSpace(_settings.PingHost);
+        if (pinging && !_routerAsked)
+        {
+            _routerAsked = true;
+            FindRouter();
+        }
+        else if (!pinging)
+        {
+            _routerAsked = false;
+            _routerHost = null;
+        }
+        _router.Run(_routerHost);
+
+        // Before the early return below, so "vanish during a game" still logs
+        // what was busy. Only the session's own game: an overlay in front
+        // isn't the game to look beside.
+        _busyWatch.Run(_inGame && _gamePid == _sessionPid ? _sessionPid : 0);
+
         // Opt-in old behaviour: vanish completely during a game instead of
         // acting as an overlay.
         if (_settings.PauseWhenFullscreen && _inGame)
@@ -957,6 +1008,10 @@ public partial class MainWindow : Window
                     // SensorSnapshot.GameGpuLoad.
                     snapshot.GameGpuLoad = snapshot.GpuLoad;
                     snapshot.Ping = _ping.Latest;
+
+                    // So a first start's shader compile counts as loading -
+                    // see FrameStats' "Compiling shaders".
+                    FrameStats.CompilingNow = FrameStats.LooksLikeCompiling(snapshot.CpuLoad, snapshot.GpuLoad);
                 }
 
                 // The session over time, for the history's timeline. The frame
@@ -979,7 +1034,19 @@ public partial class MainWindow : Window
                     _bottleneck?.Add(now, limit);
 
                     _timeline.Sample(now, ours ? snapshot.Fps : null, ours ? snapshot.FpsOnePercentLow : null,
-                                     snapshot.CpuTemp, snapshot.GpuTemp, ours && !settled, _ping.Latest, limit);
+                                     snapshot.CpuTemp, snapshot.GpuTemp, ours && !settled, _ping.Latest, limit,
+                                     _router.Latest, _busyWatch.Latest, snapshot.CpuLoad, snapshot.GpuLoad);
+
+                    // Each new ping once - see _lagSeen. Only with a router
+                    // answering at all: with none found there is nothing to
+                    // compare, and every lost ping would read as the router's.
+                    long pingsSent = _ping.Totals.Sent;
+                    if (pingsSent != _lagSeen)
+                    {
+                        _lagSeen = pingsSent;
+                        if (ours && _router.Totals.Sent > _routerAtStart.Sent)
+                            _lag?.Add(_ping.Latest, _router.Latest);
+                    }
                 }
 
                 if (!_detailsBuilt)
@@ -1005,6 +1072,8 @@ public partial class MainWindow : Window
                 KeepResident(); // after it, so the floor is the warm set, not startup's
             }
 
+            bool diskBusy = NoteDiskLoad(snapshot);
+
             // A young-object GC every half minute. .NET sizes that generation
             // from the CPU's L3 cache - 96 MB on a 7800X3D - and left to
             // itself held about 50 MB for a widget that makes 100 KB of
@@ -1013,7 +1082,11 @@ public partial class MainWindow : Window
             // The setting meant for it (GCgen0size) is only read from an
             // environment variable, not from the app's own config, and a
             // user-wide variable would change every .NET program.
-            if (DateTime.UtcNow - _lastYoungCollect >= YoungCollectEvery)
+            //
+            // Not on a busy disk: it stops every thread, UI included, and with
+            // a game installing one took 22 s instead of 0.1 ms. It only saves
+            // a few MB, so it waits until the disk is calm again.
+            if (!diskBusy && DateTime.UtcNow - _lastYoungCollect >= YoungCollectEvery)
             {
                 _lastYoungCollect = DateTime.UtcNow;
                 using (Activity.Begin("UI tick: young-object collection"))
@@ -1182,16 +1255,24 @@ public partial class MainWindow : Window
     /// the pages, and the widget was seen holding 268 MB it could never give
     /// to a game short of RAM. The tick's own pages are the recently used ones,
     /// which are what a floor keeps, so it need only be as big as they are.
+    ///
+    /// With <paramref name="whole"/>, all of what is in memory now, up to the
+    /// old 256 MB, for as long as the disk is busy: a game installing brought
+    /// the widget from 200 MB down to exactly this floor, and the pages under
+    /// a GC or a repaint aren't the tick's. It is only for a while, so the
+    /// reason for the small floor doesn't apply.
     /// </remarks>
-    private static void KeepResident()
+    private static void KeepResident(bool whole = false)
     {
         try
         {
             const long floor = 96L << 20;
+            const long wholeLimit = 256L << 20;
+            long minimum = whole ? Math.Clamp(Environment.WorkingSet, floor, wholeLimit) : floor;
 
             // The maximum stays soft (MAX_DISABLE), so the widget can still
             // grow past the floor - opening the sessions window, say.
-            if (!SetProcessWorkingSetSizeEx(GetCurrentProcess(), (nint)floor, (nint)(floor * 4),
+            if (!SetProcessWorkingSetSizeEx(GetCurrentProcess(), (nint)minimum, (nint)(floor * 4),
                                             QuotaLimitsHardWsMinEnable | QuotaLimitsHardWsMaxDisable))
                 App.Log("keeping the widget in memory", $"SetProcessWorkingSetSizeEx failed (error {Marshal.GetLastWin32Error()}).");
         }
@@ -1199,6 +1280,30 @@ public partial class MainWindow : Window
         {
             App.Log("keeping the widget in memory", ex);
         }
+    }
+
+    /// <summary>
+    /// Whether the disks are working hard, and what follows from it. Any part
+    /// of DeskMon no longer in memory then comes back through a queue behind
+    /// the installer's writes - a browser in use keeps its pages warm, an idle
+    /// widget doesn't - so this is when it must hold on to what it has.
+    /// </summary>
+    private bool NoteDiskLoad(SensorSnapshot snapshot)
+    {
+        var now = DateTime.UtcNow;
+        if ((snapshot.DiskRead ?? 0) + (snapshot.DiskWrite ?? 0) >= DiskBusyMbPerSecond)
+            _diskBusyAt = now;
+
+        bool busy = now - _diskBusyAt < DiskBusyHold;
+        FreezeWatchdog.DiskBusy = busy;
+
+        // Only on a change: this is every tick, and the floor is a kernel call.
+        if (busy != _diskBusy)
+        {
+            _diskBusy = busy;
+            KeepResident(whole: busy);
+        }
+        return busy;
     }
 
     private const uint QuotaLimitsHardWsMinEnable = 0x1;
@@ -1867,6 +1972,8 @@ public partial class MainWindow : Window
         _timeline = new SessionTimeline(_sessionStartedAt);
         _bottleneck = new Bottleneck();
         _pingAtStart = _ping.Totals;
+        _routerAtStart = _router.Totals;
+        _lag = new LagWatch();
         _sessionEnergyWh = null;
         _lastEnergyAt = default;
         _sessionDriver = _sessionBuild = null;
@@ -2423,11 +2530,24 @@ public partial class MainWindow : Window
     /// <summary>What the line carries besides the frames and peaks: the energy, the driver and the build.</summary>
     /// <param name="Limits">The log's "limit gpu 72 cpu 18 ..." part, or null.</param>
     /// <param name="Ping">The log's "ping 18 ms ±6 loss 0.4 %" part, or null.</param>
-    private sealed record SessionExtrasInfo(double? EnergyWh, string? Driver, string? WindowsBuild, string? Limits, string? Ping);
+    /// <param name="Router">The log's "router 2 ms ±1 loss 0 %" part, or null.</param>
+    /// <param name="Lag">The log's "lag home 3 internet 12" part, or null.</param>
+    /// <param name="Dip">The log's "dip 21:40 62 fps of 120: ..." part, or null.</param>
+    private sealed record SessionExtrasInfo(double? EnergyWh, string? Driver, string? WindowsBuild, string? Limits, string? Ping,
+                                            string? Router, string? Lag, string? Dip);
 
     private SessionExtrasInfo SessionExtras()
-        => new(_sessionEnergyWh, _sessionDriver, _sessionBuild,
-               _bottleneck?.ToLogPart(), _ping.Totals.Since(_pingAtStart).ToLogPart());
+    {
+        // The lag only with the router's own figures: too few pings to log
+        // those is too few to say where any lag came from.
+        string? router = _router.Totals.Since(_routerAtStart).ToLogPart("router");
+        return new(_sessionEnergyWh, _sessionDriver, _sessionBuild,
+                   _bottleneck?.ToLogPart(), _ping.Totals.Since(_pingAtStart).ToLogPart(),
+                   router, router is null ? null : _lag?.ToLogPart(), _timeline?.DipLogPart());
+    }
+
+    /// <summary>The router's address into _routerHost for the tick to pick up. Async void is safe here: FindRouter catches its own faults.</summary>
+    private async void FindRouter() => _routerHost = await Task.Run(LagWatch.FindRouter);
 
     /// <summary>
     /// Adds what PresentMon has counted so far to the session's running totals,
@@ -2528,6 +2648,14 @@ public partial class MainWindow : Window
             line.Append($" · {limits}");
         if (extras.Ping is { } ping)
             line.Append($" · {ping}");
+        if (extras.Router is { } router)
+            line.Append($" · {router}");
+        if (extras.Lag is { } lag)
+            line.Append($" · {lag}");
+
+        // The worst moment, and what was busy then - see SessionTimeline.WorstDip.
+        if (extras.Dip is { } dip)
+            line.Append($" · {dip}");
 
         // CPU and GPU only, not the PC from the wall - the LOG window says so.
         if (extras.EnergyWh is double energy)
@@ -4343,6 +4471,8 @@ public partial class MainWindow : Window
         _tray?.Dispose();   // otherwise the icon lingers in the tray
         _fps.Dispose();
         _ping.Dispose();
+        _router.Dispose();
+        _busyWatch.Dispose();
         _updateTimer.Stop();
         _updateSoon.Stop();
         _hub?.Dispose();

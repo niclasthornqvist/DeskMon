@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace DeskMon.Sensors;
 
@@ -37,22 +39,58 @@ internal sealed class MemoryUsers
 
     private DateTime _readAt = DateTime.MinValue;
 
+    // 1 while a read runs, so one held up by a busy disk never has another
+    // starting behind it.
+    private int _reading;
+
+    /// <summary>
+    /// The two lists, from one read. One record behind one reference, swapped
+    /// whole from the reading thread, as DiskStats does with the drives.
+    /// </summary>
+    private sealed record Lists(IReadOnlyList<SensorReading> ByRam, IReadOnlyList<SensorReading> ByCommit);
+
+    private volatile Lists _lists = new(Array.Empty<SensorReading>(), Array.Empty<SensorReading>());
+
     /// <summary>By what they hold in RAM right now - the working set.</summary>
-    public IReadOnlyList<SensorReading> ByRam { get; private set; } = Array.Empty<SensorReading>();
+    public IReadOnlyList<SensorReading> ByRam => _lists.ByRam;
 
     /// <summary>
     /// By what they have been given in all - private bytes, the commit charge -
     /// which is what fills the page file once RAM runs out.
     /// </summary>
-    public IReadOnlyList<SensorReading> ByCommit { get; private set; } = Array.Empty<SensorReading>();
+    public IReadOnlyList<SensorReading> ByCommit => _lists.ByCommit;
 
-    /// <summary>Reads again if the last read is old enough. On the sensor worker thread.</summary>
+    /// <summary>
+    /// Reads again if the last read is old enough. On the sensor worker thread.
+    /// Only the first read waits, as the widget's width is measured with the
+    /// lists filled; after that the read runs on its own thread and the lists
+    /// follow a moment later. In line, it took up to 25 s while a game
+    /// installed, and the whole widget's figures stood still behind it.
+    /// </summary>
     /// <param name="shown">Whether the RAM or SWAP list is unfolded - see <see cref="EveryWhileFolded"/>.</param>
     public void Refresh(bool shown)
     {
         if (DateTime.UtcNow - _readAt < (shown ? Every : EveryWhileFolded))
             return;
+        if (Interlocked.CompareExchange(ref _reading, 1, 0) != 0)
+            return;
+
+        bool first = _readAt == DateTime.MinValue;
         _readAt = DateTime.UtcNow;
+
+        if (first)
+            Read();
+        else
+            // A thread of its own, not the pool: the sensor reads use the pool
+            // too, and this one can sit for as long as the disk keeps it.
+            Task.Factory.StartNew(Read, TaskCreationOptions.LongRunning);
+    }
+
+    private void Read()
+    {
+        // Here and not around Refresh, which now only starts it: the freeze
+        // log should still hear about the read itself.
+        using var step = Activity.Begin("program list for RAM and SWAP");
 
         var processes = Array.Empty<Process>();
         try
@@ -67,8 +105,7 @@ internal sealed class MemoryUsers
                 .Select(g => (Name: g.Key, Count: g.Count(), Ram: g.Sum(p => p.Ram), Commit: g.Sum(p => p.Commit)))
                 .ToList();
 
-            ByRam = Top(programs, p => p.Ram);
-            ByCommit = Top(programs, p => p.Commit);
+            _lists = new Lists(Top(programs, p => p.Ram), Top(programs, p => p.Commit));
         }
         catch
         {
@@ -78,6 +115,7 @@ internal sealed class MemoryUsers
         {
             foreach (var process in processes)
                 process.Dispose();
+            Volatile.Write(ref _reading, 0);
         }
     }
 

@@ -142,13 +142,14 @@ public partial class HardwareWindow : PanelWindow
     /// error in drawing the rows went nowhere until a garbage collection
     /// happened to report it as an "unobserved task" - long after, if at all.
     /// </summary>
-    public async Task LoadAsync(string? cpuName, string? gpuName)
+    /// <param name="askWindowsUpdate">Windows Update asked online now, for someone who pressed Refresh all to find out - see WindowsAsync.</param>
+    public async Task LoadAsync(string? cpuName, string? gpuName, bool askWindowsUpdate = false)
     {
         // The number LoadCoreAsync is about to give this load.
         int generation = _loadGeneration + 1;
         try
         {
-            await LoadCoreAsync(cpuName, gpuName);
+            await LoadCoreAsync(cpuName, gpuName, askWindowsUpdate);
         }
         catch (Exception ex)
         {
@@ -162,7 +163,7 @@ public partial class HardwareWindow : PanelWindow
         }
     }
 
-    private async Task LoadCoreAsync(string? cpuName, string? gpuName)
+    private async Task LoadCoreAsync(string? cpuName, string? gpuName, bool askWindowsUpdate)
     {
         int generation = ++_loadGeneration;
 
@@ -180,7 +181,7 @@ public partial class HardwareWindow : PanelWindow
         // from it, and it is by far the slowest answer (5 s or more when it
         // hasn't been asked in a while). Started here, it runs while the rest
         // is read instead of after it.
-        var windowsTask = _settings.CheckDriverOnline ? UpdateCheck.WindowsAsync() : null;
+        var windowsTask = _settings.CheckDriverOnline ? UpdateCheck.WindowsAsync(askWindowsUpdate) : null;
 
         SystemInfo info;
         IReadOnlyList<Prerequisites.Missing> missing;
@@ -419,7 +420,8 @@ public partial class HardwareWindow : PanelWindow
             bool firstRegion = true;
             foreach (var (region, _) in NetworkCheck.Regions)
             {
-                var row = Item(firstRegion ? "Regions" : string.Empty, region, null, null, detail: null, full: new List<string>())
+                var row = Item(firstRegion ? "Regions" : string.Empty, region, null, null, detail: null, full: new List<string>(),
+                               about: "Where game servers are often hosted, and how far away this one is")
                           .WithStatus(Checking($"Measuring the way to {region}…"));
                 AddItem(row, Array.Empty<SystemInfo.Check>());
                 _regionRows.Add(row);
@@ -455,6 +457,11 @@ public partial class HardwareWindow : PanelWindow
             : UpdateCheck.AmdChipsetAsync(info.ChipsetVersion, info.ChipsetDate);
         var pingTask = pingItem is null ? null : NetworkCheck.PingAsync(pingHost);
         var regionsTask = _regionRows.Count == 0 ? null : NetworkCheck.RegionsAsync();
+
+        // Shown as they come, apart from the update answers below: awaited
+        // after them, a test of a second or two sat on "Measuring…" for as
+        // long as Windows Update took to answer.
+        var networkShown = ShowNetworkAsync(pingItem, pingTask, regionsTask, generation);
 
         // The loading screen stays up until the online checks are in too, so
         // the window opens on every answer rather than on "Checking…" rows
@@ -496,6 +503,13 @@ public partial class HardwareWindow : PanelWindow
         if (allInTime && generation == _loadGeneration)
             ShowLoading(false);
 
+        await networkShown;
+    }
+
+    /// <summary>The ping test's and the regions' answers into their rows, on the UI thread, whatever else is still being waited for.</summary>
+    private async Task ShowNetworkAsync(InfoRow? pingItem, Task<SystemInfo.Check>? pingTask,
+                                        Task<IReadOnlyList<SystemInfo.Check>>? regionsTask, int generation)
+    {
         if (pingTask is not null)
             SetStatus(pingItem!, await pingTask, generation, pingAgain: true);
         if (regionsTask is not null)
@@ -542,6 +556,13 @@ public partial class HardwareWindow : PanelWindow
             string? name = total is null ? countSize
                          : countSize is null ? total
                          : $"{total}  ·  {countSize}";
+
+            // The maker in words as on the CPU and GPU rows - most makers have
+            // no logo here, so the row could leave out who made it altogether.
+            // Not on a mixed set: its stick rows below already start with it.
+            if (name is not null && info.MemoryMaker is { } maker)
+                name = $"{maker} {name}";
+
             AddItem(Item("Memory", name, info.MemoryTotal, BrandLogos.ForMemory(module),
                          detail: Words(speed, checkWords),
                          full: Lines(module, checkLines))
@@ -688,10 +709,18 @@ public partial class HardwareWindow : PanelWindow
     /// with <paramref name="full"/> - the long forms of the detail and checks.
     /// </summary>
     private InfoRow Item(string label, string? name, string? fullName, BrandLogos.Logo? logo,
-                         string? detail, List<string> full, bool dim = false)
-        => new(RowKind.Item, _theme, _settings)
+                         string? detail, List<string> full, bool dim = false, string? about = null)
+    {
+        // A second screen or drive leaves its label empty, as the first says
+        // it for the eye - its card still has to say what it is.
+        if (label.Length > 0)
+            _caption = label.ToUpperInvariant();
+
+        return new(RowKind.Item, _theme, _settings)
         {
             Label = label,
+            Caption = _caption,
+            About = about,
             Name = name ?? "unknown",
             FullName = fullName ?? name ?? "unknown",
             NameBrush = name is null || dim ? _theme.Unavailable : _theme.NotesText,
@@ -700,6 +729,10 @@ public partial class HardwareWindow : PanelWindow
             LogoShape = logo?.Shape,
             LogoFill = logo is null ? null : logo.Fill ?? _theme.NotesText,
         };
+    }
+
+    /// <summary>The label of the last row that had one - see Item.</summary>
+    private string? _caption;
 
     /// <summary>
     /// A tinted note with the full sentence - under an item it is about, or
@@ -799,10 +832,13 @@ public partial class HardwareWindow : PanelWindow
     }
 
     /// <summary>
-    /// A chip's name without what the logo next to it already says, and the
-    /// marketing around it: "AMD Ryzen 7 7800X3D 8-Core Processor" to
-    /// "Ryzen 7 7800X3D", "NVIDIA GeForce RTX 4070 SUPER" to "RTX 4070 SUPER".
-    /// The full name stays for the tooltip and Copy.
+    /// A chip's name without the marketing around it: "AMD Ryzen 7 7800X3D
+    /// 8-Core Processor" to "AMD Ryzen 7 7800X3D", "NVIDIA GeForce RTX 4070
+    /// SUPER" to "NVIDIA RTX 4070 SUPER". The maker stays in the words: a
+    /// small logo alone didn't make it clear at a glance, and a chip with no
+    /// logo had nothing saying who made it. A name that leaves the maker out
+    /// gets it added, so every card reads the same. The full name stays for
+    /// the tooltip and Copy.
     /// </summary>
     private static string? ShortChip(string? name)
     {
@@ -810,8 +846,10 @@ public partial class HardwareWindow : PanelWindow
             return null;
         string s = Regex.Replace(name, @"\((R|TM)\)|®|™", string.Empty, RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"\s+(\d+-Core\s+)?Processor\b.*$|\s+CPU\s*@.*$|\s+with Radeon Graphics.*$", string.Empty, RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"^(AMD|Intel|NVIDIA)\s+|^GeForce\s+|^Radeon\s+(?=RX)", string.Empty, RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"^GeForce\s+", string.Empty, RegexOptions.IgnoreCase);
+        s = s.Trim();
+        s = Regex.Replace(s, @"^(?:NVIDIA\s+)?GeForce\s+", "NVIDIA ", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"^(?:AMD\s+)?Radeon\s+(?=RX)", "AMD ", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"^Radeon\b", "AMD Radeon", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"\s{2,}", " ").Trim();
         return s.Length > 0 ? s : name;
     }
@@ -930,6 +968,13 @@ public partial class HardwareWindow : PanelWindow
         => HandleHeaderMouseDown(e);
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>
+    /// The whole window read again without closing it. LoadAsync's generation
+    /// count sees to a click while a load is still running: the newer one wins.
+    /// </summary>
+    private void Refresh_Click(object sender, RoutedEventArgs e)
+        => _ = LoadAsync(_cpuName, _gpuName, askWindowsUpdate: true);
 
     /// <summary>
     /// Handy when posting a spec somewhere or filing a support ticket. The
@@ -1114,12 +1159,18 @@ public partial class HardwareWindow : PanelWindow
             Full = check.Text;
             Mark = StatusMarks.For(check.Level);
             MarkBrush = LevelBrush(theme, check.Level);
+
+            // A card like the rows', the short word as its title - the
+            // sentence alone came out as a bare line of text. How it stands
+            // first, then what the setting is, dimmer as a card's later lines are.
+            Tip = InfoTip.Later(theme, "GAMING", check.ShortText, check.About is null ? check.Text : $"{check.Text}\n{check.About}");
             MarkTint = Tint(MarkBrush, 0x33);
             TextBrush = check.Level >= SystemInfo.Condition.Warning ? MarkBrush : theme.NotesText;
         }
 
         public string Text { get; }
         public string Full { get; }
+        public object Tip { get; }
         public Geometry Mark { get; }
         public Brush MarkBrush { get; }
         public Brush MarkTint { get; }
@@ -1198,8 +1249,35 @@ public partial class HardwareWindow : PanelWindow
         /// <summary>The long forms of the detail and checks, for Copy and the tooltip.</summary>
         public List<string> FullLines { get; init; } = new();
 
-        /// <summary>The name and everything behind the short forms, on hover.</summary>
-        public string ToolTip => string.Join("\n", new[] { FullName }.Concat(FullLines).Append(StatusFull ?? string.Empty).Where(l => l.Length > 0));
+        /// <summary>The kind of row in capitals over the card's title - see Item.</summary>
+        public string? Caption { get; init; }
+
+        /// <summary>A line saying what the row is, for those with next to nothing else to say. The tooltip's alone: Copy is for facts.</summary>
+        public string? About { get; init; }
+
+        /// <summary>
+        /// The row as one card, the same for every row and on both sides of it:
+        /// the name, each fact on a line of its own, and the status in its
+        /// colour. As plain text a card came out by what the text happened to
+        /// look like - a full one for some rows, a lone sentence for others.
+        /// </summary>
+        public object ToolTip
+        {
+            get
+            {
+                var lines = new List<string>();
+                if (About is not null)
+                    lines.Add(About);
+                lines.AddRange(FullLines.SelectMany(l => l.Split(Separator)));
+                if (StatusFull is not null && StatusFull != StatusText)
+                    lines.Add(StatusFull);
+
+                return InfoTip.Later(_theme, Caption, FullName,
+                    lines.Count > 0 ? string.Join("\n", lines) : null,
+                    StatusText is null ? null : new[] { new InfoTip.Fact("Status", StatusText, StatusBrush) },
+                    HasStabilityMenu ? new[] { "Right-click to choose when crashes and shutdowns are counted from" } : null);
+            }
+        }
 
         public Geometry? LogoShape { get; init; }
         public Brush? LogoFill { get; init; }

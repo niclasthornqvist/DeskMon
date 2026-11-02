@@ -31,6 +31,9 @@ public sealed class SystemInfo
     public string? MemoryTotal { get; private set; }
     public IReadOnlyList<string> MemoryModules { get; private set; } = Array.Empty<string>();
 
+    /// <summary>"Corsair", for the memory row. Kept apart because it can't be picked back out of a module line: makers can run to several words, with the part number straight after.</summary>
+    public string? MemoryMaker { get; private set; }
+
     /// <summary>"8 cores / 16 threads · 4.2 GHz base · 96 MB L3", under the CPU name.</summary>
     public string? CpuDetail { get; private set; }
 
@@ -86,9 +89,11 @@ public sealed class SystemInfo
     /// is the word or two the hardware window shows beside its item ("No
     /// errors", "EXPO on"); the full sentence stays for Copy, the tooltip and
     /// - when something is wrong - the note under the item, where the advice
-    /// in it is the point.
+    /// in it is the point. <paramref name="About"/> says what the thing is,
+    /// for the tooltip alone: a name like "Secure Boot" means nothing to many,
+    /// but in Copy's text or a warning note it would only be in the way.
     /// </summary>
-    public sealed record Check(string Text, Condition Level, string? Short = null)
+    public sealed record Check(string Text, Condition Level, string? Short = null, string? About = null)
     {
         public string ShortText => Short ?? Text;
     }
@@ -916,6 +921,12 @@ public sealed class SystemInfo
                     string? vendor = Clean(module["Manufacturer"] as string);
                     string? part = Clean(module["PartNumber"] as string);
 
+                    // Some sticks report a bare JEDEC code ("859B") as their
+                    // maker, which would read as nonsense in front of the size.
+                    if (vendor is not null && !System.Text.RegularExpressions.Regex.IsMatch(vendor, @"^(0x)?[0-9A-F]{4,}$",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                        MemoryMaker ??= vendor;
+
                     // DeviceLocator is numbered per channel, so two sticks in
                     // different channels both report "DIMM 1" - which reads as
                     // if they were in the same slot. BankLabel names the
@@ -1491,37 +1502,43 @@ public sealed class SystemInfo
     {
         var checks = new List<Check>();
 
+        const string aboutGameMode = "Lets Windows put the running game first: background work gets less of the PC, and Windows Update holds off installing drivers and restarting";
+        const string aboutScheduling = "Lets the graphics card manage its own memory instead of leaving that to Windows, which can cut a little delay";
+        const string aboutIntegrity = "Windows checks drivers in a protected part of memory, so malware can't tamper with the core of the system";
+        const string aboutSecureBoot = "A BIOS setting that lets only signed, trusted software start with the PC, so malware can't load before Windows";
+        const string aboutTpm = "A security chip, or a part of the CPU, that keeps keys safe. Windows 11 requires it, and some anti-cheat uses it to recognise the PC";
+
         // Missing means never changed, and Game Mode is on by default.
         checks.Add(RegistryInt(Registry.CurrentUser, @"Software\Microsoft\GameBar", "AutoGameModeEnabled") == 0
-            ? new Check("Game Mode off - Windows gives games less priority over background work", Condition.Warning, "Game Mode off")
-            : new Check("Game Mode on", Condition.Good, "Game Mode"));
+            ? new Check("Game Mode off - Windows gives games less priority over background work", Condition.Warning, "Game Mode off", aboutGameMode)
+            : new Check("Game Mode on", Condition.Good, "Game Mode", aboutGameMode));
 
         // 2 on, 1 off; missing is Windows' default, which depends on the card
         // and driver - so said as such rather than guessed.
         checks.Add(RegistryInt(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode") switch
         {
-            2 => new Check("Hardware-accelerated GPU scheduling on", Condition.Good, "GPU scheduling"),
-            1 => new Check("Hardware-accelerated GPU scheduling off - DLSS and FSR frame generation need it", Condition.Warning, "GPU scheduling off"),
-            _ => new Check("Hardware-accelerated GPU scheduling left at Windows' default", Condition.Unknown, "GPU scheduling: default"),
+            2 => new Check("Hardware-accelerated GPU scheduling on", Condition.Good, "GPU scheduling", aboutScheduling),
+            1 => new Check("Hardware-accelerated GPU scheduling off - DLSS and FSR frame generation need it", Condition.Warning, "GPU scheduling off", aboutScheduling),
+            _ => new Check("Hardware-accelerated GPU scheduling left at Windows' default", Condition.Unknown, "GPU scheduling: default", aboutScheduling),
         });
 
         // Dim either way: it is a security trade-off, not a fault. Microsoft's
         // own advice for gaming PCs is that turning it off can help.
         checks.Add(RegistryInt(Registry.LocalMachine,
                                @"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity", "Enabled") == 1
-            ? new Check("Memory integrity on - safer, but can cost a few % in some games (Windows Security > Device security)", Condition.Unknown, "Memory integrity on")
-            : new Check("Memory integrity off", Condition.Unknown, "Memory integrity off"));
+            ? new Check("Memory integrity on - safer, but can cost a few % in some games (Windows Security > Device security)", Condition.Unknown, "Memory integrity on", aboutIntegrity)
+            : new Check("Memory integrity off", Condition.Unknown, "Memory integrity off", aboutIntegrity));
 
         // Missing means a legacy BIOS without Secure Boot at all.
         checks.Add(RegistryInt(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\SecureBoot\State", "UEFISecureBootEnabled") == 1
-            ? new Check("Secure Boot on", Condition.Good, "Secure Boot")
-            : new Check("Secure Boot off - some games' anti-cheat won't start without it (Valorant, Battlefield 6, Call of Duty)", Condition.Warning, "Secure Boot off"));
+            ? new Check("Secure Boot on", Condition.Good, "Secure Boot", aboutSecureBoot)
+            : new Check("Secure Boot off - some games' anti-cheat won't start without it (Valorant, Battlefield 6, Call of Duty)", Condition.Warning, "Secure Boot off", aboutSecureBoot));
 
         checks.Add(TpmVersion() switch
         {
-            2 => new Check("TPM 2.0 on", Condition.Good, "TPM 2.0"),
-            1 => new Check("TPM 1.2 - anti-cheat that needs a TPM wants 2.0", Condition.Warning, "TPM 1.2"),
-            _ => new Check("No TPM found - turn on fTPM (AMD) or PTT (Intel) in the BIOS; some anti-cheat needs it", Condition.Warning, "No TPM"),
+            2 => new Check("TPM 2.0 on", Condition.Good, "TPM 2.0", aboutTpm),
+            1 => new Check("TPM 1.2 - anti-cheat that needs a TPM wants 2.0", Condition.Warning, "TPM 1.2", aboutTpm),
+            _ => new Check("No TPM found - turn on fTPM (AMD) or PTT (Intel) in the BIOS; some anti-cheat needs it", Condition.Warning, "No TPM", aboutTpm),
         });
 
         GamingChecks = checks;

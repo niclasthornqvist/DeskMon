@@ -2649,7 +2649,9 @@ public partial class SessionsWindow : PanelWindow
         // the score, and what the loading screen and frame cap rules found.
         header.InsertRange(header.IndexOf("Stutters") + 1, new[] { "Score", "Loading left out (s)", "Frame cap (fps)",
                                                                    "Limited by", "GPU-limited (%)", "CPU-limited (%)",
-                                                                   "Ping (ms)", "Ping jitter (ms)", "Pings lost (%)" });
+                                                                   "Ping (ms)", "Ping jitter (ms)", "Pings lost (%)",
+                                                                   "Router ping (ms)", "Router pings lost (%)", "Lag from",
+                                                                   "Worst dip", "Dip FPS", "Usual FPS", "Busy in dip" });
         if (withGame)
             header.Insert(0, "Game");
         if (costed)
@@ -2684,6 +2686,13 @@ public partial class SessionsWindow : PanelWindow
                 s.PingMs?.ToString("0", inv) ?? string.Empty,
                 s.PingJitterMs?.ToString("0", inv) ?? string.Empty,
                 s.PingLossPercent?.ToString("0.#", inv) ?? string.Empty,
+                s.RouterMs?.ToString("0", inv) ?? string.Empty,
+                s.RouterLossPercent?.ToString("0.#", inv) ?? string.Empty,
+                s.LagFrom ?? string.Empty,
+                s.DipAt ?? string.Empty,
+                s.DipFps?.ToString("0", inv) ?? string.Empty,
+                s.DipUsualFps?.ToString("0", inv) ?? string.Empty,
+                s.DipBusy ?? string.Empty,
                 s.EnergyWh?.ToString("0", inv) ?? string.Empty,
             };
             if (withGame)

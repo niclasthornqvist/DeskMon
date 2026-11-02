@@ -316,7 +316,7 @@ public static class GameArt
     /// newer games' logos, from Steam's app info - this goes up, and every
     /// older "not found" is asked again rather than believed for a week.
     /// </summary>
-    private const string LookupVersion = "2";
+    private const string LookupVersion = "3";
 
     private static readonly System.Net.Http.HttpClient Http = MakeClient();
 
@@ -403,16 +403,16 @@ public static class GameArt
                           Id: i.GetProperty("id").ToString()))
             .ToList();
 
-        // The same name; or else the shortest that contains it, for a game
-        // that calls itself by part of its store name - "Dawnwalker" is
-        // "The Blood of Dawnwalker" - and shortest so its DLC and soundtrack,
-        // which carry the name and more, lose to it. Not for a name of three
-        // letters or fewer, which half the store contains.
+        // The same name; or else the first that contains it, for a game that
+        // calls itself by part of its store name - "Dawnwalker" is "The Blood
+        // of Dawnwalker". The first in the store's own order, not the shortest:
+        // that was meant to beat a game's DLC, but a DLC can be the shorter one,
+        // and "S.T.A.L.K.E.R. 2" got "Cost of Hope", which has no art, over
+        // "Heart of Chornobyl". The store ranks the game above its DLC. Not for
+        // a name of three letters or fewer, which half the store contains.
         return results.FirstOrDefault(r => r.Name == wanted).Id
                ?? (wanted.Length >= 4
-                   ? results.Where(r => r.Name.Contains(wanted, StringComparison.Ordinal))
-                            .OrderBy(r => r.Name.Length)
-                            .FirstOrDefault().Id
+                   ? results.FirstOrDefault(r => r.Name.Contains(wanted, StringComparison.Ordinal)).Id
                    : null);
     }
 

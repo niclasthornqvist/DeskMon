@@ -22,13 +22,14 @@ public partial class SessionsWindow
     private int _timelineTicket;
 
     /// <summary>Which lines are on besides the frame rate. Kept while the window is open, not saved.</summary>
-    private bool _showCpuTemp = true, _showGpuTemp, _showPing;
+    private bool _showCpuTemp = true, _showGpuTemp, _showPing, _showRouter;
 
     // Their own colours, apart from the chart's highest / lowest / average,
     // which mean something else there.
     private static readonly Brush CpuTempBrush = Frozen(Color.FromRgb(0xF4, 0x72, 0xB6));
     private static readonly Brush GpuTempBrush = Frozen(Color.FromRgb(0xA7, 0x8B, 0xFA));
     private static readonly Brush PingBrush = Frozen(Color.FromRgb(0x38, 0xBD, 0xF8));
+    private static readonly Brush RouterBrush = Frozen(Color.FromRgb(0x34, 0xD3, 0x99));
 
     /// <summary>What the hover line and its dot are drawn with, kept to move them without a redraw.</summary>
     private System.Windows.Shapes.Line? _timelineCursor;
@@ -290,11 +291,18 @@ public partial class SessionsWindow
 
         // Ping on a scale of its own from nought to its highest, so a laggy
         // stretch stands out whatever the usual ping is. No labels: its
-        // figures are in the hover, and a third axis would crowd the plot.
-        if (_showPing && points.Select(p => p.Ping).OfType<double>().DefaultIfEmpty().Max() is double worstPing && worstPing > 0)
+        // figures are in the hover, and a third axis would crowd the plot. The
+        // router on that same scale, as how the two rise together is the point.
+        double worstPing = points.SelectMany(p => new[] { _showPing ? p.Ping : null, _showRouter ? p.Router : null })
+                                 .OfType<double>().DefaultIfEmpty().Max();
+        if (worstPing > 0)
         {
             double pingTop = NiceCeiling(worstPing * 1.1);
-            Line(p => p.Ping, ms => baseline - _tlHeight * Math.Min(1, ms / pingTop), PingBrush, 1.1, fill: false);
+            double PingY(double ms) => baseline - _tlHeight * Math.Min(1, ms / pingTop);
+            if (_showPing)
+                Line(p => p.Ping, PingY, PingBrush, 1.1, fill: false);
+            if (_showRouter)
+                Line(p => p.Router, PingY, RouterBrush, 1.1, fill: false);
         }
         Line(p => p.Fps, FpsY, _theme.Accent, 1.8, fill: true);
 
@@ -535,6 +543,8 @@ public partial class SessionsWindow
         // Only with a ping to draw - no host set, or a timeline from before.
         if (_timeline?.Points.Any(p => p.Ping is not null) == true)
             Toggle("Ping", PingBrush, _showPing, () => _showPing = !_showPing);
+        if (_timeline?.Points.Any(p => p.Router is not null) == true)
+            Toggle("Router", RouterBrush, _showRouter, () => _showRouter = !_showRouter);
     }
 
     /// <summary>
@@ -580,6 +590,8 @@ public partial class SessionsWindow
             parts.Add($"GPU {gpu:0} °C");
         if (point.Ping is double ms)
             parts.Add($"ping {ms:0} ms");
+        if (point.Router is double router)
+            parts.Add($"router {router:0} ms");
         if (point.Limit is Bottleneck.Kind limit)
             parts.Add(limit switch
             {
@@ -589,6 +601,8 @@ public partial class SessionsWindow
             });
         if (point.Loading)
             parts.Add("loading, not counted");
+        if (point.Busy is { } busy)
+            parts.Add($"busy: {busy}");
         TimelineCaption.Text = string.Join("  ·  ", parts);
     }
 

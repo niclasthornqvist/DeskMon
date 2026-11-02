@@ -63,6 +63,44 @@ public sealed class SessionRecord
     public double? PingJitterMs { get; private init; }
     public double? PingLossPercent { get; private init; }
 
+    /// <summary>The same for the ping to the router. Null before 1.75, or with no ping host set or no router found.</summary>
+    public double? RouterMs { get; private init; }
+    public double? RouterJitterMs { get; private init; }
+    public double? RouterLossPercent { get; private init; }
+
+    /// <summary>The moments of lag that came with the router and without it - see LagWatch. Null as for the router's ping.</summary>
+    public int? LagHome { get; private init; }
+    public int? LagInternet { get; private init; }
+
+    /// <summary>
+    /// Where the lag came from, in words; null without the counts. Under
+    /// three moments there is no pattern to read, and with the moments split
+    /// evenly neither side can be named alone.
+    /// </summary>
+    public string? LagFrom
+    {
+        get
+        {
+            if (LagHome is not int home || LagInternet is not int net)
+                return null;
+            int all = home + net;
+            return all < 3 ? "No lag to speak of"
+                 : home * 10 >= all * 6 ? "Your Wi-Fi or router"
+                 : net * 10 >= all * 6 ? "Your internet connection"
+                 : "Both your network and the internet";
+        }
+    }
+
+    /// <summary>
+    /// The session's worst dip - see SessionTimeline.WorstDip: the clock time
+    /// as written, the frame rate there and the usual one, and what was busy
+    /// beside the game. Null before 1.75, or for a steady session.
+    /// </summary>
+    public string? DipAt { get; private init; }
+    public double? DipFps { get; private init; }
+    public double? DipUsualFps { get; private init; }
+    public string? DipBusy { get; private init; }
+
     /// <summary>The frame cap the game sat at - see FrameStats.CapFps. Null when it wasn't held at one, or before 1.73.</summary>
     public int? CapFps { get; private init; }
 
@@ -165,6 +203,12 @@ public sealed class SessionRecord
     // Lower-case "ping", unlike the PING peak ("PING ↑17 ms"), which PeakPart reads.
     private static readonly Regex PingPart = new(@"^ping (?<ms>[\d.]+) ms ±(?<jitter>[\d.]+) loss (?<loss>[\d.]+) %$");
 
+    private static readonly Regex RouterPart = new(@"^router (?<ms>[\d.]+) ms ±(?<jitter>[\d.]+) loss (?<loss>[\d.]+) %$");
+
+    private static readonly Regex LagPart = new(@"^lag home (?<home>\d+) internet (?<net>\d+)$");
+
+    private static readonly Regex DipPart = new(@"^dip (?<at>\d{2}:\d{2}) (?<fps>[\d.]+) fps of (?<usual>[\d.]+)(?:: (?<busy>.+))?$");
+
     private static readonly Regex EnergyPart = new(@"^energy (?<wh>[\d.]+) Wh$");
 
     // Before PeakPart, which "driver 581.57" doesn't match anyway (no arrow) -
@@ -221,6 +265,10 @@ public sealed class SessionRecord
         int? cap = null;
         IReadOnlyDictionary<Bottleneck.Kind, int>? limits = null;
         double? ping = null, jitterPing = null, loss = null;
+        double? router = null, jitterRouter = null, lossRouter = null;
+        int? lagHome = null, lagInternet = null;
+        string? dipAt = null, dipBusy = null;
+        double? dipFps = null, dipUsual = null;
         string? driver = null, windows = null;
         TimeSpan? length = null;
         var peaks = new List<Peak>();
@@ -299,6 +347,32 @@ public sealed class SessionRecord
                 continue;
             }
 
+            if (RouterPart.Match(part) is { Success: true } near
+                && double.TryParse(near.Groups["ms"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double routerMs)
+                && double.TryParse(near.Groups["jitter"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double routerJitter)
+                && double.TryParse(near.Groups["loss"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double routerLoss))
+            {
+                (router, jitterRouter, lossRouter) = (routerMs, routerJitter, routerLoss);
+                continue;
+            }
+
+            if (LagPart.Match(part) is { Success: true } lag
+                && int.TryParse(lag.Groups["home"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int home)
+                && int.TryParse(lag.Groups["net"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int internet))
+            {
+                (lagHome, lagInternet) = (home, internet);
+                continue;
+            }
+
+            if (DipPart.Match(part) is { Success: true } dip
+                && double.TryParse(dip.Groups["fps"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double dippedTo)
+                && double.TryParse(dip.Groups["usual"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double usualFps))
+            {
+                (dipAt, dipFps, dipUsual) = (dip.Groups["at"].Value, dippedTo, usualFps);
+                dipBusy = dip.Groups["busy"].Success ? dip.Groups["busy"].Value : null;
+                continue;
+            }
+
             if (EnergyPart.Match(part) is { Success: true } drawn
                 && double.TryParse(drawn.Groups["wh"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double wh))
             {
@@ -358,6 +432,15 @@ public sealed class SessionRecord
             PingMs = ping,
             PingJitterMs = jitterPing,
             PingLossPercent = loss,
+            RouterMs = router,
+            RouterJitterMs = jitterRouter,
+            RouterLossPercent = lossRouter,
+            LagHome = lagHome,
+            LagInternet = lagInternet,
+            DipAt = dipAt,
+            DipFps = dipFps,
+            DipUsualFps = dipUsual,
+            DipBusy = dipBusy,
             EnergyWh = energy,
             Driver = driver,
             WindowsBuild = windows,

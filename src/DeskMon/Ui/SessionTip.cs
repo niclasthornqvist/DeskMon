@@ -148,6 +148,26 @@ internal static class SessionTip
             Fact("Network", $"ping {ping:0} ms ±{session.PingJitterMs ?? 0:0}",
                  $"{(session.PingLossPercent ?? 0).ToString("0.#", CultureInfo.InvariantCulture)}% of pings lost");
 
+        // The router beside it, and what the two together say - a lag number
+        // alone leaves open whether the fix is in the house or with the provider.
+        if (session.RouterMs is double router)
+            Fact("Router", $"ping {router:0} ms ±{session.RouterJitterMs ?? 0:0}",
+                 $"{(session.RouterLossPercent ?? 0).ToString("0.#", CultureInfo.InvariantCulture)}% of pings lost");
+        if (session.LagFrom is { } lagFrom)
+        {
+            int moments = (session.LagHome ?? 0) + (session.LagInternet ?? 0);
+            Fact("Lag from", lagFrom, moments >= 3 ? $"{moments} moments of lag" : null);
+        }
+
+        // The worst moment of the session, and what else was busy then. Said
+        // when nothing was too: that points at the game itself, which is as
+        // much an answer. A likely suspect, not proof, so worded as "busy".
+        if (session.DipFps is double dipFps)
+        {
+            Fact("Worst dip", $"{session.DipAt}  ·  {dipFps:0} fps", $"usually {session.DipUsualFps ?? 0:0} fps");
+            Fact(string.Empty, session.DipBusy is { } busy ? $"Busy then: {busy}" : "Nothing else stood out - likely the game itself");
+        }
+
         // How much loading screen the figures leave out, so a wrong guess by
         // FrameStats' rule is there to see - 0 s is worth showing too.
         if (session.LoadingLeftOut is TimeSpan loading)
