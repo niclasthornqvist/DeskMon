@@ -31,6 +31,8 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.75.1", "2026-11-02",
+            "Fixes: DeskMon tells everyone when a new version is out - the check was only on for those who had filled in the release page"),
         new("1.75.0", "2026-11-02",
             "Sessions: the worst dip of a session and what was busy beside the game then - the heaviest program on the CPU and disk - in its tooltip, on the timeline's hover and in the CSV",
             "Sessions: where lag came from - the router is pinged beside your ping host, and the tooltip says your Wi-Fi or router, or your internet connection",

@@ -1,52 +1,119 @@
 # DeskMon
 
-A small system monitor for Windows that sits on your desktop and over your games. It also keeps game notes with screenshots and a history of every play session.
+**A small system monitor for Windows 11 that sits on your desktop and over your games.** It shows how hard your PC is working, measures how well your games run, and keeps your game notes and screenshots in one place.
 
 <img src="images/widget.png" align="right" width="340" alt="The DeskMon widget during a game">
 
-**The widget**
+**[Download the latest release](https://github.com/niclasthornqvist/DeskMon/releases/latest)**
 
-- CPU, RAM, swap, temperatures, disk and network at a glance, each with a bar and its peak.
-- While a game runs: FPS, 1% lows, GPU load and ping, plus the game's playtime.
-- Fold the sections you don't need. Games get a layout of their own.
-- Alerts when something stays too hot or too full.
+Use DeskMon if you want to:
 
-**[Download the latest release](https://github.com/niclasthornqvist/DeskMon/releases/latest)**: one file, `DeskMon.exe`. Run it as administrator for CPU temperatures.
+- keep an eye on temperatures and load without opening Task Manager;
+- see your FPS and find out why a game stutters;
+- look back at how every play session ran;
+- keep notes and screenshots for each game.
+
+DeskMon is one file, `DeskMon.exe`, and there's no installer. Your data stays on your PC.
 
 <br clear="right">
 
-## Sessions
+## Features
 
-Every session is logged with its length, frame rate, lows and temperatures. Each session and each game gets a performance score out of 100, based on your target frame rate. The window shows the game's art and logo behind the numbers.
+| Part | What it does |
+|---|---|
+| **Widget** | Live CPU, RAM, swap, temperatures, disk and network, each with a bar and its peak. Fold what you don't need, and give games their own layout. |
+| **While you play** | FPS, 1% lows, GPU load, VRAM and playtime, plus an optional large FPS counter over the game. Ping too, if you choose a server to ping. |
+| **Sessions** | A log of every session, with a score out of 100, a minute-by-minute timeline, what held the frame rate back, and what else was busy during a dip. |
+| **Notes** | Notes for each game, with formatting, checklists, links and in-game screenshots. |
+| **Pictures** | Browse your screenshots, star favourites, and mark them up with arrows, circles, boxes, a pen and text. |
+| **Hardware** | Everything in your PC at a glance. Tells you when your graphics driver or BIOS is out of date, and checks gaming settings such as Game Mode. |
+| **Alerts** | A notification when something stays too hot or too full. |
+| **Themes** | 13 built-in looks that change the whole program, or make your own. |
+
+## Get started
+
+**1. Install what DeskMon needs.** Open PowerShell and run:
+
+```powershell
+winget install Microsoft.DotNet.DesktopRuntime.8
+winget install Intel.PresentMon.Console
+winget install namazso.PawnIO
+```
+
+| Install | Needed for | Without it |
+|---|---|---|
+| .NET 8 Desktop Runtime | Running DeskMon | DeskMon won't start. Windows offers the download. |
+| Intel PresentMon | FPS and lows | Those rows show `n/a`. |
+| PawnIO | CPU temperature | That row shows `n/a`. |
+
+**2. Download `DeskMon.exe`** from the [latest release](https://github.com/niclasthornqvist/DeskMon/releases/latest) and put it in a folder of its own.
+
+**3. Start it** and choose **Yes** when Windows asks for administrator rights. The widget appears on your desktop, with an icon in the notification area. If you can't see the icon, look under the `^` arrow on the taskbar.
+
+**4. Start with Windows (optional).** Open `CFG` on the widget, then **Widget**, and tick **Start with Windows**. DeskMon then starts at logon without asking for administrator rights each time.
+
+**5. Play a game.** DeskMon notices it on its own and starts measuring.
+
+## Using DeskMon
+
+| To do this | Do this |
+|---|---|
+| Open a window | Click `HW` for hardware, `LOG` for sessions, `NOTES` for notes or `CFG` for settings |
+| Get all the options | Right-click the widget or the notification area icon |
+| Move the widget | Drag it |
+| Fold a section | Click its heading |
+| Hide or show the widget | Left-click the notification area icon |
+| Show or hide the in-game FPS counter | `Ctrl+Shift+F11` |
+| Take a screenshot for your notes | `Ctrl+Shift+F12` in a game |
+
+## A closer look
+
+### Sessions
+
+Every session is saved when you quit the game, with its length, frame rate, lows and temperatures. The score out of 100 is based on your target frame rate. Pick a session to see it minute by minute. Loading screens and shader compiling are left out, so the figures describe actual play.
 
 ![Sessions window](images/sessions.png)
 
-## Notes and pictures
+### Notes and pictures
 
-Notes for each game, with formatting, checklists, links and screenshots taken in-game. The pictures window docks beside the notes and lets you:
-
-- star favourites;
-- copy a picture;
-- see which pictures aren't in the notes;
-- delete a picture with the badge in its corner.
+Notes open on their own when a game starts. Press the screenshot key in a game and the picture lands in that game's notes. The pictures window shows which pictures aren't in your notes, so you can add or delete them.
 
 ![Notes and pictures windows](images/notes-and-pictures.png)
 
-Click a picture to open the built-in viewer. It zooms and steps between pictures, and you can mark a picture up with arrows, circles, boxes, a pen and text.
+Click a picture to open the viewer. You can zoom, step between pictures and mark them up.
 
 ![Viewer with markup](images/viewer-markup.png)
 
-## Themes
+### Themes
 
-One setting changes the look of the whole program. Pick a theme or make your own: Dark, Light, Cyberpunk, Neon, Fantasy, Futuristic, Retro terminal, Minimalist, Ocean, Sunset, Forest, Dracula or Nord.
+Choose from Dark, Light, Cyberpunk, Neon, Fantasy, Futuristic, Retro terminal, Minimalist, Ocean, Sunset, Forest, Dracula or Nord.
 
 ![Four themes: Cyberpunk, Fantasy, Light and Retro terminal](images/themes.png)
 
-## Settings
+### Settings
 
-Everything can be changed in the settings window, and changes apply at once.
+Everything can be changed in the settings window, and most changes apply at once.
 
 ![Settings window](images/settings.png)
+
+## Good to know
+
+**Why does it need administrator rights?** Reading the CPU temperature and measuring FPS both need low-level access to Windows.
+
+**What does it connect to?** Your notes, sessions and screenshots are never uploaded. DeskMon only goes online to:
+
+- check GitHub for a new DeskMon version once a day;
+- check for newer drivers and BIOS versions;
+- fetch game art from the Steam store, which sends the game's name;
+- ping a server, if you've set one.
+
+**How do I update?** DeskMon tells you when a new version is out but never installs anything by itself. Exit DeskMon, download the new `DeskMon.exe` and replace the old one. If you don't want the check, turn off **Check for updates** in `CFG`, under **Alerts and updates**.
+
+**Where is my data?** In `%APPDATA%\DeskMon`. Game art is cached in `%LOCALAPPDATA%\DeskMon`.
+
+**How do I remove it?** Untick **Start with Windows**, exit DeskMon and delete `DeskMon.exe`. Delete the two folders above as well if you don't want to keep your notes and sessions.
+
+**Does frame generation change the FPS?** With DLSS frame generation at 2x, DeskMon counts rendered frames, so it can show about half of what the game's own counter says.
 
 ---
 

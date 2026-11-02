@@ -251,7 +251,7 @@ public static class SettingsCatalogue
             new Setting("Alerts", "Alerts", "Notify when a reading stays red - too hot, or nearly full."),
             new Setting("AlertAfterSeconds", "Alert after", "How long it has to stay red first, so a spike doesn't alert.", Unit: "s", Slider: new(10, 600, 10)),
             new Setting("CheckForUpdates", "Check for updates", "Once a day. Nothing is downloaded or installed."),
-            new Setting("UpdateRepository", "Release page", "owner/repository on GitHub. Empty checks nothing.", Wide: true)),
+            new Setting("UpdateRepository", "Release page", "owner/repository on GitHub. Empty goes back to DeskMon's own at the next start.", Wide: true)),
 
         // No NeedsReload on the check: the hardware window re-reads every time
         // it opens, so a change already shows on the next open.

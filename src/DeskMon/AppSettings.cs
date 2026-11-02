@@ -248,10 +248,14 @@ public sealed class AppSettings
 
     /// <summary>
     /// Where releases are published, as "owner/repository" on GitHub - the
-    /// newest release's tag is the version, e.g. "v1.56.0". Empty checks
-    /// nothing.
+    /// newest release's tag is the version, e.g. "v1.56.0". DeskMon's own by
+    /// default: it used to start empty, which checked nothing, so nobody who
+    /// downloaded DeskMon ever heard of a new version. Off is
+    /// <see cref="CheckForUpdates"/>.
     /// </summary>
-    public string UpdateRepository { get; set; } = string.Empty;
+    public string UpdateRepository { get; set; } = OwnRepository;
+
+    private const string OwnRepository = "niclasthornqvist/DeskMon";
 
     /// <summary>
     /// The game the sessions window showed last, so it opens on it again -
@@ -897,7 +901,11 @@ public sealed class AppSettings
         ScreenshotHotkey ??= string.Empty;
         FpsOverlayHotkey ??= string.Empty;
         PingHost ??= string.Empty;
-        UpdateRepository ??= string.Empty;
+        // Blank as well as missing: settings.json saves every value, so anyone
+        // who ran an earlier version has the old empty default stored, and the
+        // new one above would never reach them.
+        if (string.IsNullOrWhiteSpace(UpdateRepository))
+            UpdateRepository = OwnRepository;
         UpdateAnnounced ??= string.Empty;
         SessionsGame ??= string.Empty;
 
