@@ -629,6 +629,9 @@ public sealed class NotesStore
         }
     }
 
+    /// <summary>Kept: GetInvalidFileNameChars copies the array per call, which was per character of every name in the list.</summary>
+    private static readonly char[] InvalidNameChars = Path.GetInvalidFileNameChars();
+
     /// <summary>
     /// Game names become file names, and games are full of characters Windows
     /// won't take - "The Witcher 3: Wild Hunt" has a colon. Keep it readable
@@ -640,7 +643,7 @@ public sealed class NotesStore
             return GeneralNotes;
 
         var cleaned = new string(gameName
-            .Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '-' : c)
+            .Select(c => Array.IndexOf(InvalidNameChars, c) >= 0 ? '-' : c)
             .ToArray());
 
         // Collapse the runs a replacement can leave behind, e.g. "Game - - X".

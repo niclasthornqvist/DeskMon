@@ -335,10 +335,20 @@ public sealed class FpsOverlayWindow : Window
         return null;
     }
 
+    /// <summary>The font asked for last and what it gave, as every changed reading asks.</summary>
+    private static (string Name, FontFamily Family)? _font;
+
     private static FontFamily SafeFont(string name)
     {
-        try { return new FontFamily(name); }
-        catch { return new FontFamily("Consolas"); }
+        if (_font is { } known && known.Name == name)
+            return known.Family;
+
+        FontFamily family;
+        try { family = new FontFamily(name); }
+        catch { family = new FontFamily("Consolas"); }
+
+        _font = (name, family);
+        return family;
     }
 
     /// <summary>
@@ -366,15 +376,37 @@ public sealed class FpsOverlayWindow : Window
         private Pen? _outline;
         private Rect _bounds = Rect.Empty;
 
+        // What stays the same from one reading to the next - see Draw.
+        private FontFamily? _family;
+        private double _size;
+        private double _pixelsPerDip;
+        private string? _unitName;
+        private Typeface? _bold;
+        private FormattedText? _unitText;
+        private Rect _digit = Rect.Empty;
+
         /// <param name="alert">A line under the figure, right-aligned with it; null for none.</param>
         public void Draw(string value, string unit, string? alert, FontFamily family, double size,
                          Brush valueBrush, Brush unitBrush, Brush alertBrush, double pixelsPerDip)
         {
-            var bold = new Typeface(family, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
-            var normal = new Typeface(family, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+            // Made once per font and size: this runs for every changed reading,
+            // up to twice a second over the game, and only the figure differs.
+            if (_unitText is null || !ReferenceEquals(_family, family) || _size != size
+                || _pixelsPerDip != pixelsPerDip || _unitName != unit)
+            {
+                _family = family;
+                _size = size;
+                _pixelsPerDip = pixelsPerDip;
+                _unitName = unit;
+                _bold = new Typeface(family, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+                _unitText = Text(unit, new Typeface(family, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                                 Math.Max(9, size * 0.38), pixelsPerDip);
+                _digit = Text("0", _bold, size, pixelsPerDip).BuildGeometry(new Point(0, 0)).Bounds;
+            }
 
+            var bold = _bold!;
+            var unitText = _unitText;
             var valueText = Text(value, bold, size, pixelsPerDip);
-            var unitText = Text(unit, normal, Math.Max(9, size * 0.38), pixelsPerDip);
 
             // The unit on the figure's baseline, a little way after it.
             _value = valueText.BuildGeometry(new Point(0, 0));
@@ -396,7 +428,7 @@ public sealed class FpsOverlayWindow : Window
             // The height of a digit rather than of whatever is shown, so the
             // dash before the first reading sits where the numbers will -
             // cropped to itself, it would be pulled up to the top edge.
-            var digit = Text("0", bold, size, pixelsPerDip).BuildGeometry(new Point(0, 0)).Bounds;
+            var digit = _digit;
             if (!bounds.IsEmpty && !digit.IsEmpty)
                 bounds = new Rect(bounds.X, digit.Top, bounds.Width, digit.Height);
 

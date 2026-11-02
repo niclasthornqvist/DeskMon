@@ -827,7 +827,9 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// </summary>
     private void ApplyDetails(SensorSnapshot snapshot)
     {
-        if (_metric.Details is null)
+        // Folded, nothing shows them: every line was read and formatted each
+        // tick for nobody. They catch up on the first tick after unfolding.
+        if (_metric.Details is null || !_isExpanded)
             return;
 
         try

@@ -111,7 +111,10 @@ internal static class AtomicFile
                 if (!Directory.Exists(root))
                     continue;
 
-                foreach (string file in Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories))
+                // Passed over rather than stopped at: one folder that can't be
+                // read used to end the sweep for the rest.
+                var walk = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+                foreach (string file in Directory.EnumerateFiles(root, "*.tmp", walk))
                 {
                     try
                     {

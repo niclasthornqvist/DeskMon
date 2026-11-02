@@ -88,7 +88,12 @@ public partial class ToolsPrompt : Window
     }
 
     /// <summary>The window has no title bar to drag it by, and it opens over whatever was being looked at.</summary>
-    private void Card_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => DragMove();
+    private void Card_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // DragMove throws if the button is already up by the time it runs.
+        try { DragMove(); }
+        catch (InvalidOperationException) { }
+    }
 
     private void No_Click(object sender, RoutedEventArgs e)
     {

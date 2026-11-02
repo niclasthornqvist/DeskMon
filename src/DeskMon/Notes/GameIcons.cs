@@ -63,17 +63,7 @@ public static class GameIcons
         string? gogKey = _settings is null ? null : GamePlaytime.RememberedGogKey(game, _settings);
         bool online = _settings?.OnlineGameArt ?? false;
 
-        // Its own thread, not the pool: an online icon can wait seconds on
-        // Steam, and the notes picker asks for every game's at once - on pool
-        // threads that held up the widget's sensor reads. See GameArt.OwnThread.
-        GameArt.OwnThread(() =>
-            {
-                // A few at a time: a list opening asks for every game at once,
-                // and online each one is a Steam login of its own.
-                LookupGate.Wait();
-                try { return Lookup(game, steamId, gogKey, online); }
-                finally { LookupGate.Release(); }
-            })
+        Queued(() => Lookup(game, steamId, gogKey, online))
             .ContinueWith(found =>
             {
                 if (found.Status == TaskStatus.RanToCompletion && found.Result is { } steam)
@@ -83,7 +73,60 @@ public static class GameIcons
         return icon;
     }
 
-    private static readonly System.Threading.SemaphoreSlim LookupGate = new(3);
+    /// <summary>
+    /// Lookups at once: a list opening asks for every game, and online each
+    /// one is a Steam login of its own.
+    /// </summary>
+    private const int MostLookups = 3;
+
+    private static readonly Queue<Action> Lookups = new();
+    private static int _lookupThreads;
+
+    /// <summary>
+    /// A lookup, in turn. On threads of their own, not the pool: an online
+    /// icon can wait seconds on Steam, and on pool threads that held up the
+    /// widget's sensor reads - see GameArt.OwnThread. A few that take the
+    /// lookups one after another, not one per game waiting its turn: a list of
+    /// a hundred games was a hundred threads, parked.
+    /// </summary>
+    private static Task<ImageSource?> Queued(Func<ImageSource?> work)
+    {
+        var done = new TaskCompletionSource<ImageSource?>();
+        lock (Lookups)
+        {
+            Lookups.Enqueue(() =>
+            {
+                try { done.SetResult(work()); }
+                catch (Exception ex) { done.SetException(ex); }
+            });
+
+            if (_lookupThreads < MostLookups)
+            {
+                _lookupThreads++;
+                GameArt.OwnThread(RunLookups);
+            }
+        }
+        return done.Task;
+    }
+
+    /// <summary>Takes lookups until none are left, then stops: the lists ask rarely, and a thread left waiting is the cost this avoids.</summary>
+    private static bool RunLookups()
+    {
+        while (true)
+        {
+            Action next;
+            lock (Lookups)
+            {
+                if (Lookups.Count == 0)
+                {
+                    _lookupThreads--;
+                    return true;
+                }
+                next = Lookups.Dequeue();
+            }
+            next();
+        }
+    }
 
     // --- Finding a real one --------------------------------------------------------
 

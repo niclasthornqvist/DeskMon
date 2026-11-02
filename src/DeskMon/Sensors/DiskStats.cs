@@ -121,20 +121,27 @@ internal sealed class DiskStats : IDisposable
         {
             // Fixed drives that are ready: not a card reader with no card,
             // not a DVD drive, not a network share that may take seconds to answer.
-            var drives = DriveInfo.GetDrives()
-                .Where(d => d.DriveType == DriveType.Fixed && d.IsReady && d.TotalSize > 0)
-                .OrderBy(d => d.Name)
-                .ToList();
-
-            var readings = drives
-                .Select(d =>
+            // One drive at a time: a drive failing mid-read threw for the whole
+            // list, and every drive's figures went stale because of the one.
+            var readings = new List<SensorReading>();
+            foreach (var d in DriveInfo.GetDrives().OrderBy(d => d.Name))
+            {
+                try
                 {
+                    if (d.DriveType != DriveType.Fixed || !d.IsReady || d.TotalSize <= 0)
+                        continue;
+
                     double used = 100.0 * (d.TotalSize - d.TotalFreeSpace) / d.TotalSize;
                     string name = d.Name.TrimEnd('\\');
-                    return new SensorReading($"{name} {MemoryUsers.Size(d.TotalFreeSpace)} free", used);
-                })
-                .ToArray();
-            _space = new Space(readings, readings.Length > 0 ? readings.Max(d => d.Value) : null);
+                    readings.Add(new SensorReading($"{name} {MemoryUsers.Size(d.TotalFreeSpace)} free", used));
+                }
+                catch
+                {
+                    // Left out of this read; back on the next.
+                }
+            }
+
+            _space = new Space(readings.ToArray(), readings.Count > 0 ? readings.Max(d => d.Value) : null);
         }
         catch
         {

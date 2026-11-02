@@ -552,7 +552,7 @@ public partial class VersionsWindow : PanelWindow
 
         // The runtime is always there: this window could not be on screen without it.
         Stats.Children.Add(RequirementCard(".NET 10", Status.Installed,
-                                           ".NET 8 Desktop Runtime\nNeeded to run DeskMon at all."));
+                                           ".NET 10 Desktop Runtime\nNeeded to run DeskMon at all."));
         Stats.Children.Add(RequirementCard("PAWNIO", StatusOf("PawnIO"),
                                            "PawnIO\nNeeded for the CPU temperature."));
 
@@ -613,7 +613,7 @@ public partial class VersionsWindow : PanelWindow
             card.Cursor = Cursors.Hand;
             card.MouseLeftButtonUp += (_, _) =>
             {
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(release.Url) { UseShellExecute = true }); }
+                try { WebLink.Open(release.Url); }
                 catch { /* no browser */ }
             };
             return card;

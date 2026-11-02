@@ -117,7 +117,7 @@ Everything can be changed in the settings window, and most changes apply at once
 
 **How do I remove it?** Untick **Start with Windows**, exit DeskMon and delete `DeskMon.exe`. Delete the two folders above as well if you don't want to keep your notes and sessions.
 
-**Does frame generation change the FPS?** With DLSS frame generation at 2x, DeskMon counts rendered frames, so it can show about half of what the game's own counter says.
+**Does frame generation change the figures?** With DLSS frame generation at 2x, the FPS matches what the game's own counter says. The 1% lows, jitter and stutters use rendered frames, so the lows can look far below the FPS.
 
 ---
 

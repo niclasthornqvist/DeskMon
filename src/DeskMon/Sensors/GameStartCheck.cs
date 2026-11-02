@@ -206,27 +206,17 @@ internal static class GameStartCheck
     /// <summary>The folder a game was started from, so its own helpers can be told apart from the rest.</summary>
     internal static string? FolderOf(int pid)
     {
+        // Not Process.MainModule: that opens the game to read its memory and
+        // lists its modules, which anti-cheat can object to and refuses - and
+        // refused, the game's own helpers were then blamed in the alerts.
         try
         {
-            using var process = Process.GetProcessById(pid);
-            return FolderOf(process);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string? FolderOf(Process process)
-    {
-        try
-        {
-            string? path = process.MainModule?.FileName;
+            string? path = Notes.SteamPlaytime.ExePath(pid);
             return path is null ? null : Path.GetDirectoryName(path) + Path.DirectorySeparatorChar;
         }
         catch
         {
-            return null;   // another architecture or protected - can't be the game's helper we'd recognise
+            return null;   // protected - can't be the game's helper we'd recognise
         }
     }
 }

@@ -36,30 +36,65 @@ public static class NotesRtf
     {
         try
         {
-            // Latin-1, a byte per character, not ASCII: WPF's RTF is 7-bit, but
-            // a file saved by another editor may not be, and ASCII would turn
-            // every byte past 127 into a question mark for good.
-            string text = Encoding.Latin1.GetString(rtf);
+            // Only the head as text: the colour table is there, and the rest
+            // can be megabytes of pictures, turned into strings and run through
+            // a regex on the UI thread at every save.
+            string head = Encoding.Latin1.GetString(rtf, 0, Math.Min(rtf.Length, ColourTableWithin));
 
-            int index = IndexInColourTable(text, normal);
+            int index = IndexInColourTable(head, normal);
             if (index < 0)
                 return rtf;
 
-            // The space after a control word is the delimiter and is swallowed
-            // by the reader, so it has to go with the word - leave it behind and
-            // it becomes a literal space in the middle of the notes. The
-            // lookahead keeps \cf1 from matching inside \cf12.
-            string stripped = Regex.Replace(text, $@"\\cf{index}(?![0-9]) ?", string.Empty);
-
             // The now-unused entry is left in the colour table: harmless, and
             // renumbering the table would mean rewriting every other reference.
-            return Encoding.Latin1.GetBytes(stripped);
+            return WithoutWord(rtf, Encoding.ASCII.GetBytes($@"\cf{index}"));
         }
         catch
         {
             // Never risk the notes over a cosmetic fix.
             return rtf;
         }
+    }
+
+    /// <summary>Far past any colour table. One further in only keeps its colour, which is cosmetic.</summary>
+    private const int ColourTableWithin = 256 * 1024;
+
+    /// <summary>
+    /// The file with every <paramref name="word"/> taken out, on the bytes so
+    /// no byte can change: a file saved by another editor may not be 7-bit.
+    /// The space after a control word is the delimiter and is swallowed by the
+    /// reader, so it has to go with the word - leave it behind and it becomes
+    /// a literal space in the middle of the notes. A digit after it means
+    /// another word: \cf1 is not to match inside \cf12.
+    /// </summary>
+    private static byte[] WithoutWord(byte[] rtf, byte[] word)
+    {
+        var result = new byte[rtf.Length];
+        int at = 0, written = 0;
+
+        while (true)
+        {
+            int found = rtf.AsSpan(at).IndexOf(word);
+            if (found < 0)
+                break;
+
+            int end = at + found + word.Length;
+            if (end < rtf.Length && rtf[end] is >= (byte)'0' and <= (byte)'9')
+            {
+                rtf.AsSpan(at, end - at).CopyTo(result.AsSpan(written));
+                written += end - at;
+                at = end;
+                continue;
+            }
+
+            rtf.AsSpan(at, found).CopyTo(result.AsSpan(written));
+            written += found;
+            at = end < rtf.Length && rtf[end] == (byte)' ' ? end + 1 : end;
+        }
+
+        rtf.AsSpan(at).CopyTo(result.AsSpan(written));
+        written += rtf.Length - at;
+        return result.AsSpan(0, written).ToArray();
     }
 
     /// <summary>

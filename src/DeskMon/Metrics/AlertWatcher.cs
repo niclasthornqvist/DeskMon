@@ -28,8 +28,8 @@ public sealed class AlertWatcher
 
     private readonly AppSettings _settings;
     private readonly List<(Metric Metric, string Name)> _watched;
-    private readonly Dictionary<Metric, DateTime> _redSince = new();
-    private readonly Dictionary<Metric, DateTime> _announced = new();
+    private readonly Dictionary<Metric, DateTime> _redSince = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Metric, DateTime> _announced = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// Readings already announced and not yet recovered - out of the red for
@@ -37,7 +37,7 @@ public sealed class AlertWatcher
     /// that stays 96 % full all day is said once, not every ten minutes; it
     /// is said again only after it has been dealt with and filled up again.
     /// </summary>
-    private readonly Dictionary<Metric, DateTime> _stillRed = new();
+    private readonly Dictionary<Metric, DateTime> _stillRed = new(ReferenceEqualityComparer.Instance);
 
     public AlertWatcher(AppSettings settings)
     {

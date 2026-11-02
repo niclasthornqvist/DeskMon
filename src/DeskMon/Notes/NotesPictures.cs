@@ -348,9 +348,11 @@ internal sealed class NotesPictures
         /// <summary>
         /// This picture's group in the RTF, learned from a full save - see
         /// NotesPictures.Serialise - and what it was learned for: a preview
-        /// swapped by mark-up, or a picture resized, is learned again.
+        /// swapped by mark-up, or a picture resized, is learned again. Bytes,
+        /// as in the file: as a string each took twice the room, for every
+        /// picture in the notes for as long as they were open.
         /// </summary>
-        public string? RtfGroup { get; set; }
+        public byte[]? RtfGroup { get; set; }
         public ImageSource? RtfGroupOf { get; set; }
         public double RtfGroupWidth { get; set; }
         public double RtfGroupHeight { get; set; }
@@ -384,7 +386,14 @@ internal sealed class NotesPictures
 
         // Edits can take a picture out - Backspace, cut - or bring one back:
         // Undo, paste. Its outline has to go with it, or arrive with it.
-        editor.TextChanged += (_, _) => FrameSoon();
+        // Not for a plain keystroke: one character added can't be a picture,
+        // which takes three positions, and walking the whole document for
+        // that ran on every pause in typing.
+        editor.TextChanged += (_, e) =>
+        {
+            if (e.Changes.Any(change => change.RemovedLength > 0 || change.AddedLength > 1))
+                FrameSoon();
+        };
     }
 
     /// <summary>
@@ -430,12 +439,17 @@ internal sealed class NotesPictures
 
         // Framed, and given its bin if it is a screenshot with a file of its
         // own - the link the bin's click deletes through.
+        var framed = _frames.Select(entry => entry.Image).ToHashSet();
+        foreach (var (image, _) in images)
+            if (!framed.Contains(image))
+                Framed(image);
+
+        // By picture, once: looked up in the list per picture this went as
+        // the square of the pictures in the notes.
+        var frames = _frames.ToDictionary(entry => entry.Image, entry => entry.Frame);
         foreach (var (image, link) in images)
-        {
-            Framed(image);
-            if (_frames.Find(entry => entry.Image == image).Frame is { } frame)
+            if (frames.TryGetValue(image, out var frame))
                 frame.Deletable = FullSizeFile(link) is not null;
-        }
     }
 
     private Frame? _hovered;
@@ -777,7 +791,7 @@ internal sealed class NotesPictures
             foreach (var (index, group) in learned)
             {
                 var picture = tracked[index];
-                picture.RtfGroup = group;
+                picture.RtfGroup = System.Text.Encoding.Latin1.GetBytes(group);
                 picture.RtfGroupOf = picture.Stored;
                 picture.RtfGroupWidth = picture.StoredWidth;
                 picture.RtfGroupHeight = picture.StoredHeight;
@@ -792,28 +806,32 @@ internal sealed class NotesPictures
     /// <summary>The stand-in save with each stand-in's group replaced by its picture's. Null if a stand-in can't be placed.</summary>
     private static byte[]? Splice(byte[] quick, List<Picture> tracked)
     {
+        // The text is only for finding the groups: Latin-1 is a byte per
+        // character, so its offsets are the bytes'. The result goes straight
+        // together as bytes - through a string, every save made megabytes of
+        // them twice over, on the UI thread, in notes full of pictures.
         string text = System.Text.Encoding.Latin1.GetString(quick);
-        var result = new System.Text.StringBuilder(text.Length + tracked.Sum(p => p.RtfGroup!.Length));
+        using var result = new MemoryStream(quick.Length + tracked.Sum(p => p.RtfGroup!.Length));
         int at = 0, placed = 0;
 
         foreach (var (start, end) in PictGroups(text))
         {
-            result.Append(text, at, start - at);
+            result.Write(quick, at, start - at);
             if (StandIn(text[start..end]) is int index && index < tracked.Count)
             {
-                result.Append(tracked[index].RtfGroup);
+                result.Write(tracked[index].RtfGroup!);
                 placed++;
             }
             else
             {
-                result.Append(text, start, end - start);
+                result.Write(quick, start, end - start);
             }
             at = end;
         }
-        result.Append(text, at, text.Length - at);
+        result.Write(quick, at, quick.Length - at);
 
         // Every picture accounted for exactly once, or this isn't the save it should be.
-        return placed == tracked.Count ? System.Text.Encoding.Latin1.GetBytes(result.ToString()) : null;
+        return placed == tracked.Count ? result.ToArray() : null;
     }
 
     /// <summary>Which stand-in a picture group is, from its data; null for a real picture.</summary>

@@ -119,10 +119,22 @@ public sealed class DetailRow : INotifyPropertyChanged, IPanelRow
         Key = reading.Key;
 
         if (reading.Text is { } text)
+        {
             Value = text;
+            _shown = double.NaN;   // what is on screen isn't a number SetValue can compare with
+        }
         else
+        {
             SetValue(reading.Value);
+        }
     }
+
+    /// <summary>
+    /// The number the row shows, so an unchanged one builds no string. Most of
+    /// these change only every few seconds, and were formatted every tick.
+    /// NaN for none, which equals nothing.
+    /// </summary>
+    private double _shown = double.NaN;
 
     /// <summary>
     /// One decimal, unlike the row above. These are for comparing against
@@ -132,9 +144,14 @@ public sealed class DetailRow : INotifyPropertyChanged, IPanelRow
     {
         if (reading is not double value || double.IsNaN(value))
         {
+            _shown = double.NaN;
             Value = "n/a";
             return;
         }
+
+        if (value == _shown)
+            return;
+        _shown = value;
 
         string text = value.ToString("0.0", CultureInfo.InvariantCulture);
         Value = _unit.Length > 0 ? text + " " + _unit : text;

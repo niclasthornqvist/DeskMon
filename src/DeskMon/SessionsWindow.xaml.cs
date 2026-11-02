@@ -512,6 +512,7 @@ public partial class SessionsWindow : PanelWindow
                 // way, which would fill them in again. The banners stay:
                 // GameArt keeps those whatever happens here.
                 _selectionTicket++;
+                _tableTicket++;   // and the rows still being added to the table
                 Rows.Children.Clear();
                 _sessionRows.Clear();
                 Chart.Children.Clear();
@@ -1077,7 +1078,7 @@ public partial class SessionsWindow : PanelWindow
 
         try
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            WebLink.Open(url);
         }
         catch (Exception ex)
         {
@@ -1982,7 +1983,7 @@ public partial class SessionsWindow : PanelWindow
         Rows.Children.Clear();
         _sessionRows.Clear();
         int index = 0;
-        foreach (var item in Sorted(items, sortBy, sort.Descending))
+        void AddRow(T item)
         {
             // Every other row on a faint stripe, in place of the hairline that
             // ran between them: across a dozen columns and their gaps the eye
@@ -2087,7 +2088,37 @@ public partial class SessionsWindow : PanelWindow
 
             Rows.Children.Add(row);
         }
+
+        // What fills the window at once and the rest behind it, a batch at a
+        // time, under anything else the UI thread has to do: about twenty
+        // elements a row, all built in one go, held every window for as long
+        // on each sort of a long-played game.
+        var sorted = Sorted(items, sortBy, sort.Descending).ToList();
+        int ticket = ++_tableTicket;
+        int next = 0;
+
+        void AddMore()
+        {
+            if (ticket != _tableTicket)
+                return;   // sorted again or closed: another pass has the table
+
+            int batch = next == 0 ? FirstRows : RowsAtATime;
+            foreach (var item in sorted.Skip(next).Take(batch))
+                AddRow(item);
+            next += batch;
+
+            if (next < sorted.Count)
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(AddMore));
+        }
+
+        AddMore();
     }
+
+    /// <summary>Rows built at once, more than any window shows, and how many each pass adds after that.</summary>
+    private const int FirstRows = 80, RowsAtATime = 40;
+
+    /// <summary>Counts tables, so rows still being added stop when a new table replaces them.</summary>
+    private int _tableTicket;
 
     /// <summary>
     /// Headings that sort when clicked, the sorted one brighter and with an

@@ -200,27 +200,29 @@ public sealed class FrameStats
         _menuAboveFps = menuAboveFps is double menu && double.IsFinite(menu) && menu > 0 ? menu : null;
     }
 
-    public void Add(double frameMs)
+    /// <param name="frameMs">How long the frame took.</param>
+    /// <param name="shown">How many frames it put on screen: 2 for a frame generation pair - see <see cref="Generated"/>.</param>
+    public void Add(double frameMs, int shown = 1)
     {
         if (frameMs <= 0 || double.IsNaN(frameMs))
             return;
 
         if (!_settled)
         {
-            Hold(frameMs);
+            Hold(frameMs, shown);
             return;
         }
 
         if (_lockFps is null && _menuAboveFps is null)
         {
-            Count(frameMs);
+            Count(frameMs, shown);
             return;
         }
 
         // Settled, with a lock or a menu cut-off: judged a second at a time,
         // as while unsettled.
         _playSecond ??= new FrameStats();
-        _playSecond.Count(frameMs);
+        _playSecond.Count(frameMs, shown);
         if (AtLock(frameMs))
             _secondAtLock++;
 
@@ -236,18 +238,35 @@ public sealed class FrameStats
             MenuMs += _playSecond.TotalMs;
         else
             Add(_playSecond);
-        _playSecond = new FrameStats();
+        _playSecond.Clear();
         _secondAtLock = 0;
     }
 
+    /// <summary>
+    /// Empties a second or a streak for reuse. Every game now has a menu
+    /// cut-off, so a new one each second was 6.4 KB a second on PresentMon's
+    /// thread for as long as it played. Add copies, so nothing still points here.
+    /// </summary>
+    private void Clear()
+    {
+        Array.Clear(_counts);
+        Array.Clear(_sums);
+        Frames = 0;
+        Generated = 0;
+        TotalMs = 0;
+        _paced = 0;
+        _pacedMs = 0;
+        _squares = 0;
+    }
+
     /// <summary>A frame while unsettled: into the second in progress, and each whole second judged on its own.</summary>
-    private void Hold(double frameMs)
+    private void Hold(double frameMs, int shown)
     {
         _loading ??= new FrameStats();
         _streak ??= new FrameStats();
         _second ??= new FrameStats();
 
-        _second.Count(frameMs);
+        _second.Count(frameMs, shown);
         if (frameMs >= LoadingFrameMs)
             _secondClean = false;
         if (AtLock(frameMs))
@@ -267,7 +286,7 @@ public sealed class FrameStats
         if (!locked && InMenu(_second))
         {
             MenuMs += _second.TotalMs;
-            _second = new FrameStats();
+            _second.Clear();
             _secondClean = true;
             return;
         }
@@ -289,10 +308,10 @@ public sealed class FrameStats
             // still the loading screen.
             _loading.Add(_streak);
             _loading.Add(_second);
-            _streak = new FrameStats();
+            _streak.Clear();
             _cleanSeconds = 0;
         }
-        _second = new FrameStats();
+        _second.Clear();
         _secondClean = true;
 
         if (_cleanSeconds >= SettleSeconds)
@@ -326,8 +345,18 @@ public sealed class FrameStats
         _loading = _streak = _second = null;
     }
 
-    private void Count(double frameMs)
+    /// <summary>
+    /// Frames made by frame generation, on top of <see cref="Frames"/>, which
+    /// are the rendered ones. Counted apart as they belong in the average FPS,
+    /// to match what is on screen, and not in the lows, jitter or stutters:
+    /// a generated frame arrives 0.2 ms after a real one and isn't a frame time.
+    /// </summary>
+    public long Generated { get; private set; }
+
+    private void Count(double frameMs, int shown = 1)
     {
+        Generated += shown - 1;
+
         int bin = Math.Min(Bins, (int)(frameMs / BinMs));
         _counts[bin]++;
         _sums[bin] += frameMs;
@@ -357,6 +386,7 @@ public sealed class FrameStats
         }
 
         Frames += other.Frames;
+        Generated += other.Generated;
         TotalMs += other.TotalMs;
         _paced += other._paced;
         _pacedMs += other._pacedMs;
@@ -395,7 +425,7 @@ public sealed class FrameStats
     }
 
     /// <summary>The frame rate over every frame: frame times averaged, then inverted - not an average of rates.</summary>
-    public double? AverageFps => Frames > 0 && TotalMs > 0 ? 1000.0 * Frames / TotalMs : null;
+    public double? AverageFps => Frames > 0 && TotalMs > 0 ? 1000.0 * (Frames + Generated) / TotalMs : null;
 
     /// <summary>The frame rate across the slowest 1% of the session's frames.</summary>
     /// <remarks>

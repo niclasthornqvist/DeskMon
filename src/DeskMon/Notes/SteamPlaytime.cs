@@ -73,7 +73,7 @@ public static class SteamPlaytime
     /// </summary>
     private static Dictionary<string, string> InstalledByName()
     {
-        var libraries = Libraries().ToList();
+        var libraries = Libraries();
         string stamp = string.Join("|", libraries.Select(folder =>
             Directory.Exists(folder) ? Directory.GetLastWriteTimeUtc(folder).Ticks.ToString(CultureInfo.InvariantCulture) : "-"));
 
@@ -107,8 +107,34 @@ public static class SteamPlaytime
     internal static string Simplified(string name)
         => new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
+    private static readonly object LibrariesLock = new();
+    private static (string Path, DateTime Written, List<string> Folders)? _libraries;
+
+    /// <summary>
+    /// <see cref="ReadLibraries"/>, kept until Steam writes its list again.
+    /// Asked once per game by a list opening, and the file was parsed every time.
+    /// </summary>
+    private static List<string> Libraries()
+    {
+        if (SteamFolder() is not { } steam)
+            return new List<string>();
+
+        string list = Path.Combine(steam, "steamapps", "libraryfolders.vdf");
+        DateTime written = File.GetLastWriteTimeUtc(list);
+
+        lock (LibrariesLock)
+        {
+            if (_libraries is { } known && known.Path == list && known.Written == written)
+                return known.Folders;
+
+            var folders = ReadLibraries().ToList();
+            _libraries = (list, written, folders);
+            return folders;
+        }
+    }
+
     /// <summary>Every library's steamapps folder, the main one first, as libraryfolders.vdf lists them.</summary>
-    private static IEnumerable<string> Libraries()
+    private static IEnumerable<string> ReadLibraries()
     {
         if (SteamFolder() is not { } steam)
             yield break;
@@ -191,39 +217,45 @@ public static class SteamPlaytime
         if (config is null)
             return null;
 
-        var root = ParsedConfig(config);
-
-        // UserLocalConfigStore > Software > Valve > Steam > apps > <appid>.
-        // The same app id turns up elsewhere in the file too (cloud, friends),
-        // so the path is followed rather than searched for.
-        var app = Child(Child(Child(Child(Child(Child(root,
-                    "UserLocalConfigStore"), "Software"), "Valve"), "Steam"), "apps"), appId);
-
-        return app is not null
-               && Value(app, "Playtime") is { } minutes
+        return Playtimes(config).TryGetValue(appId, out string? minutes)
                && long.TryParse(minutes, NumberStyles.None, CultureInfo.InvariantCulture, out long m)
             ? TimeSpan.FromMinutes(m)
             : null;
     }
 
     private static readonly object CacheLock = new();
-    private static (string Path, DateTime Written, Dictionary<string, object> Root)? _config;
+    private static (string Path, DateTime Written, Dictionary<string, string> Minutes)? _config;
 
     /// <summary>
-    /// localconfig.vdf parsed, kept until Steam writes it again. The history's
-    /// All games view asks for every game in turn, and parsing the same 100 KB
-    /// once per game would be the slow part of opening it.
+    /// Each app's minutes from localconfig.vdf, kept until Steam writes it
+    /// again. The history's All games view asks for every game in turn, and
+    /// parsing the same 100 KB once per game would be the slow part of opening
+    /// it. Only the minutes are kept: the whole parsed file stayed in memory
+    /// for good, for the one figure ever read from it.
     /// </summary>
-    private static Dictionary<string, object> ParsedConfig(FileInfo file)
+    private static Dictionary<string, string> Playtimes(FileInfo file)
     {
         lock (CacheLock)
         {
             if (_config is { } cached && cached.Path == file.FullName && cached.Written == file.LastWriteTimeUtc)
-                return cached.Root;
+                return cached.Minutes;
 
             var root = Vdf.Parse(File.ReadAllText(file.FullName, Encoding.UTF8));
-            _config = (file.FullName, file.LastWriteTimeUtc, root);
-            return root;
+
+            // UserLocalConfigStore > Software > Valve > Steam > apps > <appid>.
+            // The same app id turns up elsewhere in the file too (cloud, friends),
+            // so the path is followed rather than searched for.
+            var apps = Child(Child(Child(Child(Child(root,
+                         "UserLocalConfigStore"), "Software"), "Valve"), "Steam"), "apps");
+
+            var minutes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (apps is not null)
+                foreach (var (id, value) in apps)
+                    if (value is Dictionary<string, object> app && Value(app, "Playtime") is { } played)
+                        minutes[id] = played;
+
+            _config = (file.FullName, file.LastWriteTimeUtc, minutes);
+            return minutes;
         }
     }
 

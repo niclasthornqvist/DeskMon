@@ -99,6 +99,24 @@ internal static class Screenshot
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
+        // Beside the target and renamed over it, as AtomicFile does and with
+        // the name its sweep clears: written straight to the final name, a
+        // crash left a cut-off picture that looked like a real one.
+        string temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            Encode(bitmap, temp, quality);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(temp); } catch { }
+            throw;
+        }
+    }
+
+    private static void Encode(Drawing.Bitmap bitmap, string path, int quality)
+    {
         if (quality >= 100)
         {
             bitmap.Save(path, Drawing.Imaging.ImageFormat.Png);

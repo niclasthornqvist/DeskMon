@@ -125,7 +125,7 @@ public partial class MainWindow : Window
     // ends there and starts again when you come back. A session is one sitting
     // with one game, from launch to quit, however often you tab away in
     // between - and that is the only thing worth a line in the history.
-    private Process? _sessionProcess;
+    private ProcessWatch? _sessionProcess;
     private string? _sessionGame;
     private int _sessionPid;
     private DateTime _sessionStartedAt;
@@ -400,7 +400,7 @@ public partial class MainWindow : Window
         // with custom ones set the notes and sessions seem to have vanished.
         if (_settings.NotLoaded)
             _tray.Notify("DeskMon", "settings.json couldn't be read, so this run uses the default settings and folders. " +
-                                    "The file is unchanged - restart DeskMon to load it.", warning: true);
+                                    "The file is unchanged - restart DeskMon to load it. If this comes back, a value in it is mistyped: see error.log.", warning: true);
 
         _heldNotes.Tick += (_, _) => AddHeldNotes();
         if (_notesStore.HeldNotes().Count > 0)
@@ -1392,7 +1392,7 @@ public partial class MainWindow : Window
         // moment it exited.
         if (_sessionProcess is not null && _sessionExitedAt is null && SessionProcessExited())
         {
-            _sessionExitedAt = ExitTimeOf(_sessionProcess) ?? DateTime.Now;
+            _sessionExitedAt = _sessionProcess.ExitTime ?? DateTime.Now;
             LogExitedSession();
         }
 
@@ -1666,7 +1666,15 @@ public partial class MainWindow : Window
             // compacting collection, too costly to repeat each time. After the
             // tick rather than in it, on top of everything else a game's start
             // does there, and the rows' first draw.
-            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(TrimMemory));
+            //
+            // Skipped on a busy disk, as the young collection in the tick is:
+            // a game start usually is one, and a smaller forced collection
+            // took 22 s on such a disk with every window stopped behind it.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (!_diskBusy)
+                    TrimMemory();
+            }));
         }
         UpdateTooltip();
 
@@ -2176,14 +2184,8 @@ public partial class MainWindow : Window
         _sessionPid = pid;
         _sessionExitedAt = null;
 
-        try
-        {
-            _sessionProcess = Process.GetProcessById(pid);
-        }
-        catch
-        {
-            _sessionProcess = null;   // see the fallback in StopTrackingGame
-        }
+        // Null if it has gone already: see the fallback in StopTrackingGame.
+        _sessionProcess = ProcessWatch.Open(pid);
     }
 
     /// <summary>
@@ -2200,8 +2202,6 @@ public partial class MainWindow : Window
         if (_sessionPid == 0)
             return;
 
-        // Ended properly, logged or not: there is nothing left to recover.
-        _sessions.ClearOpenSession();
         _lastCheckpoint = default;
 
         // Whatever the monitor still holds belongs to this session - usually
@@ -2216,7 +2216,7 @@ public partial class MainWindow : Window
         // the machine was locked is only noticed when polling resumes, and the
         // hours in between were not time played. Nor were the minutes spent
         // waiting to see whether it would restart.
-        var ended = _sessionExitedAt ?? ExitTimeOf(_sessionProcess) ?? DateTime.Now;
+        var ended = _sessionExitedAt ?? _sessionProcess?.ExitTime ?? DateTime.Now;
 
         // A game that had already quit was not cut short by DeskMon closing
         // while its session waited out RelaunchGrace.
@@ -2242,22 +2242,24 @@ public partial class MainWindow : Window
         // LogExitedSession. A second line now would log the session twice.
         bool alreadyLogged = _loggedLine is not null;
         _loggedLine = null;
-        if (alreadyLogged)
-            return;
 
-        if (!_settings.LogSessionToFile || game is null)
-            return;   // nothing to file it under, or switched off
+        // Nothing to file it under, switched off, or too short to count.
+        if (!alreadyLogged && _settings.LogSessionToFile && game is not null
+            && Elapsed(started, ended) >= ShortestLoggedSession)
+        {
+            // Queued, not written here: this runs in the tick, and a busy disk
+            // froze every window as the game quit. The windows redraw once it lands.
+            // The timeline first, so it is on disk by the time the line's
+            // RefreshAfterSession redraws the history and looks for it.
+            if (timeline is not null)
+                _sessions.SaveTimelineLater(game, timeline);
+            _sessions.AppendLater(game, DescribeSession(started, ended, frames, extras, note), RefreshAfterSession);
+        }
 
-        if (Elapsed(started, ended) < ShortestLoggedSession)
-            return;
-
-        // Queued, not written here: this runs in the tick, and a busy disk
-        // froze every window as the game quit. The windows redraw once it lands.
-        // The timeline first, so it is on disk by the time the line's
-        // RefreshAfterSession redraws the history and looks for it.
-        if (timeline is not null)
-            _sessions.SaveTimelineLater(game, timeline);
-        _sessions.AppendLater(game, DescribeSession(started, ended, frames, extras, note), RefreshAfterSession);
+        // Ended properly, logged or not: there is nothing left to recover.
+        // Last, behind the append on the same writer, as in LogExitedSession:
+        // first, a flush timing out at exit lost the checkpoint and the line both.
+        _sessions.ClearOpenSession();
     }
 
     /// <summary>
@@ -2609,21 +2611,7 @@ public partial class MainWindow : Window
     /// exited" would end every session on the next tick.
     /// </summary>
     private bool SessionProcessExited()
-        => _sessionProcess is null || HasExited(_sessionProcess);
-
-    /// <summary>When the process ended, or null while it is still running.</summary>
-    private static DateTime? ExitTimeOf(Process? process)
-    {
-        try
-        {
-            // ExitTime throws on a live process, so HasExited has to come first.
-            return process is { HasExited: true } ? process.ExitTime : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+        => _sessionProcess is null || _sessionProcess.HasExited;
 
     /// <summary>
     /// The one line that records a session: when it ran, for how long, its
@@ -3383,7 +3371,7 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(url))
             return;
-        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        try { WebLink.Open(url); }
         catch { /* no browser to open it in */ }
     }
 
@@ -3556,6 +3544,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Starts or stops PresentMon for a game already running, when a setting
+    /// changed what it should be doing. Asked on every keystroke in Settings,
+    /// and does nothing unless that differs from what is running. The frames so
+    /// far go to the session first, as Stop forgets them.
+    /// </summary>
+    private void ApplyMeasuring()
+    {
+        if (!_inGame)
+            return;
+
+        bool wanted = _settings.MeasureFps && !_settings.PauseWhenFullscreen;
+        if (wanted && _fps.TargetPid is null)
+        {
+            _fps.Start(_gamePid, _settings.PresentMonPath, LoadingLockFor(_sessionGame), MenuAboveFor(_sessionGame));
+        }
+        else if (!wanted && _fps.TargetPid is not null)
+        {
+            HarvestFrames();
+            _fps.Stop();
+        }
+    }
+
+    /// <summary>
     /// Re-reads the settings into the running widget, for the settings window.
     ///
     /// Everything here is cheap and idempotent, so it can run on every
@@ -3565,8 +3576,10 @@ public partial class MainWindow : Window
     /// column widths.
     ///
     /// The polling intervals need nothing: the tick works them out from the
-    /// settings every time round. Neither do MeasureFps, PresentMonPath,
-    /// NotGames or PauseWhenFullscreen, which are read where they are used.
+    /// settings every time round. Neither do PresentMonPath or NotGames, which
+    /// are read where they are used. MeasureFps and PauseWhenFullscreen are in
+    /// <see cref="ApplyMeasuring"/>: only a game starting read them, so a
+    /// change waited for the next game.
     /// </summary>
     private void ApplySettings()
     {
@@ -3581,6 +3594,8 @@ public partial class MainWindow : Window
         Panel.BorderBrush = _theme.Border;
         _theme.Dress(Panel);
         _backdrop.Strength = _settings.WidgetBackdrop;
+        UpdateDrift();   // a strength of 0 or back from it
+        ApplyMeasuring();
         ApplyVersionStyle();
 
         foreach (var entry in _allItems)
@@ -4165,6 +4180,12 @@ public partial class MainWindow : Window
         var app = Application.Current as App;
         app?.ReleaseSingleInstanceLock();
 
+        // Stopped and waited for before the new copy starts: PresentMon's
+        // trace goes by one shared name, so this copy's shutdown could end the
+        // new copy's trace. Clears the frames too, so none are left to count
+        // in the session that carries on if the start below fails.
+        _fps.StopAndWait();
+
         // Started before anything is closed: if Windows won't start it, this
         // copy carries on as it was - lock taken back, windows still its own -
         // rather than running on half shut down, with a second copy free to
@@ -4181,7 +4202,10 @@ public partial class MainWindow : Window
             // Carrying on: the game still running gets a session again,
             // since the one above was ended for a restart that didn't happen.
             if (_inGame && _gamePid != 0)
+            {
                 BeginOrResumeSession(_gamePid, _gameName);
+                ApplyMeasuring();
+            }
             _tray?.Notify("DeskMon", "Couldn't restart to reload the settings: " + ex.Message, warning: true);
             return;
         }
@@ -4414,7 +4438,16 @@ public partial class MainWindow : Window
 
             bool paused = _locked || _disconnected || _asleep;
             if (paused)
+            {
                 _needsPrime = true;
+
+                // Stopped here because the tick stops with the pause, and
+                // these timers only hear from it: they went on pinging and
+                // sampling all through a locked PC. The next tick starts them.
+                _ping.Run(null);
+                _router.Run(null);
+                _busyWatch.Run(0);
+            }
 
             _paused = paused;
             UpdateDrift();
@@ -4426,8 +4459,10 @@ public partial class MainWindow : Window
     /// redraws the whole see-through widget, and it went on stepping ten
     /// times a second while the widget was hidden from the tray, or the PC
     /// was locked or asleep - as well as over a game, where it already stopped.
+    /// Nor with the picture set to 0: every step redrew nothing to see.
     /// </summary>
-    private void UpdateDrift() => _backdrop.Drifting = !_inGame && !_userHidden && !_paused;
+    private void UpdateDrift()
+        => _backdrop.Drifting = !_inGame && !_userHidden && !_paused && _settings.WidgetBackdrop > 0;
 
     private void OnClosed(object? sender, EventArgs e)
     {

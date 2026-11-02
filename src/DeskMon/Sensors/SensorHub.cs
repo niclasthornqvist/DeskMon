@@ -239,6 +239,14 @@ public sealed class SensorHub : IDisposable
         foreach (var hardware in _polled)
             hardware.Update();
 
+        // The library keeps a day of every sensor's values by default, and
+        // nothing here reads them: megabytes held for no one in a program
+        // that runs all day. Each device's sub-devices have sensors too.
+        foreach (var hardware in _polled)
+            foreach (var part in hardware.SubHardware.Prepend(hardware))
+                foreach (var sensor in part.Sensors)
+                    sensor.ValuesTimeWindow = TimeSpan.Zero;
+
         if (cpu is not null)
         {
             // AMD reports "Core (Tctl/Tdie)", Intel reports "CPU Package"; the

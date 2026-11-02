@@ -32,9 +32,12 @@ internal static class FreezeWatchdog
     private static readonly TimeSpan PingEvery = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// A gap this long between two of the watchdog's own checks means the PC
-    /// was asleep, not that the widget froze: the tick count keeps running
-    /// through sleep, so without this every wake-up would look like a freeze.
+    /// Time missing this long between two of the watchdog's own checks means
+    /// the PC was asleep, not that the widget froze: the tick count keeps
+    /// running through sleep, so without this every wake-up would look like a
+    /// freeze. Measured against the clock that stops for sleep, not from the
+    /// gap alone: a freeze of the whole process stops this thread too, and
+    /// that gap was taken for sleep, so the worst freezes went unreported.
     /// </summary>
     private static readonly TimeSpan SleptAfter = TimeSpan.FromSeconds(5);
 
@@ -99,6 +102,7 @@ internal static class FreezeWatchdog
     private static void Watch(Dispatcher ui)
     {
         long lastCheck = Environment.TickCount64;
+        long lastAwake = AwakeMs();
         long frozenSince = 0;
         bool frozen = false;
         int dumps = 0;
@@ -108,9 +112,11 @@ internal static class FreezeWatchdog
             Thread.Sleep(PingEvery);
 
             long now = Environment.TickCount64;
-            if (now - lastCheck > SleptAfter.TotalMilliseconds)
+            long awake = AwakeMs();
+            if ((now - lastCheck) - (awake - lastAwake) > SleptAfter.TotalMilliseconds)
                 Interlocked.Exchange(ref _answeredAt, now);   // back from sleep - start the clock again
             lastCheck = now;
+            lastAwake = awake;
 
             long silent = now - Interlocked.Read(ref _answeredAt);
 
@@ -173,6 +179,18 @@ internal static class FreezeWatchdog
             App.Log("freeze", $"The widget hasn't answered for {silent / 1000} s. {WriteDump(dumps)}");
         }
     }
+
+    /// <summary>Milliseconds the PC has been awake: the time since boot, less sleep and hibernation.</summary>
+    private static long AwakeMs()
+    {
+        // In units of 100 ns. The tick count's own ms would do as a fallback,
+        // but then nothing counts as sleep, which is the safe way to be wrong.
+        QueryUnbiasedInterruptTime(out ulong units);
+        return (long)(units / 10_000);
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern bool QueryUnbiasedInterruptTime(out ulong units);
 
     /// <summary>
     /// "RAM free 15.2 GB; DeskMon 168 MB in memory." The freeze during an

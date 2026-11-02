@@ -782,6 +782,13 @@ public sealed class AppSettings
             // used to cost every setting in it.
             KeepUnreadableCopy();
             App.Log("reading settings.json", ex);
+
+            // Valid JSON with one bad value in it - a word where a number
+            // goes - parsed fine at save time, so that save wrote this run's
+            // defaults over the place, order, targets and ids it still held.
+            // Marked like a held file instead, so those are left alone.
+            if (ReadFileAsJson(out _) is not null)
+                return new AppSettings { _notLoaded = true };
         }
         return new AppSettings();
     }
@@ -879,8 +886,8 @@ public sealed class AppSettings
         SessionColumns ??= DefaultSessionColumns();
         // Rebuilt rather than only null-checked: the deserialiser makes a
         // case-sensitive one, and the game names in the logs vary in case.
-        GameTargetFps = new Dictionary<string, double>(GameTargetFps ?? new(), StringComparer.OrdinalIgnoreCase);
-        GameLoadingFps = new Dictionary<string, double>(GameLoadingFps ?? new(), StringComparer.OrdinalIgnoreCase);
+        GameTargetFps = IgnoringCase(GameTargetFps);
+        GameLoadingFps = IgnoringCase(GameLoadingFps);
         PlaytimeFromSaves ??= DefaultPlaytimeFromSaves();
         // Case-insensitive like GameTargetFps, and for the same reason: the
         // lookups ignore case, the deserialiser's dictionary didn't, so
@@ -936,9 +943,9 @@ public sealed class AppSettings
     /// A copy that ignores case. Not the copying constructor: it throws on two
     /// keys differing only in case, which is what an older file can hold.
     /// </summary>
-    private static Dictionary<string, string> IgnoringCase(Dictionary<string, string>? source)
+    private static Dictionary<string, T> IgnoringCase<T>(Dictionary<string, T>? source)
     {
-        var copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var copy = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
         if (source is not null)
             foreach (var (key, value) in source)
                 copy[key] = value;

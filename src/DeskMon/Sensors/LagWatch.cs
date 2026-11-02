@@ -89,7 +89,14 @@ internal sealed class LagWatch
     {
         try
         {
-            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
+            // Windows' own answer first, so the list's order doesn't decide.
+            // Stable, so the rest stay as listed for a best adapter with no
+            // gateway of its own - a VPN - where the first with one is the router.
+            int best = GetBestInterface(InternetAddress, out uint index) == 0 ? (int)index : -1;
+            var adapters = NetworkInterface.GetAllNetworkInterfaces()
+                .OrderByDescending(adapter => IsAdapter(adapter, best));
+
+            foreach (var adapter in adapters)
             {
                 if (adapter.OperationalStatus != OperationalStatus.Up
                     || adapter.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
@@ -108,4 +115,22 @@ internal sealed class LagWatch
         }
         return null;
     }
+
+    private static bool IsAdapter(NetworkInterface adapter, int index)
+    {
+        try
+        {
+            return adapter.GetIPProperties().GetIPv4Properties()?.Index == index;
+        }
+        catch (NetworkInformationException)
+        {
+            return false;   // no IPv4 on it
+        }
+    }
+
+    /// <summary>1.1.1.1 as GetBestInterface wants it. Only a route is looked up; nothing is sent.</summary>
+    private static readonly uint InternetAddress = BitConverter.ToUInt32(new byte[] { 1, 1, 1, 1 });
+
+    [System.Runtime.InteropServices.DllImport("iphlpapi.dll")]
+    private static extern int GetBestInterface(uint destination, out uint index);
 }

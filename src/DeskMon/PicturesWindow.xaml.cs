@@ -181,7 +181,14 @@ public partial class PicturesWindow : PanelWindow
         // been deleted from the notes since, which changes what is unused.
         _notes.CurrentGameChanged += RefreshIfShown;
         _notes.PicturesChanged += RefreshIfShown;
-        Activated += (_, _) => Refresh();
+        Activated += async (_, _) =>
+        {
+            try { await _notes.ReadPictureUseAsync(); }
+            catch (Exception ex) { App.Log("reading which pictures the notes use", ex); }
+
+            // Hidden during that wait: nothing to refresh.
+            RefreshIfShown();
+        };
 
         // The viewport rather than the window: it narrows when the scroll bar
         // appears, which would otherwise push the last tile in a row onto the next.
@@ -1389,8 +1396,17 @@ public partial class PicturesWindow : PanelWindow
                     continue;
                 }
 
-                if (picture.InNotes)
-                    _notes.RemovePicture(picture.Name);
+                // Caught here: this runs after the await, where anything thrown
+                // has no caller left to reach but the dispatcher.
+                try
+                {
+                    if (picture.InNotes)
+                        _notes.RemovePicture(picture.Name);
+                }
+                catch (Exception ex)
+                {
+                    App.Log("taking a picture out of the notes", ex);
+                }
             }
 
             Refresh();

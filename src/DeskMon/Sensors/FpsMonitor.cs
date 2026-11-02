@@ -151,55 +151,72 @@ public sealed class FpsMonitor : IDisposable
         /// frame generation hands over its two frames together: captured in
         /// Stalker 2, gaps of 0.2 ms and 16.5 ms in turn, with both marked
         /// "Application", as FrameType needs Intel's provider. Taken as they
-        /// come that read as 120 fps with a jitter of 8 ms from pairs that are
-        /// one steady 60 fps frame, so each pair is added back into one - and
-        /// the FPS, lows, jitter and stutters all describe what was rendered.
+        /// come that read as a jitter of 8 ms and thousands of stutters from
+        /// pairs that are one steady 60 fps frame, so each pair is added back
+        /// into one for the lows, jitter and stutters. The FPS still counts both
+        /// - see <see cref="FpsOfRecent"/>: shown 60 beside a game's own 120,
+        /// it read as wrong, and 120 is what is on the screen.
         /// </summary>
         public void Add(double frameTime)
         {
+            int shown = 1;
             if (_heldMs > 0)
             {
                 double held = _heldMs;
                 _heldMs = 0;
                 if (frameTime >= RenderedAtLeastMs)
+                {
                     frameTime += held;
+                    shown = 2;
+                }
                 else
-                    Record(held);
+                {
+                    Record(held, 1);
+                }
             }
 
             if (frameTime < GeneratedUnderMs)
                 _heldMs = frameTime;
             else
-                Record(frameTime);
+                Record(frameTime, shown);
         }
 
-        private void Record(double frameTime)
+        private void Record(double frameTime, int shown)
         {
+            _shown[_next] = (byte)shown;
             _frames[_next] = frameTime;
             _next = (_next + 1) % HistoryFrames;
 
             if (Count < HistoryFrames)
                 Count++;
 
-            Totals.Add(frameTime);
+            Totals.Add(frameTime, shown);
         }
 
-        /// <summary>Mean frame time over the newest <paramref name="wanted"/> frames.</summary>
-        public double MeanOfRecent(int wanted)
+        /// <summary>
+        /// How many frames reached the screen for each of <see cref="_frames"/>:
+        /// 2 for a frame generation pair, parallel to it so the FPS can be
+        /// read from the same stretch of frames as the lows.
+        /// </summary>
+        private readonly byte[] _shown = new byte[HistoryFrames];
+
+        /// <summary>The frame rate on screen over the newest <paramref name="wanted"/> frames, or 0 with none.</summary>
+        public double FpsOfRecent(int wanted)
         {
             int take = Math.Min(wanted, Count);
             if (take == 0)
                 return 0;
 
             double total = 0;
-            int index = _next;
+            int shown = 0, index = _next;
             for (int i = 0; i < take; i++)
             {
                 index = (index - 1 + HistoryFrames) % HistoryFrames;
                 total += _frames[index];
+                shown += _shown[index];
             }
 
-            return total / take;
+            return total > 0 ? shown * 1000.0 / total : 0;
         }
 
         /// <summary>
@@ -314,8 +331,8 @@ public sealed class FpsMonitor : IDisposable
                 if (GameChain() is not { } busiest)
                     return default;
 
-                double mean = busiest.MeanOfRecent(RecentFrames);
-                double? fps = mean > 0 ? 1000.0 / mean : null;
+                double recent = busiest.FpsOfRecent(RecentFrames);
+                double? fps = recent > 0 ? recent : null;
 
                 // Sorted again only once a second, or for a different chain -
                 // see LowsEvery. The average above stays live every tick.
@@ -358,8 +375,8 @@ public sealed class FpsMonitor : IDisposable
                 if (GameChain() is not { } busiest)
                     return null;
 
-                double mean = busiest.MeanOfRecent(RecentFrames);
-                return mean > 0 ? 1000.0 / mean : null;
+                double recent = busiest.FpsOfRecent(RecentFrames);
+                return recent > 0 ? recent : null;
             }
         }
     }
@@ -951,6 +968,16 @@ public sealed class FpsMonitor : IDisposable
         {
             process.Dispose();
         }
+    }
+
+    /// <summary>
+    /// <see cref="Stop"/>, returning once PresentMon has gone - for a new copy
+    /// of DeskMon about to start its own trace under the same session name.
+    /// </summary>
+    public void StopAndWait()
+    {
+        Stop();
+        WaitForPendingStop();
     }
 
     private void WaitForPendingStop()

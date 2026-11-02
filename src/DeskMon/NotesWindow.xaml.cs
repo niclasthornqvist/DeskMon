@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -237,7 +238,9 @@ public partial class NotesWindow : PanelWindow
         Topmost = _settings.NotesAlwaysOnTop;
         DimDuringGames(_settings, () => _settings.NotesOpacity);
 
-        _autoSave.Tick += (_, _) => SaveNow();
+        // Queued, not waited for: this fires as you type, and every window
+        // shares the thread a wait on a busy disk would stop - see SaveCore.
+        _autoSave.Tick += (_, _) => SaveCore(background: true);
         _placementSave.Tick += (_, _) => SavePlacementNow();
         _disarmDelete.Tick += (_, _) => DisarmDelete();
 
@@ -274,8 +277,10 @@ public partial class NotesWindow : PanelWindow
         {
             SearchPopup.IsOpen = false;
 
+            // Queued: clicking back to a game is when the disk is likely busy,
+            // and waiting for it here stalled every window as play resumed.
             if (_dirty)
-                SaveNow();
+                SaveCore(background: true);
             else
                 SavePlacementNow();
         };
@@ -971,6 +976,19 @@ public partial class NotesWindow : PanelWindow
     }
 
     /// <summary>
+    /// Reads what <see cref="PicturesInUse"/> needs from the other notes, off
+    /// the UI thread. The store keeps it until a file changes, so that call
+    /// then finds it ready: done there, the first read of every note's RTF
+    /// stalled the pictures window on the way in.
+    /// </summary>
+    public Task ReadPictureUseAsync()
+    {
+        string game = _currentGame;
+        var store = _store;
+        return GameArt.OwnThread(() => store.ScreenshotNamesInNotes(exceptGame: game));
+    }
+
+    /// <summary>
     /// How many screenshots these notes show - each one's preview is stored
     /// in the notes file, so this is what makes saving them slow. As on screen,
     /// unsaved edits included.
@@ -1020,7 +1038,10 @@ public partial class NotesWindow : PanelWindow
         if (removed)
         {
             MarkDirty();
-            SaveNow();
+
+            // Queued: nothing here acts on the result, and DELETE UNUSED comes
+            // through once per picture, each waiting on the disk in turn.
+            SaveCore(background: true);
         }
 
         return removed;
@@ -1864,7 +1885,39 @@ public partial class NotesWindow : PanelWindow
         return NotesRtf.WithoutColour(rtf, _theme.NotesTextColor);
     }
 
-    public void SaveNow()
+    /// <summary>
+    /// Saves and waits for the disk, for callers that act on the result right
+    /// after: a switch of notes, a delete, DeskMon closing.
+    /// </summary>
+    public void SaveNow() => SaveCore(background: false);
+
+    /// <summary>
+    /// The bytes of a background save not yet known to have landed, or null.
+    /// Compared against instead of <see cref="_saved"/> while it is on its way:
+    /// the file is about to hold these, whatever it holds now.
+    /// </summary>
+    private byte[]? _writing;
+
+    /// <summary>
+    /// Goes up with every write. A queued write that finds it moved on gives
+    /// way: a newer save has the newer text, and landing after it would put
+    /// the older text back.
+    /// </summary>
+    private int _writeGeneration;
+
+    /// <summary>
+    /// Held through a write of the notes file. Without it a background write
+    /// already past its generation check could finish after a direct save
+    /// and replace the newer text.
+    /// </summary>
+    private readonly object _writeGate = new();
+
+    /// <param name="background">
+    /// Write on the writer thread and return. The flush waits until the disk
+    /// has the data, which took seconds on a busy disk with every DeskMon
+    /// window frozen behind it.
+    /// </param>
+    private void SaveCore(bool background)
     {
         SavePlacementNow();   // whatever a drag left pending goes down with it
         _autoSave.Stop();
@@ -1898,7 +1951,19 @@ public partial class NotesWindow : PanelWindow
             //
             // It also means an edit typed and undone writes nothing, where it
             // used to rewrite the file with identical content.
-            if (_saved is not null && rtf.AsSpan().SequenceEqual(_saved))
+            //
+            // With a write on its way only that write's bytes say nothing is
+            // needed, and only for another background save: a direct save has
+            // to know the result, so it writes and overtakes it.
+            if (_writing is { } writing)
+            {
+                if (background && rtf.AsSpan().SequenceEqual(writing))
+                {
+                    _dirty = false;
+                    return;
+                }
+            }
+            else if (_saved is not null && rtf.AsSpan().SequenceEqual(_saved))
             {
                 _dirty = false;
                 ShowStatus(RestingText());   // typed and undone: nothing to save
@@ -1921,9 +1986,22 @@ public partial class NotesWindow : PanelWindow
             // so new notes that held only a screenshot - taken in a game with
             // no notes yet - read as empty, were never written, and lost the
             // picture while the status line said they were saved.
-            string? error = _store.SaveRtf(_currentGame, rtf,
-                                           hasContent: !string.IsNullOrWhiteSpace(Contents.Text)
-                                                       || NotesPictures.HasAny(Editor.Document));
+            bool hasContent = !string.IsNullOrWhiteSpace(Contents.Text) || NotesPictures.HasAny(Editor.Document);
+
+            if (background)
+            {
+                WriteLater(rtf, hasContent);
+                return;
+            }
+
+            // Whatever is queued gives way, and one already writing is waited
+            // for, so this text is the last to land.
+            Interlocked.Increment(ref _writeGeneration);
+            _writing = null;
+
+            string? error;
+            lock (_writeGate)
+                error = _store.SaveRtf(_currentGame, rtf, hasContent);
 
             _dirty = error is not null;
             if (error is null)
@@ -1952,6 +2030,64 @@ public partial class NotesWindow : PanelWindow
             ShowStatus("Save failed: " + ex.Message, problem: true);
             TrySaveAgainLater();
         }
+    }
+
+    /// <summary>
+    /// Sends the notes to the writer thread. The baseline moves only once they
+    /// have landed: until then the file doesn't hold them, and a failed write
+    /// has to leave the notes counted as unsaved.
+    /// </summary>
+    private void WriteLater(byte[] rtf, bool hasContent)
+    {
+        int generation = Interlocked.Increment(ref _writeGeneration);
+        string game = _currentGame;
+        var store = _store;
+
+        // Cleared before the write, not after: a key pressed while it is on
+        // its way sets this again, and the finished write must not hide that.
+        _dirty = false;
+        _writing = rtf;
+
+        AtomicFile.Later(() =>
+        {
+            string? error;
+            lock (_writeGate)
+            {
+                if (Volatile.Read(ref _writeGeneration) != generation)
+                    return;
+                error = store.SaveRtf(game, rtf, hasContent);
+            }
+
+            Dispatcher.BeginInvoke(new Action(() => WriteLanded(generation, game, rtf, error)));
+        });
+    }
+
+    /// <summary>A background write's result, back on the UI thread. See <see cref="SaveCore"/> for the direct save's.</summary>
+    private void WriteLanded(int generation, string game, byte[] rtf, string? error)
+    {
+        // Overtaken: the newer save reports for itself.
+        if (generation != _writeGeneration)
+            return;
+
+        _writing = null;
+
+        // Other notes loaded meanwhile, after a save that threw before it
+        // could overtake this: these bytes aren't the editor's baseline.
+        if (_saved is null || !string.Equals(game, _currentGame, StringComparison.Ordinal))
+            return;
+
+        if (error is null)
+        {
+            _saved = rtf;
+            _onDisk = rtf;
+            _loadFailed = false;
+            ShowStatus(SavedNowText());
+            return;
+        }
+
+        _dirty = true;
+        ShowStatus("Save failed: " + error, problem: true);
+        TrySaveAgainLater();
     }
 
     /// <summary>
@@ -2378,7 +2514,7 @@ public partial class NotesWindow : PanelWindow
             }
             else if (uri.Scheme is "http" or "https")
             {
-                Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+                WebLink.Open(uri.AbsoluteUri);
             }
         }
         catch (Exception ex)
@@ -2693,18 +2829,22 @@ public partial class NotesWindow : PanelWindow
     /// </summary>
     private void AlignSearchPopup() => SearchPopup.HorizontalOffset = 0;
 
+    /// <summary>Counts searches, so an older one finishing late can't replace a newer list.</summary>
+    private int _searchTicket;
+
     /// <summary>
     /// The matches, each with its game and the line it is on, the matched
     /// part in the brighter text colour so the eye finds it. An empty box
     /// closes the list.
     /// </summary>
-    private void ShowSearchResults()
+    private async void ShowSearchResults()
     {
-        SearchResults.Children.Clear();
+        int ticket = ++_searchTicket;
         string query = SearchBox.Text.Trim();
 
         if (query.Length == 0)
         {
+            SearchResults.Children.Clear();
             SearchPopup.IsOpen = false;
             return;
         }
@@ -2716,11 +2856,29 @@ public partial class NotesWindow : PanelWindow
         // answers nothing.
         if (query.Length < 2)
         {
+            SearchResults.Children.Clear();
             SearchHint.Text = "Type one more letter to search every note.";
             return;
         }
 
-        var hits = _search.Find(query);
+        IReadOnlyList<NotesSearch.Hit> hits;
+        try
+        {
+            hits = await _search.FindAsync(query);
+        }
+        catch (Exception ex)
+        {
+            SearchResults.Children.Clear();
+            SearchHint.Text = "Could not search the notes: " + ex.Message;
+            return;
+        }
+
+        // A later key has a search of its own under way. The old list stays
+        // until then, so it doesn't blink empty between keys.
+        if (ticket != _searchTicket)
+            return;
+
+        SearchResults.Children.Clear();
         SearchHint.Text = hits.Count switch
         {
             // The first search has nothing to look in until the notes are read.
@@ -3217,7 +3375,10 @@ public partial class NotesWindow : PanelWindow
     /// </summary>
     private void OnClosing(object? sender, CancelEventArgs e)
     {
-        SaveNow();
+        // Queued when only hiding: the window stays alive to hear how it went,
+        // and it shouldn't sit on screen waiting for a busy disk. Closing for
+        // real there is no later, so that waits.
+        SaveCore(background: !_allowClose);
 
         if (_allowClose)
             return;

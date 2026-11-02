@@ -72,15 +72,33 @@ public sealed class NotesSearch
     /// carries the line around it, cut short, so the list shows what was found
     /// rather than only where.
     /// </summary>
-    public IReadOnlyList<Hit> Find(string query, int max = 60)
+    public IReadOnlyList<Hit> Find(string query, int max = 60) => Search(Ordered(), query, max);
+
+    /// <summary>
+    /// <see cref="Find"/> off the UI thread, for the list as you type. Compared
+    /// as the language does, which is slow enough to feel per keystroke over
+    /// every note there is. Call from the UI thread, which owns the cache.
+    /// </summary>
+    public Task<IReadOnlyList<Hit>> FindAsync(string query, int max = 60)
+    {
+        var notes = Ordered();
+        return Task.Run(() => Search(notes, query, max));
+    }
+
+    /// <summary>The notes in name order, as a list the search can keep after the cache changes.</summary>
+    private List<(string Game, string Text)> Ordered()
+        => _cache.OrderBy(e => e.Key, StringComparer.CurrentCultureIgnoreCase)
+                 .Select(e => (e.Key, e.Value.Text))
+                 .ToList();
+
+    private static IReadOnlyList<Hit> Search(List<(string Game, string Text)> notes, string query, int max)
     {
         var hits = new List<Hit>();
         if (string.IsNullOrWhiteSpace(query))
             return hits;
 
-        foreach (var (game, entry) in _cache.OrderBy(e => e.Key, StringComparer.CurrentCultureIgnoreCase))
+        foreach (var (game, text) in notes)
         {
-            string text = entry.Text;
             int at = 0;
 
             for (int occurrence = 0; occurrence < PerGame; occurrence++)

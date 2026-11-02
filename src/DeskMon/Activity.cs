@@ -22,7 +22,13 @@ namespace DeskMon;
 /// </summary>
 internal static class Activity
 {
-    private sealed record Entry(string Name, long StartedAt, string Thread, long SlowAfterMs);
+    // A struct, and the thread's name kept per thread: the steps run about ten
+    // times a tick, all day, and each one allocated both.
+    private readonly record struct Entry(string Name, long StartedAt, string Thread, long SlowAfterMs);
+
+    /// <summary>This thread's name in words - see <see cref="ThreadName"/>.</summary>
+    [ThreadStatic]
+    private static string? _threadName;
 
     private static readonly Dictionary<long, Entry> Running = new();
     private static readonly object RunningLock = new();
@@ -48,7 +54,7 @@ internal static class Activity
     /// </summary>
     public static Scope Begin(string name, TimeSpan? slowAfter = null)
     {
-        var entry = new Entry(name, Environment.TickCount64, ThreadName(),
+        var entry = new Entry(name, Environment.TickCount64, _threadName ??= ThreadName(),
                               (long)(slowAfter ?? SlowAfter).TotalMilliseconds);
         long id;
         lock (RunningLock)
@@ -71,7 +77,7 @@ internal static class Activity
             if (_id == 0)
                 return;
 
-            Entry? entry;
+            Entry entry;
             lock (RunningLock)
             {
                 if (!Running.Remove(_id, out entry))

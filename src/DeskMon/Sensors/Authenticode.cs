@@ -52,9 +52,11 @@ internal static class Authenticode
         };
 
         IntPtr filePtr = Marshal.AllocHGlobal(Marshal.SizeOf<WINTRUST_FILE_INFO>());
+        bool marshalled = false;
         try
         {
             Marshal.StructureToPtr(file, filePtr, false);
+            marshalled = true;
 
             var data = new WINTRUST_DATA
             {
@@ -78,6 +80,10 @@ internal static class Authenticode
         }
         finally
         {
+            // StructureToPtr made a native copy of the path, which freeing
+            // the block alone leaves behind - one for every check.
+            if (marshalled)
+                Marshal.DestroyStructure<WINTRUST_FILE_INFO>(filePtr);
             Marshal.FreeHGlobal(filePtr);
         }
     }

@@ -31,6 +31,17 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.77.1", "2026-11-02",
+            "Fixes: with DLSS frame generation the FPS matches the game again - 120, not the 60 rendered, while the lows, jitter and stutters stay on the frames really rendered",
+            "Fixes: notes save without holding up the windows - typing, clicking back to a game, closing the notes and removing a picture no longer wait for a busy disk",
+            "Fixes: a game quit while the PC is locked ends at the moment it quit - the hours until unlock were logged as played",
+            "Fixes: one mistyped value in settings.json no longer costs the widget's place, section order, game targets and Steam ids at the next save",
+            "Fixes: a session's checkpoint stays until its line is in the log, so a slow disk at exit can't lose the session",
+            "Fixes: the game's folder is read with limited access, not by opening the game's memory, which anti-cheat can object to",
+            "Fixes: Measure FPS takes effect in a running game, DeskMon reloading can't stop its own new FPS trace, and ping stops while the PC is locked",
+            "Fixes: web links open as you, not as administrator; a crash can't leave a cut-off screenshot; the Versions window names .NET 10",
+            "Fixes: freezes of the whole widget are logged instead of being taken for sleep, and the memory trim at a game's start waits out a busy disk",
+            "Faster: less memory and work for notes with pictures, the sensor library's day of unused history is off, search and Pictures read off the UI thread, and long session tables fill in behind the window"),
         new("1.77.0", "2026-11-02",
             "Settings: pick your ping server by place - Sweden, Europe, US, Asia and more, Nearest for your line in general, or Custom for a game server's own address",
             "Settings: new installs start on Nearest, so the PING row works straight away - turn it off with Off",

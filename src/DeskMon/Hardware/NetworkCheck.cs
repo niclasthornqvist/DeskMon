@@ -136,12 +136,17 @@ public static class NetworkCheck
     /// </summary>
     public static async Task<long?> ConnectionTimeAsync(string host, int timeoutMs)
     {
-        var addresses = await Dns.GetHostAddressesAsync(host.Trim()).ConfigureAwait(false);
-        var address = addresses.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork) ?? addresses.FirstOrDefault();
+        host = host.Trim();
+        var address = await AddressOf(host).ConfigureAwait(false);
         if (address is null)
             return null;
 
         using var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+
+        // Closed with a reset: a plain close leaves the socket in TIME_WAIT for
+        // minutes, and at one every two seconds those pile up for hours.
+        socket.LingerState = new LingerOption(true, 0);
+
         using var timeout = new CancellationTokenSource(timeoutMs);
         var clock = Stopwatch.StartNew();
         try
@@ -151,8 +156,31 @@ public static class NetworkCheck
         }
         catch (Exception ex) when (ex is OperationCanceledException or SocketException)
         {
+            // Looked up again next time, so a server that moved is found, and
+            // no network shows as it always did: the name failing to resolve.
+            Addresses.TryRemove(host, out _);
             return null;
         }
+    }
+
+    /// <summary>How long a server's address is used before it is looked up again.</summary>
+    private static readonly TimeSpan AddressKept = TimeSpan.FromMinutes(5);
+
+    /// <summary>Addresses by host. Pings run on the pool, so more than one thread can ask.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (IPAddress Address, DateTime Until)> Addresses =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The server's address, kept a while: a DNS lookup every two seconds for hours is a lot of asking for one answer.</summary>
+    private static async Task<IPAddress?> AddressOf(string host)
+    {
+        if (Addresses.TryGetValue(host, out var known) && DateTime.UtcNow < known.Until)
+            return known.Address;
+
+        var addresses = await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+        var address = addresses.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork) ?? addresses.FirstOrDefault();
+        if (address is not null)
+            Addresses[host] = (address, DateTime.UtcNow + AddressKept);
+        return address;
     }
 
     /// <summary>Three connections each: the quickest is the trip itself, the others had a queue in the way.</summary>
