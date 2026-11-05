@@ -81,6 +81,23 @@ public sealed class SensorHub : IDisposable
 
     private volatile bool _memoryListsShown = true;
 
+    /// <summary>
+    /// The graphics card is left alone while this is set - a display adapter
+    /// went away or came back, which is what a driver update looks like from
+    /// here. The handles this hub holds belong to the driver being replaced:
+    /// the NVML call that reads the card's power died in it on 2026-11-04,
+    /// taking DeskMon with it. The GPU reads n/a meanwhile; the widget opens a
+    /// new hub on the new driver once things settle. Set on the UI thread,
+    /// read on the worker - hence volatile.
+    /// </summary>
+    public bool GpuPaused
+    {
+        get => _gpuPaused;
+        set => _gpuPaused = value;
+    }
+
+    private volatile bool _gpuPaused;
+
     /// <summary>Set when the hardware library failed to start, for the tooltip.</summary>
     public string? StartupError { get; private set; }
 
@@ -394,27 +411,38 @@ public sealed class SensorHub : IDisposable
                 if (!_opened)
                     return;
 
+                // Taken once, so one refresh never reads half the card.
+                bool gpuPaused = _gpuPaused;
+
                 // One step per device, by name: the CPU's read goes through
                 // the sensor driver, the graphics card's through its own
                 // driver, and the freeze log has to tell the two apart.
+                // The card skipped while its driver is being replaced - see GpuPaused.
                 for (int i = 0; i < _polled.Count; i++)
+                {
+                    if (gpuPaused && IsGpu(_polled[i]))
+                        continue;
                     using (Activity.Begin(_polledNames[i]))
                         _polled[i].Update();
-                using (Activity.Begin("NVIDIA power read"))
-                    ReadNvidiaPower();
+                }
+                if (!gpuPaused)
+                    using (Activity.Begin("NVIDIA power read"))
+                        ReadNvidiaPower();
 
+                // While paused, n/a rather than the last figures: those are
+                // from before the driver went, and would stand still as though live.
                 _hardware = new HardwareValues
                 {
                     CpuTemp = _cpuTemp?.Value,
                     CpuPower = _cpuPower?.Value,
                     CpuClock = HighestClock(),
                     CpuCoreMax = _cpuCoreMax?.Value,
-                    GpuTemp = _gpuTemp?.Value,
-                    GpuLoad = _gpuLoad?.Value,
-                    GpuMemoryLoad = _gpuMemoryLoad?.Value,
-                    GpuPower = _gpuPower?.Value,
+                    GpuTemp = gpuPaused ? null : _gpuTemp?.Value,
+                    GpuLoad = gpuPaused ? null : _gpuLoad?.Value,
+                    GpuMemoryLoad = gpuPaused ? null : _gpuMemoryLoad?.Value,
+                    GpuPower = gpuPaused ? null : _gpuPower?.Value,
                     CpuTemperatures = ReadAll(_cpuTemps),
-                    GpuTemperatures = ReadAll(_gpuTemps),
+                    GpuTemperatures = gpuPaused ? NamesOnly(_gpuTemps) : ReadAll(_gpuTemps),
                 };
             }
         }
@@ -466,6 +494,26 @@ public sealed class SensorHub : IDisposable
 
         return readings;
     }
+
+    /// <summary>
+    /// The list with every value n/a, for a paused card. The names kept, so
+    /// the rows under GPU stay put rather than going and coming back - each
+    /// change of length re-measures the whole panel.
+    /// </summary>
+    private static SensorReading[] NamesOnly(ISensor[] sensors)
+    {
+        if (sensors.Length == 0)
+            return Array.Empty<SensorReading>();
+
+        var readings = new SensorReading[sensors.Length];
+        for (int i = 0; i < sensors.Length; i++)
+            readings[i] = new SensorReading(sensors[i].Name, null);
+
+        return readings;
+    }
+
+    private static bool IsGpu(IHardware hardware)
+        => hardware.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel;
 
     /// <summary>Fastest core right now - a plain average hides boost behaviour.</summary>
     private double? HighestClock()

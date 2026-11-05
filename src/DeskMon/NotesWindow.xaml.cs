@@ -1355,6 +1355,8 @@ public partial class NotesWindow : PanelWindow
                 using var stream = new MemoryStream(rtf);
                 Contents.Load(stream, DataFormats.Rtf);
                 FromOldDefaultSize(document);
+                FromOldDefaultFont(document);
+                DecorationsOntoText(document);
                 MoveCaretToEnd();
                 _pictures.FitSoon();
 
@@ -1399,9 +1401,43 @@ public partial class NotesWindow : PanelWindow
         document.Foreground = _theme.NotesText;
         // Only what text with no font of its own starts as - anything picked
         // on the toolbar is saved on the text and wins over this.
-        document.FontFamily = new FontFamily(UiTheme.PanelFontFamily);
+        document.FontFamily = new FontFamily(NotesFontFamily);
         document.FontSize = DefaultTextSize;
         document.PagePadding = new Thickness(0, 2, 0, 2);
+    }
+
+    /// <summary>
+    /// The notes' own font, not the windows' Calibri (UiTheme.PanelFontFamily):
+    /// Calibri's bold is barely heavier than its regular at the notes' size,
+    /// so bold text hardly stood out, and WPF can't draw it any thicker.
+    /// Segoe UI's bold is clearly heavier.
+    /// </summary>
+    private const string NotesFontFamily = "Segoe UI";
+
+    /// <summary>The notes' default before <see cref="NotesFontFamily"/> - see FromOldDefaultFont.</summary>
+    private const string OldNotesFontFamily = "Calibri";
+
+    /// <summary>
+    /// Brings text in Calibri, the notes' old default font, over to the new
+    /// one - the size's story again (FromOldDefaultSize): the RTF writer
+    /// records the font of every run, so all text written before carries
+    /// Calibri in the file and would keep its weak bold. Calibri picked on
+    /// purpose can't be told from the default and goes over too; any other
+    /// font picked stays. Done as the notes load, before the baseline, so
+    /// opening them writes nothing; the file follows with the next edit.
+    /// </summary>
+    private static void FromOldDefaultFont(DependencyObject node)
+    {
+        if (node is TextElement element
+            && element.ReadLocalValue(TextElement.FontFamilyProperty) is FontFamily font
+            && string.Equals(font.Source, OldNotesFontFamily, StringComparison.OrdinalIgnoreCase))
+        {
+            element.FontFamily = new FontFamily(NotesFontFamily);
+        }
+
+        foreach (object child in LogicalTreeHelper.GetChildren(node))
+            if (child is TextElement or FlowDocument)
+                FromOldDefaultFont((DependencyObject)child);
     }
 
     /// <summary>
@@ -1429,6 +1465,58 @@ public partial class NotesWindow : PanelWindow
         foreach (object child in LogicalTreeHelper.GetChildren(node))
             if (child is TextElement or FlowDocument)
                 FromOldDefaultSize((DependencyObject)child);
+    }
+
+    /// <summary>
+    /// Moves underline and strikethrough set on a paragraph or a span down
+    /// onto the runs of text inside it.
+    ///
+    /// WPF's RTF reader often puts them on a span around the text, and unlike
+    /// bold they are not passed down: the text is drawn underlined, but the
+    /// selection - which reads the run itself - says it isn't. So U stayed
+    /// dark on underlined text, and its first click "added" an underline that
+    /// was already there and changed nothing; only the second took it off.
+    /// On the runs, the toolbar and the buttons see what is on screen.
+    ///
+    /// Links are left alone: their underline is the link's own look, and
+    /// InLink tells them apart. Done as the notes load, like
+    /// FromOldDefaultSize, so opening notes still writes nothing - the text
+    /// looks the same, and the RTF writes it out the same.
+    /// </summary>
+    private static void DecorationsOntoText(DependencyObject node, TextDecorationCollection? above = null)
+    {
+        if (node is Hyperlink)
+            return;
+
+        if (node is Run run)
+        {
+            if (above is { Count: > 0 })
+                run.TextDecorations = Merged(run.ReadLocalValue(Inline.TextDecorationsProperty) as TextDecorationCollection, above);
+            return;
+        }
+
+        // Paragraph and Inline share the one property, so one read covers both.
+        if (node is Paragraph or Span
+            && node.ReadLocalValue(Inline.TextDecorationsProperty) is TextDecorationCollection own && own.Count > 0)
+        {
+            above = Merged(above, own);
+            node.ClearValue(Inline.TextDecorationsProperty);
+        }
+
+        foreach (object child in LogicalTreeHelper.GetChildren(node))
+            if (child is TextElement or FlowDocument)
+                DecorationsOntoText((DependencyObject)child, above);
+    }
+
+    /// <summary>Both sets, each kind of line once - underline twice would be drawn twice.</summary>
+    private static TextDecorationCollection Merged(TextDecorationCollection? first, TextDecorationCollection second)
+    {
+        var merged = new TextDecorationCollection(first ?? []);
+        foreach (var decoration in second)
+            if (!merged.Any(d => d.Location == decoration.Location))
+                merged.Add(decoration);
+        merged.Freeze();
+        return merged;
     }
 
     // --- The notes list -------------------------------------------------
@@ -1728,8 +1816,11 @@ public partial class NotesWindow : PanelWindow
         ListHeading.Visibility = folded ? Visibility.Collapsed : Visibility.Visible;
         SearchRow.Visibility = folded ? Visibility.Collapsed : Visibility.Visible;
         SearchRailButton.Visibility = folded ? Visibility.Visible : Visibility.Collapsed;
+        // Folded like the rows above it: the tile alone, in the middle of the
+        // strip, without the gap it keeps from the name - see NoteEntry.
         NewNoteLabel.Visibility = folded ? Visibility.Collapsed : Visibility.Visible;
-        NewNoteButton.HorizontalAlignment = folded ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        NewNoteButton.HorizontalContentAlignment = folded ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+        NewNoteTile.Margin = folded ? new Thickness(0) : new Thickness(0, 0, 9, 0);
         // The 18 px scrollbar would take most of the strip's room from the
         // icons; hidden, the wheel still scrolls a long list.
         ScrollViewer.SetVerticalScrollBarVisibility(NoteList, folded ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Auto);
@@ -3434,6 +3525,11 @@ public partial class NotesWindow : PanelWindow
         _theme.Dress(Panel);
         Sidebar.BorderBrush = _theme.Separator;
         ListFoot.BorderBrush = _theme.Separator;
+        // The colours and sizes of a list row's name and detail (BuildList),
+        // so NEW NOTE matches the rows it is shaped like.
+        NewNoteTitle.Foreground = _theme.NotesText;
+        NewNoteSub.Foreground = _theme.Header;
+        NewNoteSub.FontSize = Math.Max(9, UiTheme.PanelFontSize - 3);
         ListHeading.Foreground = _theme.Section;
         ListHeading.FontSize = Math.Max(9, UiTheme.PanelFontSize - 1);
         FitList();   // the list's ground is a theme colour too
@@ -3456,7 +3552,7 @@ public partial class NotesWindow : PanelWindow
         Editor.Foreground = text;
         Editor.CaretBrush = text;
         Editor.SelectionBrush = _theme.Section;
-        Editor.FontFamily = new FontFamily(UiTheme.PanelFontFamily);
+        Editor.FontFamily = new FontFamily(NotesFontFamily);
         Editor.FontSize = DefaultTextSize;
         ApplyDocumentDefaults(Editor.Document);
 
@@ -3483,8 +3579,10 @@ public partial class NotesWindow : PanelWindow
         Page.Background = _theme.Shade(0x08);
         SessionHeading.Foreground = _theme.Section;
         SessionHeading.FontSize = Math.Max(9, UiTheme.PanelFontSize - 2.5);
-        SessionText.Foreground = _theme.NotesText;
-        SessionText.FontSize = Math.Max(9, UiTheme.PanelFontSize - 2.5);
+        // Inherited by the summary's items: it is a WrapPanel now, which has
+        // no Foreground of its own.
+        TextElement.SetForeground(SessionText, _theme.NotesText);
+        TextElement.SetFontSize(SessionText, Math.Max(9, UiTheme.PanelFontSize - 2.5));
 
         // Dressed like the colour popup, so the popups read as one family.
         foreach (var panel in new[] { TodoPopupPanel, SearchPanel, LinkPopupPanel, NewNotePanel, HistoryPanel })
@@ -3559,6 +3657,12 @@ public partial class NotesWindow : PanelWindow
         LoadActivityLater(_listed);
     }
 
+    /// <summary>
+    /// Three: Usage, Disk and Network have three readings each, so they fill
+    /// a line exactly and only Game's six go onto two.
+    /// </summary>
+    private const int PeaksPerLine = 3;
+
     /// <summary>Counts reads of the log, so a slow one finishing after a switch doesn't show the wrong game's session.</summary>
     private int _lastSessionTicket;
 
@@ -3607,27 +3711,37 @@ public partial class NotesWindow : PanelWindow
     /// </summary>
     private void ShowSession(SessionRecord session)
     {
-        // Each item glued together with non-breaking spaces, so a narrow
-        // window wraps between items - never "39" at the end of one line and
-        // "fps average" at the start of the next.
-        static string Keep(string text) => text.Replace(' ', ' ');
+        // One item each, kept whole by the WrapPanel, so a narrow window moves
+        // an item down rather than splitting "61" from "fps avg". The figure
+        // bright and semi-bold, its words dim - the same weighting as the
+        // readings below and the session tooltip, so the eye finds the numbers
+        // first instead of reading one long grey sentence.
+        // "LAST SESSION" itself is in the XAML, in the table's first column.
+        SessionText.Children.Clear();
 
-        // "Last session" itself is in the XAML, in the table's first column.
-        SessionText.Inlines.Clear();
-        SessionText.Inlines.Add(new Run(
-            Keep($"{session.Start.ToString("ddd d MMM", CultureInfo.InvariantCulture)}, {session.Start:HH:mm}–{session.End:HH:mm}") +
-            "  ·  " + Keep(SessionRecord.Describe(session.Length))));
+        TextBlock Item(params Run[] runs)
+        {
+            var item = new TextBlock { Margin = new Thickness(0, 0, 14, 0) };
+            item.Inlines.AddRange(runs);
+            SessionText.Children.Add(item);
+            return item;
+        }
+        Run Figure(string text) => new(text) { FontWeight = FontWeights.SemiBold };
+        Run Words(string text) => new(text) { Foreground = _theme.Label };
+
+        Item(new Run(session.Start.ToString("ddd d MMM", CultureInfo.InvariantCulture)),
+             Words($"  {session.Start:HH:mm}–{session.End:HH:mm}"));
+        Item(Figure(SessionRecord.Describe(session.Length)));
 
         if (session.AverageFps is double fps)
-            SessionText.Inlines.Add(new Run("  ·  " + Keep($"{fps:0} fps average")));
+            Item(Figure($"{fps:0}"), Words(" fps avg"));
 
         // Only "cut short" is called out: it changes what the numbers mean.
         if (session.CutShort)
-            SessionText.Inlines.Add(new Run("  ·  cut short")
-            {
-                Foreground = _theme.Warn,
-                ToolTip = "Cut short\nDeskMon was closed during the game, so the session may have run longer than this.",
-            });
+        {
+            var cut = Item(new Run("cut short") { Foreground = _theme.Warn });
+            cut.ToolTip = "Cut short\nDeskMon was closed during the game, so the session may have run longer than this.";
+        }
 
         // A table, not a line of text per section: the readings used to run
         // on in one wrapped TextBlock each, so each line's CPU, GPU... started
@@ -3642,7 +3756,7 @@ public partial class NotesWindow : PanelWindow
         SessionPeaks.ColumnDefinitions.Clear();
 
         var sections = session.PeaksBySection().ToList();
-        int readings = sections.Count == 0 ? 0 : sections.Max(s => s.Peaks.Count);
+        int readings = sections.Count == 0 ? 0 : Math.Min(PeaksPerLine, sections.Max(s => s.Peaks.Count));
 
         SessionPeaks.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "SessionName" });
         for (int i = 0; i < readings * 2; i++)
@@ -3650,27 +3764,51 @@ public partial class NotesWindow : PanelWindow
 
         double small = Math.Max(9, UiTheme.PanelFontSize - 3);
 
-        void Cell(string text, Brush brush, int row, int column, Thickness margin)
+        TextBlock Cell(Brush brush, int row, int column, Thickness margin)
         {
-            var cell = new TextBlock { Text = text, Foreground = brush, FontSize = small, Margin = margin };
+            var cell = new TextBlock { Foreground = brush, FontSize = small, Margin = margin };
             Grid.SetRow(cell, row);
             Grid.SetColumn(cell, column);
             SessionPeaks.Children.Add(cell);
+            return cell;
         }
 
-        for (int row = 0; row < sections.Count; row++)
+        int line = 0;
+        foreach (var (section, peaks) in sections)
         {
-            var (section, peaks) = sections[row];
-            SessionPeaks.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            // The same 12 after the name as after "Last session" above, so
-            // the shared column is as wide in both. A pixel between lines.
-            Cell(section, _theme.Header, row, 0, new Thickness(0, 1, 12, 0));
-
-            for (int i = 0; i < peaks.Count; i++)
+            // At most PeaksPerLine readings to a line, the rest on the next
+            // under the same columns: Game has six, and its line ran past the
+            // card's edge with GPU and VRAM cut off, on any normal width.
+            for (int first = 0; first < peaks.Count; first += PeaksPerLine, line++)
             {
-                Cell(peaks[i].Label, _theme.Label, row, 1 + i * 2, new Thickness(0, 1, 5, 0));
-                Cell(peaks[i].Text, _theme.NotesText, row, 2 + i * 2, new Thickness(0, 1, 16, 0));
+                SessionPeaks.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                // The name once, on its section's first line, so a
+                // continued line reads as more of the same section. The same
+                // 12 after it as after "LAST SESSION" above, so the shared
+                // column is as wide in both. Two pixels between lines: at one
+                // the rows ran together into a block of grey.
+                // Four pixels between lines and wider gaps along them - 10
+                // from a label to its value, 28 to the next label: at 2, 6 and
+                // 18 the table read as one dense block, and a value sat
+                // nearly as close to the next label as to its own.
+                if (first == 0)
+                    Cell(_theme.Header, line, 0, new Thickness(0, 4, 12, 0)).Text = section;
+
+                for (int i = first; i < Math.Min(first + PeaksPerLine, peaks.Count); i++)
+                {
+                    var peak = peaks[i];
+                    int column = 1 + (i - first) * 2;
+                    Cell(_theme.Label, line, column, new Thickness(0, 4, 10, 0)).Text = peak.Label;
+
+                    // Weighted like the session tooltip: the arrow and unit
+                    // dim, the number bright, so the number is what is read.
+                    var value = Cell(_theme.NotesText, line, column + 1, new Thickness(0, 4, 28, 0));
+                    value.Inlines.Add(new Run(peak.LowerIsWorse ? "↓" : "↑") { Foreground = _theme.Header });
+                    value.Inlines.Add(new Run(peak.Value) { FontWeight = FontWeights.SemiBold });
+                    if (peak.Unit.Length > 0)
+                        value.Inlines.Add(new Run(" " + peak.Unit) { Foreground = _theme.Label });
+                }
             }
         }
 
@@ -3705,7 +3843,7 @@ public partial class NotesWindow : PanelWindow
     {
         bool open = SessionPeaks.Visibility != Visibility.Visible;
         SessionPeaks.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        SessionHeading.Text = (open ? "▾ " : "▸ ") + "Last session";
+        SessionHeading.Text = (open ? "▾ " : "▸ ") + "LAST SESSION";
         e.Handled = true;
     }
 

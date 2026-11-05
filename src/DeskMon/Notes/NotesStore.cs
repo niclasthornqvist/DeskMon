@@ -359,10 +359,7 @@ public sealed class NotesStore
             if (SameAsNewest(prefix, File.ReadAllBytes(source)))
                 return;
 
-            string target = Path.Combine(BackupFolder,
-                $"{prefix}{DateTime.Now:yyyy-MM-dd_HHmmss}.rtf");
-
-            File.Copy(source, target, overwrite: true);
+            File.Copy(source, FreeBackupPath(prefix), overwrite: false);
             Prune(prefix);
         }
         catch
@@ -386,6 +383,26 @@ public sealed class NotesStore
             if (KeepCopy(gameName, original) is { } error)
                 App.Log("backing up notes", error);
         });
+    }
+
+    /// <summary>The time a copy's name carries, to the second: "yyyy-MM-dd_HHmmss", 17 characters.</summary>
+    private const string BackupStamp = "yyyy-MM-dd_HHmmss";
+
+    /// <summary>
+    /// A name for a copy taken now that no copy has yet. Named to the second,
+    /// two copies in one second - a failed save kept just as notes were
+    /// loaded - came out with the same name, and the second wrote over the
+    /// first. "_2", "_3" after the time then: "_" sorts after the ".rtf" of
+    /// the first, so name order is still age order, which the pruning and
+    /// <see cref="SameAsNewest"/> go by. Invariant, as BackupsOf reads it.
+    /// </summary>
+    private string FreeBackupPath(string prefix)
+    {
+        string stamp = DateTime.Now.ToString(BackupStamp, System.Globalization.CultureInfo.InvariantCulture);
+        string path = Path.Combine(BackupFolder, $"{prefix}{stamp}.rtf");
+        for (int n = 2; File.Exists(path); n++)
+            path = Path.Combine(BackupFolder, $"{prefix}{stamp}_{n}.rtf");
+        return path;
     }
 
     /// <summary>
@@ -468,7 +485,7 @@ public sealed class NotesStore
             if (SameAsNewest(prefix, data))
                 return null;
 
-            AtomicFile.WriteAllBytes(Path.Combine(BackupFolder, $"{prefix}{DateTime.Now:yyyy-MM-dd_HHmmss}.rtf"), data);
+            AtomicFile.WriteAllBytes(FreeBackupPath(prefix), data);
 
             // A prune that fails costs only tidiness; the copy is made.
             try { Prune(prefix); } catch { }
@@ -535,9 +552,12 @@ public sealed class NotesStore
 
             foreach (string path in Directory.EnumerateFiles(BackupFolder, prefix + "*.rtf"))
             {
+                // Without a "_2" a second copy in the same second carries - see FreeBackupPath.
                 string stamp = Path.GetFileNameWithoutExtension(path)[prefix.Length..];
+                if (stamp.Length > BackupStamp.Length)
+                    stamp = stamp[..BackupStamp.Length];
                 var info = new FileInfo(path);
-                DateTime taken = DateTime.TryParseExact(stamp, "yyyy-MM-dd_HHmmss",
+                DateTime taken = DateTime.TryParseExact(stamp, BackupStamp,
                                                         System.Globalization.CultureInfo.InvariantCulture,
                                                         System.Globalization.DateTimeStyles.None, out var parsed)
                     ? parsed
@@ -545,7 +565,10 @@ public sealed class NotesStore
                 copies.Add(new BackupCopy(path, taken, info.Length));
             }
 
-            return copies.OrderByDescending(c => c.Taken).ToList();
+            // Then by name, for two copies in one second: the "_2" is the newer.
+            return copies.OrderByDescending(c => c.Taken)
+                         .ThenByDescending(c => c.Path, StringComparer.Ordinal)
+                         .ToList();
         }
         catch
         {
@@ -651,6 +674,25 @@ public sealed class NotesStore
             cleaned = cleaned.Replace("--", "-");
 
         cleaned = cleaned.Trim(' ', '.', '-');
-        return cleaned.Length == 0 ? GeneralNotes : cleaned;
+        if (cleaned.Length == 0)
+            return GeneralNotes;
+
+        // A game called "Con", "Aux" or "Nul" would give CON.rtf and CON.log,
+        // which Windows takes for a device and refuses to create: its notes
+        // and sessions went unsaved. An underscore after the device part makes
+        // it an ordinary name; what comes after a dot counts for nothing here.
+        string stem = cleaned.Split('.')[0].TrimEnd();
+        return IsDeviceName(stem) ? cleaned.Insert(stem.Length, "_") : cleaned;
+    }
+
+    /// <summary>CON, PRN, AUX, NUL, COM0-9 and LPT0-9, in any case - the names Windows keeps for devices.</summary>
+    private static bool IsDeviceName(string name)
+    {
+        if (name.Length == 3)
+            return name.Equals("CON", StringComparison.OrdinalIgnoreCase) || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("AUX", StringComparison.OrdinalIgnoreCase) || name.Equals("NUL", StringComparison.OrdinalIgnoreCase);
+
+        return name.Length == 4 && char.IsAsciiDigit(name[3])
+               && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -182,7 +182,9 @@
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="HasDropShadow" Value="False" />
         <Setter Property="FontFamily" Value="{DynamicResource Theme.Font}" />
-        <Setter Property="FontSize" Value="12" />
+        <!-- Follows Window text size (UiTheme), as the menus' does: a fixed
+             12 stayed large in a bigger-looking font like Segoe UI. -->
+        <Setter Property="FontSize" Value="{DynamicResource Theme.SmallFontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
         <Setter Property="MaxWidth" Value="380" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
@@ -508,7 +510,7 @@
          by looking up from themselves. -->
     <Style x:Key="DarkContextMenu" TargetType="ContextMenu">
         <Setter Property="FontFamily" Value="{DynamicResource Theme.Font}" />
-        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.SmallFontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Text}" />
         <Setter Property="Template">
             <Setter.Value>

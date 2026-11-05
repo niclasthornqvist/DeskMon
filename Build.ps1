@@ -130,6 +130,11 @@ function Stop-WithFailure([string]$why) {
 }
 
 foreach ($p in @(Get-Process DeskMon -ErrorAction SilentlyContinue)) {
+    # The crash watcher (DeskMon.exe --watch) is a DeskMon process too, and
+    # leaves by itself once the widget closes cleanly: Kill on a process
+    # already gone throws, which with ErrorActionPreference Stop ended the build.
+    if ($p.HasExited) { continue }
+
     $asked = $false
     try { $asked = [DeskMonWindow]::RequestClose([uint32]$p.Id) } catch { }
 
@@ -143,7 +148,8 @@ foreach ($p in @(Get-Process DeskMon -ErrorAction SilentlyContinue)) {
     }
 
     Write-Host "Stopping DeskMon (pid $($p.Id))..."
-    $p.Kill()
+    # In a try as well: the watcher can still leave between the check above and here.
+    try { $p.Kill() } catch { }
     $p.WaitForExit(5000) | Out-Null
 }
 

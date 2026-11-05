@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,6 +17,9 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // The crash watcher never gets here: Program.Main sends it off before
+        // WPF starts - see StartWatcher.
 
         // The shared styles at application level as well as in each window,
         // for the tooltip style in them: a tooltip opens in a popup of its
@@ -69,6 +74,10 @@ public partial class App : Application
             Shutdown();
             return;
         }
+
+        // Only once this copy holds the lock: a copy that leaves above must
+        // not leave a watcher behind for a widget that never was.
+        StartWatcher();
 
         // A widget that lives at the edge of the screen should never greet the
         // user with a crash dialog; record it and carry on - see OnUnhandledException.
@@ -225,10 +234,31 @@ public partial class App : Application
     /// <summary>This copy was started by one that crashed - MainWindow says so once the tray icon is up.</summary>
     public static bool StartedAfterCrash { get; private set; }
 
-    /// <summary>When the last crash restart happened - kept outside app\, which may be what is broken.</summary>
+    /// <summary>
+    /// When the recent crash restarts happened, one UTC time a line - kept
+    /// outside app\, which may be what is broken. A file written by an older
+    /// build holds one such line, and reads the same way.
+    /// </summary>
     private static string CrashStampPath => Path.Combine(Path.GetTempPath(), "DeskMon-crash-restart.txt");
 
     private static readonly TimeSpan CrashRestartGap = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Restarts allowed within <see cref="CrashRestartGap"/>. One was too few:
+    /// a graphics driver update can take minutes, and a copy restarted in the
+    /// middle of it can crash on the driver again - after which the guard
+    /// left no widget until the next logon. Three still stops a copy broken
+    /// at startup from restarting for ever.
+    /// </summary>
+    private const int CrashRestartsAllowed = 3;
+
+    /// <summary>
+    /// How long the watcher waits before each restart in a row: the first
+    /// soon, later ones longer, so a driver still being installed has time to
+    /// finish before the sensors are opened on it again. See WatchWidget.
+    /// </summary>
+    private static readonly TimeSpan[] CrashRestartDelays =
+        { TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60) };
 
     /// <summary>
     /// Starts a fresh copy of DeskMon as this one goes down from an error, so
@@ -236,44 +266,281 @@ public partial class App : Application
     /// leaving nothing until the next logon. The open session is not lost:
     /// the new copy recovers it from its checkpoint, marked "cut short".
     ///
-    /// At most once every 10 minutes: something broken at startup would
+    /// At most three times in 10 minutes: something broken at startup would
     /// otherwise crash and restart for ever. The single-instance lock is let
     /// go first, as Reload settings does, or the new copy would see this one
     /// and leave. Silent on failure - this runs while already failing.
     /// Can't help with DeskMon being killed or a native crash, which never
-    /// reach .NET's handlers.
+    /// reach .NET's handlers - the watcher covers the crash, see StartWatcher.
     /// </summary>
     private void RestartAfterCrash()
     {
         try
         {
-            if (File.Exists(CrashStampPath) && DateTime.UtcNow - File.GetLastWriteTimeUtc(CrashStampPath) < CrashRestartGap)
-            {
-                Log("restart after a crash", "Not restarting: DeskMon already restarted after a crash less than 10 minutes ago.");
+            if (RestartedTooRecently())
                 return;
-            }
-
-            if (Environment.ProcessPath is not { } exe)
-                return;
-
-            File.WriteAllText(CrashStampPath, DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
 
             // The new copy reads settings.json and the open session as it
             // starts; whatever this one still has queued goes down first.
             // Short: the process is already failing.
             AtomicFile.Flush(TimeSpan.FromSeconds(2));
             ReleaseSingleInstanceLock();
-            // With this copy's id, so the new one can wait until it has gone - see WaitForExit.
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, $"{AfterCrashFlag} {Environment.ProcessId}")
-            {
-                UseShellExecute = false,
-                WorkingDirectory = AppContext.BaseDirectory,
-            });
-            Log("restart after a crash", "Started a fresh copy of DeskMon.");
+            StartFreshCopy(Environment.ProcessId);
         }
         catch (Exception ex)
         {
             Log("restart after a crash", ex);
+        }
+    }
+
+    /// <summary>
+    /// The guard of <see cref="CrashRestartsAllowed"/> restarts in 10 minutes,
+    /// shared by RestartAfterCrash and the watcher through the same stamp
+    /// file - so a crash that both of them see counts once, and a copy broken
+    /// at startup can't be brought back for ever by either.
+    /// </summary>
+    private static bool RestartedTooRecently()
+    {
+        if (RecentRestarts().Count < CrashRestartsAllowed)
+            return false;
+
+        Log("restart after a crash", $"Not restarting: DeskMon already restarted after a crash {CrashRestartsAllowed} times in the last 10 minutes.");
+        return true;
+    }
+
+    /// <summary>
+    /// The restarts within <see cref="CrashRestartGap"/>, from the stamp file.
+    /// Empty when there is none or it can't be read: a guard that can't be
+    /// read must not stop the one restart that would bring the widget back.
+    /// </summary>
+    private static List<DateTime> RecentRestarts()
+    {
+        var recent = new List<DateTime>();
+        try
+        {
+            if (!File.Exists(CrashStampPath))
+                return recent;
+
+            var cutoff = DateTime.UtcNow - CrashRestartGap;
+            foreach (string line in File.ReadAllLines(CrashStampPath))
+                if (DateTime.TryParse(line.Trim(), System.Globalization.CultureInfo.InvariantCulture,
+                                      System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+                    && at.ToUniversalTime() > cutoff)
+                    recent.Add(at.ToUniversalTime());
+        }
+        catch
+        {
+            // Unreadable: counted as none - see above.
+        }
+        return recent;
+    }
+
+    /// <summary>
+    /// Starts the new copy, stamped first so the guard holds even if the
+    /// start itself is what fails. With the old copy's id, so the new one can
+    /// wait until it has gone - see WaitForExit. Outside the logon task's job,
+    /// as the watcher is - see StartOutsideJob.
+    /// </summary>
+    private static void StartFreshCopy(int oldPid)
+    {
+        if (Environment.ProcessPath is not { } exe)
+            return;
+
+        // The restarts still inside the window, and this one: older lines are
+        // dropped so the file never grows.
+        var stamps = RecentRestarts();
+        stamps.Add(DateTime.UtcNow);
+        File.WriteAllLines(CrashStampPath,
+            stamps.ConvertAll(at => at.ToString("o", System.Globalization.CultureInfo.InvariantCulture)));
+
+        StartOutsideJob(exe, $"{AfterCrashFlag} {oldPid}");
+        Log("restart after a crash", "Started a fresh copy of DeskMon.");
+    }
+
+    /// <summary>
+    /// Starts <paramref name="exe"/> outside any job object DeskMon runs in.
+    ///
+    /// The logon task runs DeskMon inside a job, and Task Scheduler can end
+    /// everything in it once the task's own process ends - which for a crash
+    /// is the moment the watcher has to do its work, and the copy it starts
+    /// would be in the same job. Broken away, both outlive it. A job that
+    /// doesn't allow that is told so in error.log and the program is started
+    /// inside it, as before - no worse than without this.
+    /// Throws as Process.Start does; the callers catch.
+    /// </summary>
+    private static void StartOutsideJob(string exe, string arguments)
+    {
+        if (IsProcessInJob(GetCurrentProcess(), IntPtr.Zero, out bool inJob) && inJob)
+        {
+            var startup = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>() };
+            var command = new StringBuilder($"\"{exe}\" {arguments}");
+            if (CreateProcess(exe, command, IntPtr.Zero, IntPtr.Zero, false, CreateBreakawayFromJob,
+                              IntPtr.Zero, AppContext.BaseDirectory, ref startup, out var started))
+            {
+                CloseHandle(started.Process);
+                CloseHandle(started.Thread);
+                return;
+            }
+
+            Log("starting outside the job", $"Windows wouldn't let {Path.GetFileName(exe)} {arguments} leave DeskMon's job (error {Marshal.GetLastWin32Error()}), so it was started inside it.");
+        }
+
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, arguments)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = AppContext.BaseDirectory,
+        })?.Dispose();
+    }
+
+    private const uint CreateBreakawayFromJob = 0x01000000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfo
+    {
+        public int Size;
+        public IntPtr Reserved, Desktop, Title;
+        public int X, Y, XSize, YSize, XCountChars, YCountChars, FillAttribute, Flags;
+        public short ShowWindow, Reserved2;
+        public IntPtr Reserved3, StdInput, StdOutput, StdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessInformation
+    {
+        public IntPtr Process, Thread;
+        public int ProcessId, ThreadId;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcess(string? applicationName, StringBuilder commandLine,
+                                             IntPtr processAttributes, IntPtr threadAttributes,
+                                             [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint creationFlags,
+                                             IntPtr environment, string? currentDirectory,
+                                             ref StartupInfo startupInfo, out ProcessInformation processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    private const uint Synchronize = 0x00100000;
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+    private const uint Infinite = 0xFFFFFFFF;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(Microsoft.Win32.SafeHandles.SafeProcessHandle process, out uint exitCode);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    /// <summary>Internal for Program.Main, which looks for it before WPF is started.</summary>
+    internal const string WatchFlag = "--watch";
+
+    /// <summary>
+    /// Starts the crash watcher: a second DeskMon.exe with no window that
+    /// waits for this one to end - see <see cref="WatchWidget"/>.
+    ///
+    /// A crash in native code - the one on 2026-11-04 was the NVIDIA driver being
+    /// replaced during an update while LibreHardwareMonitor read the GPU's
+    /// power through it - kills the process on the spot. None of .NET's
+    /// handlers run, so RestartAfterCrash never got the chance and the widget
+    /// stayed gone until the next logon. Only another process can see that.
+    ///
+    /// A process of its own rather than Windows' RegisterApplicationRestart:
+    /// that waits for 60 s of uptime, may ask first, and can bring DeskMon
+    /// back without the admin rights the sensors need. The watcher is started
+    /// from this elevated copy, so what it starts is elevated too - and
+    /// outside the logon task's job, or it could be ended with the copy it
+    /// watches (see StartOutsideJob).
+    /// Silent on failure - the widget runs as before, just unwatched.
+    /// </summary>
+    private static void StartWatcher()
+    {
+        try
+        {
+            if (Environment.ProcessPath is not { } exe)
+                return;
+
+            StartOutsideJob(exe, $"{WatchFlag} {Environment.ProcessId}");
+        }
+        catch (Exception ex)
+        {
+            Log("crash watcher", ex);
+        }
+    }
+
+    /// <summary>
+    /// The watcher's whole life: wait for the widget to end, and start it
+    /// again only if it was a native crash.
+    ///
+    /// Told apart by the exit code. A crash ends with an NTSTATUS error,
+    /// 0xC0000005 and the like. Everything else is left alone: Exit in the
+    /// tray, Reload settings and a clean close by Build.ps1 end with 0, being
+    /// killed from Task Manager or by Build.ps1 ends with 1 or -1, and a .NET
+    /// exception ends with 0xE0434352 and is RestartAfterCrash's to restart.
+    /// Ctrl+C / log-off's 0xC000013A is an NTSTATUS code too, but a deliberate end.
+    /// </summary>
+    internal static void WatchWidget(string? pid)
+    {
+        if (!int.TryParse(pid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int id))
+            return;
+
+        try
+        {
+            // A handle of its own, opened now while the widget runs, not a
+            // Process from GetProcessById: that holds no handle of its own, so
+            // its ExitCode threw "Process was not started by this object" once
+            // the widget had gone - the watcher logged that and never restarted
+            // anything. Only waiting and the exit code are asked for.
+            using var widget = OpenProcess(Synchronize | ProcessQueryLimitedInformation, false, id);
+            if (widget.IsInvalid)
+                return;   // gone before the watcher got to it - ended at once, nothing to tell
+
+            WaitForSingleObject(widget, Infinite);
+            if (!GetExitCodeProcess(widget, out uint code))
+            {
+                Log("crash watcher", $"Couldn't read how DeskMon ended (error {Marshal.GetLastWin32Error()}).");
+                return;
+            }
+
+            if ((code & 0xF0000000) != 0xC0000000 || code == 0xC000013A)
+                return;
+
+            Log("crash watcher", $"DeskMon ended with 0x{code:X8} - a crash in native code, which .NET can't catch.");
+            if (RestartedTooRecently())
+                return;
+
+            // A wait first, longer for each restart in a row: started at once,
+            // the new copy opened the sensors on a driver still being replaced
+            // and could crash on it the same way - see CrashRestartDelays.
+            int earlier = Math.Min(RecentRestarts().Count, CrashRestartDelays.Length - 1);
+            Thread.Sleep(CrashRestartDelays[earlier]);
+
+            // Started by hand meanwhile: that copy holds the lock, and a second
+            // would only see it and leave.
+            if (Mutex.TryOpenExisting(SingleInstanceName, out var running))
+            {
+                running.Dispose();
+                Log("crash watcher", "Not restarting: DeskMon was started again meanwhile.");
+                return;
+            }
+
+            StartFreshCopy(id);
+        }
+        catch (Exception ex)
+        {
+            Log("crash watcher", ex);
         }
     }
 

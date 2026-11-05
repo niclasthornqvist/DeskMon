@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Threading;
@@ -101,6 +102,9 @@ internal static class FreezeWatchdog
 
     private static void Watch(Dispatcher ui)
     {
+        // Here, on the watchdog's own thread, so the start doesn't wait on it.
+        SweepOldDumps();
+
         long lastCheck = Environment.TickCount64;
         long lastAwake = AwakeMs();
         long frozenSince = 0;
@@ -177,6 +181,48 @@ internal static class FreezeWatchdog
 
             dumps++;
             App.Log("freeze", $"The widget hasn't answered for {silent / 1000} s. {WriteDump(dumps)}");
+        }
+    }
+
+    /// <summary>A dump this old has been read already, or never will be.</summary>
+    private static readonly TimeSpan DumpsKept = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Deletes what earlier runs left: an unfinished dump or zip (.partial) -
+    /// a dump that hung, or a run killed while writing one - and dumps over
+    /// a week old, zipped or not. Only the newest dump replaced the old one,
+    /// so a 221 MB freeze.dmp from before the zip stayed for good beside a
+    /// 0-byte freeze.dmp.partial. Never throws: tidying only.
+    /// </summary>
+    private static void SweepOldDumps()
+    {
+        try
+        {
+            string folder = Path.GetDirectoryName(DumpPath(1))!;
+            if (!Directory.Exists(folder))
+                return;
+
+            var cutoff = DateTime.UtcNow - DumpsKept;
+            foreach (string file in Directory.EnumerateFiles(folder, "freeze*"))
+            {
+                try
+                {
+                    string name = Path.GetFileName(file);
+                    bool partial = name.EndsWith(".partial", StringComparison.OrdinalIgnoreCase);
+                    bool dump = name.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)
+                                || name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+                    if (partial || (dump && File.GetLastWriteTimeUtc(file) < cutoff))
+                        File.Delete(file);
+                }
+                catch
+                {
+                    // Held or gone - the next start tries again.
+                }
+            }
+        }
+        catch
+        {
+            // Nothing to tidy that can be reached.
         }
     }
 
@@ -291,6 +337,20 @@ internal static class FreezeWatchdog
                 return failed;
             }
 
+            // Zipped: the dump is mostly the .NET heap, a couple of hundred MB
+            // that packs to a fraction of that - small enough to keep and to
+            // send. The raw dump is kept only when the zip can't be made, as a
+            // big dump still beats none.
+            string? zipped = Zip(partial, path);
+            if (zipped is not null)
+            {
+                try { File.Delete(partial); } catch { /* best effort */ }
+                // A freeze.dmp from a version before the zip would otherwise
+                // sit beside the new freeze.zip for good.
+                try { File.Delete(path); } catch { /* best effort */ }
+                return $"Memory dump: {zipped} ({new FileInfo(zipped).Length / (1024 * 1024)} MB zipped).";
+            }
+
             File.Move(partial, path, overwrite: true);
             return $"Memory dump: {path} ({new FileInfo(path).Length / (1024 * 1024)} MB).";
         }
@@ -298,6 +358,35 @@ internal static class FreezeWatchdog
         {
             try { File.Delete(partial); } catch { /* best effort */ }
             return $"The dump failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Packs the finished dump into a .zip beside it and returns its path, or
+    /// null if that failed. Through a temporary file like the dump itself, so
+    /// a zip cut short never replaces the last good one. The entry keeps the
+    /// .dmp name, so it unpacks to what dotnet-dump and Visual Studio open.
+    /// </summary>
+    private static string? Zip(string dump, string path)
+    {
+        string zip = Path.ChangeExtension(path, ".zip");
+        string partial = zip + ".partial";
+
+        try
+        {
+            // Fastest, not Optimal: a dump is mostly heap that packs down well
+            // either way, and Optimal kept a core busy for seconds - right
+            // after a freeze, often over a game - with nothing watching meanwhile.
+            using (var archive = ZipFile.Open(partial, ZipArchiveMode.Create))
+                archive.CreateEntryFromFile(dump, Path.GetFileName(path), CompressionLevel.Fastest);
+
+            File.Move(partial, zip, overwrite: true);
+            return zip;
+        }
+        catch
+        {
+            try { File.Delete(partial); } catch { /* best effort */ }
+            return null;
         }
     }
 

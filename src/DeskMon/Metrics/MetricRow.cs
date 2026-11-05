@@ -827,10 +827,32 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// </summary>
     private void ApplyDetails(SensorSnapshot snapshot)
     {
+        if (_metric.Details is null)
+            return;
+
         // Folded, nothing shows them: every line was read and formatted each
         // tick for nobody. They catch up on the first tick after unfolding.
-        if (_metric.Details is null || !_isExpanded)
+        //
+        // Except a list with no lines yet. Its row has no arrow, so it can't
+        // be unfolded - and folded it was never looked at again, so lines that
+        // turned up later (the graphics card's temperatures, with its driver
+        // not up yet when DeskMon started) never appeared. Only its length is
+        // asked, so a rebuild can give it lines and the arrow.
+        if (!_isExpanded)
+        {
+            if (Details.Count == 0)
+            {
+                try
+                {
+                    NoteDetailCount(_metric.Details(snapshot).Count);
+                }
+                catch
+                {
+                    // As below: a bad lambda in MetricRegistry must not take the widget down.
+                }
+            }
             return;
+        }
 
         try
         {

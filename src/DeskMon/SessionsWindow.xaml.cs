@@ -2615,33 +2615,62 @@ public partial class SessionsWindow : PanelWindow
         if (_allGames ? _games.Count == 0 : game is null || _sessions.Count == 0)
             return;
 
+        // One dialog with the format in its file type list, the way Save As
+        // works everywhere: CSV for a spreadsheet, HTML and PDF as a report to
+        // read, print or send - see SessionReport. The type picked last is
+        // offered first next time, as that is the one likely wanted again.
+        string title = $"{(_allGames ? "All games" : game)} sessions";
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Export sessions",
-            Filter = "CSV file (*.csv)|*.csv",
-            DefaultExt = ".csv",
+            Filter = "CSV for a spreadsheet (*.csv)|*.csv|HTML report (*.html)|*.html|PDF report (*.pdf)|*.pdf",
+            FilterIndex = _exportFormat,
+            DefaultExt = ExportExtensions[_exportFormat - 1],
+            AddExtension = true,
             // A game's name can hold characters a file name can't.
-            FileName = string.Concat($"{(_allGames ? "All games" : game)} sessions".Split(Path.GetInvalidFileNameChars())) + ".csv",
+            FileName = string.Concat(title.Split(Path.GetInvalidFileNameChars())),
             InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         };
 
         if (dialog.ShowDialog(this) != true)
             return;
 
+        // By the name's ending first: typing "x.pdf" with CSV still picked
+        // means a PDF. The picked type otherwise.
+        string file = dialog.FileName;
+        int format = Array.IndexOf(ExportExtensions, Path.GetExtension(file).ToLowerInvariant()) + 1;
+        if (format == 0)
+            format = Math.Clamp(dialog.FilterIndex, 1, ExportExtensions.Length);
+        _exportFormat = format;
+
         try
         {
             // Every log read on a worker, as All games' totals are - see ShowSelection.
+            // The file made there too: a slow or network drive, or a long
+            // history's PDF, would otherwise hold every window.
             var names = _games.Select(g => g.Name).ToList();
-            string csv = _allGames
-                ? await System.Threading.Tasks.Task.Run(() =>
-                      SessionsCsv(names.SelectMany(name => _history.Sessions(name)).ToList(), withGame: true))
-                : SessionsCsv(_sessions);
+            bool all = _allGames;
+            var shown = _sessions;
+            double price = _energyPrice;
+            string currency = _energyCurrency;
+            await System.Threading.Tasks.Task.Run(() =>
+            {
+                var sessions = all ? names.SelectMany(name => _history.Sessions(name)).ToList() : shown;
 
-            // With a BOM: without one Excel reads the file as the local code
-            // page and "°C" turns into "Â°C".
-            // On a worker too: a slow or network drive would hold every window.
-            string file = dialog.FileName;
-            await System.Threading.Tasks.Task.Run(() => File.WriteAllText(file, csv, new System.Text.UTF8Encoding(true)));
+                // With a BOM: without one Excel reads the file as the local
+                // code page and "°C" turns into "Â°C".
+                if (format == 1)
+                {
+                    File.WriteAllText(file, SessionsCsv(sessions, withGame: all), new System.Text.UTF8Encoding(true));
+                    return;
+                }
+
+                var report = new SessionReport(title, sessions, all, price, currency);
+                if (format == 2)
+                    File.WriteAllText(file, report.ToHtml(), new System.Text.UTF8Encoding(false));
+                else
+                    File.WriteAllBytes(file, report.ToPdf());
+            });
         }
         catch (Exception ex)
         {
@@ -2651,6 +2680,12 @@ public partial class SessionsWindow : PanelWindow
             SummaryText.Inlines.LastInline.Foreground = _theme.Warn;
         }
     }
+
+    /// <summary>The export's file types, in the dialog's order: its FilterIndex is one past the index here.</summary>
+    private static readonly string[] ExportExtensions = { ".csv", ".html", ".pdf" };
+
+    /// <summary>The type exported last (1 CSV, 2 HTML, 3 PDF), offered first the next time while DeskMon runs.</summary>
+    private static int _exportFormat = 1;
 
     /// <summary>
     /// Commas and a full stop for the decimals, whatever the PC's region - the

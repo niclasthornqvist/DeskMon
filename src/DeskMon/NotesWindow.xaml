@@ -201,15 +201,60 @@
                               MouseLeftButtonDown="SearchIcon_MouseLeftButtonDown" />
                     </Grid>
 
-                    <!-- At the foot of the list it adds to. A plus, like before. -->
-                    <Border x:Name="ListFoot" DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" Padding="7,5,7,6">
-                        <Button x:Name="NewNoteButton" Style="{StaticResource ToolButton}"
-                                HorizontalAlignment="Left"
+                    <!-- At the foot of the list it adds to, shaped like one of
+                         its rows - the same margin, padding, 24 px tile, name
+                         and dim line under it, and the same hover - so it reads
+                         as "a new entry here". It was a small "+ NEW NOTE" link
+                         in the corner, half the height of the rows above it.
+                         Its tile is drawn, not filled: a dashed outline in the
+                         accent around a page with a plus, an empty slot rather
+                         than a note, so it never passes for one of them. -->
+                    <Border x:Name="ListFoot" DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" Padding="0,4,0,5">
+                        <Button x:Name="NewNoteButton" Cursor="Hand" Focusable="False"
+                                HorizontalContentAlignment="Stretch"
                                 ToolTip="New note&#x0a;A note of your own, listed with the games&apos; notes." Click="NewNote_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <Path Style="{StaticResource ToolIcon}" Data="M5.5,1.5 V9.5 M1.5,5.5 H9.5" />
-                                <TextBlock x:Name="NewNoteLabel" Text="NEW NOTE" />
-                            </StackPanel>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <!-- 7 on the left, not the rows' 6: the ListBox
+                                         sets its rows in by a pixel of border, and
+                                         at 6 the tile sat a pixel left of theirs. -->
+                                    <Border x:Name="Back" Background="Transparent" CornerRadius="6"
+                                            Margin="7,1,6,1" Padding="8,5">
+                                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Ov.14}" />
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource Theme.Accent.40}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid x:Name="NewNoteTile" Width="24" Height="24" Margin="0,0,9,0" VerticalAlignment="Center">
+                                    <Rectangle RadiusX="5" RadiusY="5" Margin="0.5"
+                                               Fill="{DynamicResource Theme.Accent.14}"
+                                               Stroke="{DynamicResource Theme.Accent.99}" StrokeThickness="1"
+                                               StrokeDashArray="2.5 2" />
+                                    <!-- A page with its corner turned down and a
+                                         plus on it: "a new note", where the plus
+                                         alone could have meant anything. -->
+                                    <Path Width="14" Height="14" Stretch="Uniform"
+                                          Stroke="{DynamicResource Theme.Accent}" StrokeThickness="1.3"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          Data="M7.5,0.5 H2 V13.5 H12 V5 Z M7.5,0.5 V5 H12 M7,7 V12 M4.5,9.5 H9.5" />
+                                </Grid>
+                                <StackPanel x:Name="NewNoteLabel" Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock x:Name="NewNoteTitle" Text="New note" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="NewNoteSub" Text="One of your own" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
                         </Button>
                     </Border>
 
@@ -726,10 +771,18 @@
                                     </Style>
                                 </Border.Style>
                             </Border>
-                            <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="▸ Last session"
+                            <!-- In capitals like ALL SESSIONS across from it and
+                                 the widget's own headings, so it reads as a
+                                 heading and not as the first words of the line. -->
+                            <TextBlock x:Name="SessionHeading" Grid.Column="0" Text="▸ LAST SESSION"
                                        FontWeight="SemiBold" Margin="0,0,12,0"
                                        ToolTip="Last session&#x0a;The readings of this game's last session.&#x0a;Click to show or hide them." />
-                            <TextBlock x:Name="SessionText" Grid.Column="1" TextWrapping="Wrap" />
+                            <!-- A wrap panel of items, not one wrapped line of
+                                 text: the line broke after a "·", which was left
+                                 hanging at the end with the average alone below.
+                                 Now a whole item moves down, and the gap between
+                                 items does the dots' job. Filled in code. -->
+                            <WrapPanel x:Name="SessionText" Grid.Column="1" />
                         </Grid>
                         <!-- A toggle like the widget's LOG, with the same clock:
                              it opens the same window, the next click puts it
@@ -759,7 +812,7 @@
                          the first of each line - CPU, CPU, FPS - sits under
                          the others, and so on along the line. Its first column
                          is the heading's, through SessionName above. -->
-                    <Grid x:Name="SessionPeaks" Margin="0,4,0,0" Visibility="Collapsed" />
+                    <Grid x:Name="SessionPeaks" Margin="0,6,0,0" Visibility="Collapsed" />
                 </StackPanel>
             </Border>
 

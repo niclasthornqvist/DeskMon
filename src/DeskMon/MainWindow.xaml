@@ -86,6 +86,7 @@
                 <MenuItem Header="Hardware info" Click="MenuHardware_Click" />
                 <MenuItem Header="Versions" Click="MenuVersions_Click" />
                 <MenuItem Header="Session history" Click="MenuSessions_Click" />
+                <MenuItem Header="Achievements" Click="MenuAchievements_Click" />
                 <MenuItem x:Name="MenuNotes" Header="Notes" Click="MenuNotes_Click" />
                 <MenuItem Header="Open notes folder" Click="MenuNotesFolder_Click" />
                 <Separator />
@@ -154,6 +155,26 @@
                               Data="M2.5,0.5 H6.5 L8.5,2.5 V9.5 H2.5 Z
                                     M6.5,0.5 V2.5 H8.5" />
                         <TextBlock Text="NOTES" />
+                    </StackPanel>
+                </ToggleButton>
+
+                <!-- A trophy: the cup, its two handles, the stem and the foot,
+                     labelled like its neighbours. The label is fixed text, there
+                     from the start, so the widget's width - measured once as it
+                     loads, see LockPanelWidth - makes room for it. A count that
+                     arrived later ("7/20") pushed CFG over the clock instead;
+                     how many are unlocked is in the tooltip - see
+                     ShowAchievementCount. -->
+                <ToggleButton x:Name="ToolAchievements" Style="{StaticResource ToolToggle}"
+                              ToolTip="Achievements&#x0a;Badges for how you play - long sessions, late nights, notes and more."
+                              Click="ToolAchievements_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource ToolIcon}"
+                              Data="M2.5,0.5 H7.5 V3 A2.5,2.5 0 0 1 2.5,3 Z
+                                    M2.5,1.5 H0.5 V2 A2,2 0 0 0 2.7,4
+                                    M7.5,1.5 H9.5 V2 A2,2 0 0 1 7.3,4
+                                    M5,5.5 V8 M3,9.5 H7" />
+                        <TextBlock Text="ACH" />
                     </StackPanel>
                 </ToggleButton>
 
@@ -329,7 +350,15 @@
                                      short gradient bar before the icon - see
                                      SectionRow.AccentBrush - lifted 2px like the icon
                                      so the two sit level. -->
+                                <!-- Moved down 2px with the title below: the title got
+                                     that nudge on its own, which left the icon and the
+                                     accent sitting 2px above the capitals instead of
+                                     level with them. The same render transform, so the
+                                     row's height is not touched. -->
                                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel.RenderTransform>
+                                    <TranslateTransform Y="2" />
+                                </StackPanel.RenderTransform>
                                 <Border Width="3" Height="{Binding AccentHeight}"
                                         CornerRadius="1.5"
                                         Margin="0,0,6,2"

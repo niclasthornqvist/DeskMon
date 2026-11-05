@@ -135,10 +135,15 @@ public static class SettingsCatalogue
         // window itself (ThemeRow), with the picked theme described under it.
         // The windows' colours are here, not under Notes: they colour every
         // window, as the rest of this group does.
-        new("Theme", "Colours, fonts and corners in one go. Changing any of them below makes it Custom.",
+        new("Theme", "Colours, fonts and corners in one go. Changing any of them below, but text size, makes it Custom.",
             new Setting("Theme", "Theme", "", Choices: ThemeCatalogue.Names),
             new Setting("AccentColor", "Accent colour", "Ticked boxes, sliders, selected rows, links and the sessions chart."),
             new Setting("WindowFontFamily", "Window font", "Every window but the widget. The notes keep their own.", Kind: EditorKind.Font),
+            // Right under the font, as the widget's Text size is under its
+            // Font: fonts look different sizes at the same number, so the two
+            // are set together. 14 was the fixed size before.
+            new Setting("WindowFontSize", "Window text size", "Every window but the widget. 14 is the default.",
+                        Slider: new(10, 20, 0.5), Min: 10),
             // No reload any more: every window repaints on UiTheme.Changed.
             new Setting("NotesBackgroundColor", "Window background", "The notepad and the other windows."),
             new Setting("NotesTextColor", "Window text", "Normal text in the notepad and the other windows."),
@@ -273,6 +278,7 @@ public static class SettingsCatalogue
             new Setting("NotesOpacity", "Notepad opacity", "", Slider: OpacitySlider),
             new Setting("HardwareOpacity", "Hardware opacity", "", Slider: OpacitySlider),
             new Setting("VersionsOpacity", "Versions opacity", "", Slider: OpacitySlider),
+            new Setting("AchievementsOpacity", "Achievements opacity", "", Slider: OpacitySlider),
             new Setting("SessionsOpacity", "Sessions opacity", "", Slider: OpacitySlider),
             new Setting("SettingsOpacity", "Settings opacity", "This window.", Slider: OpacitySlider)),
 

@@ -135,6 +135,17 @@ public static class GamePlaytime
                 .FirstOrDefault(entry => string.Equals(entry.Key, game, StringComparison.OrdinalIgnoreCase)).Value;
     }
 
+    /// <summary>
+    /// Every game remembered from Steam or GOG Galaxy - games DeskMon has seen
+    /// run. Under the same lock as the rest, as the UI thread may be adding
+    /// one while a worker reads; a copy, so it can be read after.
+    /// </summary>
+    internal static System.Collections.Generic.List<string> RememberedGames(AppSettings settings)
+    {
+        lock (IdsLock)
+            return settings.SteamAppIds.Keys.Concat(settings.GogGames.Keys).ToList();
+    }
+
     /// <summary>The GOG Galaxy key saved the last time the game ran from Galaxy, or null.</summary>
     internal static string? RememberedGogKey(string game, AppSettings settings)
     {

@@ -182,7 +182,15 @@ internal sealed class TopmostGuard
 
     private const int MostWindowsAbove = 64;
     private const int RaisesBeforeYielding = 5;
-    private static readonly TimeSpan RaiseWindow = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// 30 s, not the 10 s it was: the widget raises once a tick, and during a
+    /// game that is every 2 s - so the sixth raise came just past the 10 s,
+    /// the count began again, and it never gave way, trading places with the
+    /// other window every 2 s for good. 30 s covers five ticks up to a 5 s
+    /// game interval; the overlay's half-second refresh gets there sooner.
+    /// </summary>
+    private static readonly TimeSpan RaiseWindow = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan YieldFor = TimeSpan.FromMinutes(1);
 
     /// <summary>
@@ -190,8 +198,8 @@ internal sealed class TopmostGuard
     /// always-on-top window that raises itself as well - a picture-in-picture
     /// video, another monitoring tool - would otherwise trade places with this
     /// one on every tick, both flickering, for as long as they overlapped.
-    /// Past the fifth time in ten seconds against the same window, it is let
-    /// be for a minute; then tried again, in case it has stopped.
+    /// Past the fifth time in <see cref="RaiseWindow"/> against the same
+    /// window, it is let be for a minute; then tried again, in case it has stopped.
     /// </summary>
     private bool MayRaisePast(IntPtr other)
     {

@@ -23,7 +23,17 @@ public sealed class UiTheme
     /// take the theme's instead - see <see cref="PanelFont"/>.
     /// </summary>
     public const string PanelFontFamily = "Calibri";
-    public const double PanelFontSize = 14;
+
+    /// <summary>
+    /// The windows' text size - AppSettings.WindowFontSize, set by Apply. Not
+    /// a constant any more: 14 suited Calibri, but Segoe UI at 14 reads a
+    /// size larger, so a window font picked in Settings left every window's
+    /// text too big with no way to bring it down. Static, as every window
+    /// reads it from here and there is one setting for all of them.
+    /// </summary>
+    public static double PanelFontSize { get; private set; } = DefaultPanelFontSize;
+
+    public const double DefaultPanelFontSize = 14;
 
     public UiTheme(AppSettings settings) => Apply(settings);
 
@@ -132,8 +142,11 @@ public sealed class UiTheme
     private string? _look;
 
     /// <summary>Every value a theme decides, in one string - what Changed compares.</summary>
+    // The window text size too, though no theme sets it: changing it has to
+    // repaint the windows as a font change does.
     private static string Signature(AppSettings settings)
-        => string.Join("|", ThemeCatalogue.Keys.Select(key => typeof(AppSettings).GetProperty(key)?.GetValue(settings)));
+        => string.Join("|", ThemeCatalogue.Keys.Select(key => typeof(AppSettings).GetProperty(key)?.GetValue(settings)))
+           + "|" + settings.WindowFontSize.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     // --- The windows' chrome ----------------------------------------------------
     //
@@ -243,6 +256,9 @@ public sealed class UiTheme
         Popup = Solid(Mix(solid, shade, 0.06));
 
         PanelFont = new FontFamily(string.IsNullOrWhiteSpace(settings.WindowFontFamily) ? PanelFontFamily : settings.WindowFontFamily);
+        // Clamped as well as checked on load: the windows take 3 off it for
+        // their small print, and below 10 that went under readable.
+        PanelFontSize = Math.Clamp(settings.WindowFontSize, 10, 24);
         Corner = new CornerRadius(Math.Clamp(settings.CornerRadius, 0, 24));
         Glow = settings.Glow
             ? MakeGlow(string.IsNullOrWhiteSpace(settings.GlowColor) ? AccentColor : Parse(settings.GlowColor, "#FF60A5FA"))
@@ -274,6 +290,9 @@ public sealed class UiTheme
         }
 
         resources["Theme.Font"] = PanelFont;
+        // Tooltips and menus: 2 under the window text, the 12 next to 14 they
+        // always had - so they follow the window text size as well.
+        resources["Theme.SmallFontSize"] = PanelFontSize - 2;
         resources["Theme.Corner"] = Corner;
         resources["Theme.CornerSmall"] = new CornerRadius(Math.Min(4, Corner.TopLeft));
     }

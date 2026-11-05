@@ -1,0 +1,106 @@
+<ui:PanelWindow x:Class="DeskMon.AchievementsWindow"
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="clr-namespace:DeskMon.Ui"
+                Title="Achievements"
+                Width="760" Height="640"
+                MinWidth="320" MinHeight="240"
+                ShowInTaskbar="False"
+                ShowActivated="False"
+                TextOptions.TextFormattingMode="Display">
+
+    <ui:PanelWindow.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Ui/PanelStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <!-- The notes window's accent line - strongest in the middle,
+                 fading out at both ends - kept here as one brush so the rule
+                 under the level and the one under every category heading
+                 (made in code, see Fill) look the same and follow the theme. -->
+            <LinearGradientBrush x:Key="AccentRule" StartPoint="0,0" EndPoint="1,0">
+                <GradientStop Color="{DynamicResource Theme.AccentColor.14}" Offset="0" />
+                <GradientStop Color="{DynamicResource Theme.AccentColor.80}" Offset="0.5" />
+                <GradientStop Color="{DynamicResource Theme.AccentColor.14}" Offset="1" />
+            </LinearGradientBrush>
+        </ResourceDictionary>
+    </ui:PanelWindow.Resources>
+
+    <Border x:Name="Panel" CornerRadius="10" BorderThickness="1">
+        <DockPanel LastChildFill="True">
+
+            <Grid x:Name="HeaderBar" DockPanel.Dock="Top" Background="Transparent"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText" Grid.Column="0" Text="ACHIEVEMENTS"
+                           Margin="12,8,8,6" FontWeight="SemiBold" VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,6,0">
+                    <!-- Starts the achievements over - every one locked, and
+                         only what happens from now on counts. Asks twice, like
+                         the notes' DELETE: the first click turns it orange and
+                         says what it will do, the second does it. A bin, as
+                         there. -->
+                    <Button x:Name="ClearButton" Style="{StaticResource ToolButton}" Margin="0,0,4,0"
+                            VerticalAlignment="Center"
+                            ToolTip="Clear all achievements&#x0a;Locks all 20 and starts counting from now. Your sessions, notes and pictures stay as they are."
+                            Click="Clear_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ToolIcon}"
+                                  Data="M0.5,2.5 H10.5 M3.5,2.5 V0.5 H7.5 V2.5 M1.5,2.5 L2.5,10.5 H8.5 L9.5,2.5 M4.5,4.5 V8.5 M6.5,4.5 V8.5" />
+                            <TextBlock x:Name="ClearLabel" Text="CLEAR ALL" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource PanelButton}"
+                            Content="&#x2715;" ToolTip="Close&#x0a;Closes the window - it opens again where you left it." Click="Close_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Border x:Name="HeaderRule" DockPanel.Dock="Top" Height="1" Margin="12,0,12,0" />
+
+            <!-- The player level and how far to the next, in words and as a
+                 bar, with the level's emblem big in the top right corner -
+                 above the badges so none of it scrolls away. Filled in code,
+                 see Fill. -->
+            <Grid DockPanel.Dock="Top" Margin="14,10,14,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock x:Name="CountText" FontWeight="SemiBold" />
+                    <TextBlock x:Name="LevelText" Margin="0,3,0,0" TextWrapping="Wrap" />
+                    <Grid Margin="0,8,0,0" Height="4">
+                        <Border x:Name="CountTrack" CornerRadius="2" />
+                        <Border x:Name="CountFill" CornerRadius="2" HorizontalAlignment="Left" />
+                    </Grid>
+                    <TextBlock x:Name="CountHint" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="For how you play, not what you did in a game. Worked out from your sessions, notes and screenshots." />
+                </StackPanel>
+                <ContentControl x:Name="RankHost" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" />
+            </Grid>
+
+            <!-- Sets the level apart from the badges below it, as the notes
+                 window sets its list apart. -->
+            <Border DockPanel.Dock="Top" Height="1" Margin="12,8,12,0" Background="{DynamicResource AccentRule}" />
+
+            <!-- All, Unlocked, In progress, Locked - which cards are shown.
+                 Above the scroll, so it is at hand however far down. Made in
+                 code with their counts, see Filters. -->
+            <WrapPanel x:Name="FilterRow" DockPanel.Dock="Top" Margin="12,8,12,0" />
+
+            <!-- A heading per category, and under each a card per
+                 achievement, as many to a row as fit: the window can be narrow
+                 beside a game or wide on a second screen. Built in code - see
+                 Fill. -->
+            <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          Margin="8,6,4,10">
+                <StackPanel x:Name="Sections" Margin="0,0,6,0" />
+            </ScrollViewer>
+        </DockPanel>
+    </Border>
+</ui:PanelWindow>

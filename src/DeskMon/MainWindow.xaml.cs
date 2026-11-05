@@ -90,6 +90,22 @@ public partial class MainWindow : Window
 
     /// <summary>Delays the width re-measure until a burst of settings edits is over.</summary>
     private readonly DispatcherTimer _relayout = new() { Interval = TimeSpan.FromMilliseconds(300) };
+
+    /// <summary>One re-fit after a burst of screen changes - see <see cref="RefitAfterDisplayChange"/>.</summary>
+    private readonly DispatcherTimer _displayRefit = new() { Interval = TimeSpan.FromMilliseconds(300) };
+
+    /// <summary>
+    /// How long the display adapters have to stay put before the sensors are
+    /// opened again - see <see cref="OnDisplayAdapterChanged"/>. A driver
+    /// update takes the card away and brings it back, sometimes more than
+    /// once, over a minute or more; opening on it halfway would be the crash
+    /// this is for.
+    /// </summary>
+    private readonly DispatcherTimer _gpuSettle = new() { Interval = TimeSpan.FromSeconds(30) };
+
+    /// <summary>The widget has closed; a sensor reopen finishing after it must not put a new hub in place.</summary>
+    private bool _closed;
+
     private readonly int _ownPid = Environment.ProcessId;
 
     // The tracked game, if any.
@@ -361,6 +377,16 @@ public partial class MainWindow : Window
         _timer.Interval = TimeSpan.FromMilliseconds(Math.Max(100, _settings.IntervalMs));
         _timer.Tick += OnTick;
         _relayout.Tick += (_, _) => OnSettingsSettled();
+        _displayRefit.Tick += (_, _) =>
+        {
+            _displayRefit.Stop();
+            RefitNow();
+        };
+        _gpuSettle.Tick += (_, _) =>
+        {
+            _gpuSettle.Stop();
+            _ = ReopenSensorsAsync();
+        };
         _overlayTimer.Tick += (_, _) => UpdateOverlay();
 
         SetUpTray();
@@ -368,10 +394,213 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closed += OnClosed;
 
+        // Achievement cards stand beside the widget, so they wait while it is
+        // hidden to the tray - and come once it is shown again, rather than
+        // only at the next check.
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible)
+                ShowNextToast();
+        };
+
         // Stop polling while nobody can see the screen.
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+
+        // A monitor plugged in, switched or woken after a reboot - see RefitAfterDisplayChange.
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
     }
+
+    /// <summary>
+    /// The widget moved to a screen with another scale, which also happens at
+    /// startup: it is made on the main screen, then RestorePosition puts it
+    /// back on the one it was left on. Windows resizes it to its own guess
+    /// for the new scale, and that size sticks - SizeToContent does not
+    /// measure again on its own - so the bottom of the panel, the GAME
+    /// section, was cut off until something else re-fitted it.
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        RefitAfterDisplayChange();
+    }
+
+    /// <summary>
+    /// SystemEvents calls from a thread of its own, hence the dispatcher.
+    /// Also the case with no change of scale: a screen coming up late after
+    /// a reboot, or a resolution change, can still leave a stale size.
+    /// </summary>
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) => RefitAfterDisplayChange();
+
+    /// <summary>
+    /// Re-measures the panel once the screens have settled. Waking from sleep
+    /// or switching monitors sends several of these in a row, and each one
+    /// re-measured every row twice; restarting a short timer on each makes it
+    /// one re-fit at the end. Later than the DPI change itself, too, which
+    /// still sees the old scale and would pin the same wrong size again.
+    /// Through the dispatcher: SystemEvents calls from a thread of its own.
+    /// </summary>
+    private void RefitAfterDisplayChange()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _displayRefit.Stop();
+            _displayRefit.Start();
+        }));
+    }
+
+    /// <summary>
+    /// The re-fit itself. The width is measured afresh too: text widths in
+    /// DIPs shift a little with the scale, and a stale pinned width trims or
+    /// wraps rows.
+    /// </summary>
+    private void RefitNow()
+    {
+        if (!IsLoaded || _closed)
+            return;
+
+        if (_detailsBuilt && !Horizontal)
+            RelockWidth();
+        else
+            ResizeToContent();
+    }
+
+    // --- The graphics driver changing ------------------------------------------
+
+    /// <summary>The registration for display adapter arrivals and removals - see OnSourceInitialized.</summary>
+    private IntPtr _adapterNotifications;
+
+    /// <summary>A new sensor hub is being opened; a second ask meanwhile waits for the settle timer again.</summary>
+    private bool _reopening;
+
+    /// <summary>
+    /// A display adapter went away or came back - a graphics driver being
+    /// installed, mostly. The GPU reads stop at once, before the next one can
+    /// call into a driver on its way out - see SensorHub.GpuPaused - and the
+    /// sensors are opened again on the new driver once nothing has changed for
+    /// <see cref="_gpuSettle"/>'s 30 s. Also catches a card that only came up
+    /// after DeskMon started, at logon, whose readings stayed n/a all day.
+    /// </summary>
+    private void OnDisplayAdapterChanged(bool removed)
+    {
+        if (!_gpuSettle.IsEnabled)
+            App.Log("graphics driver", $"A display adapter {(removed ? "went away" : "came back")} - GPU readings paused until it settles.");
+
+        if (_hub is { } hub)
+            hub.GpuPaused = true;
+
+        _gpuSettle.Stop();
+        _gpuSettle.Start();
+    }
+
+    /// <summary>
+    /// Opens a new sensor hub on the driver there now and puts it in place of
+    /// the old one, as at startup: off the UI thread, since opening the
+    /// library loads a driver and walks the hardware. The old one is closed
+    /// after the swap, also off the UI thread - its Dispose waits for a read
+    /// still in flight. A tick reading the old one meanwhile gets one reading
+    /// without temperatures, which is all that costs.
+    /// </summary>
+    private async Task ReopenSensorsAsync()
+    {
+        if (_hub is not { } old || _reopening || _closed)
+            return;
+
+        _reopening = true;
+        try
+        {
+            var fresh = await Task.Run(() => new SensorHub(_settings.PreferredGpu, _settings.SensorIntervalMs));
+            if (_closed)
+            {
+                fresh.Dispose();
+                return;
+            }
+
+            // Still settling - the adapter changed again while this opened:
+            // paused like the old one, and the timer opens another after it.
+            fresh.GpuPaused = _gpuSettle.IsEnabled;
+            _hub = fresh;
+
+            _header?.SetHardware(fresh.CpuName, fresh.GpuName);
+            if (fresh.StartupError is not null)
+            {
+                _baseTooltip = "Temperatures unavailable\nRun DeskMon as administrator.\n\n" + fresh.StartupError;
+                UpdateTooltip();
+            }
+
+            await Task.Run(old.Dispose);
+            App.Log("graphics driver", $"Sensors opened again on the new driver ({fresh.GpuName ?? "no graphics card found"}).");
+        }
+        catch (Exception ex)
+        {
+            // The old hub stays, paused: better n/a on the GPU than reading a
+            // driver that may be gone. The next adapter change tries again.
+            App.Log("opening the sensors again", ex);
+        }
+        finally
+        {
+            _reopening = false;
+        }
+    }
+
+    /// <summary>
+    /// Asks Windows to say when a display adapter comes or goes. Only those:
+    /// WM_DEVICECHANGE also arrives for every USB stick and drive letter.
+    /// </summary>
+    private static IntPtr RegisterForDisplayAdapters(IntPtr window)
+    {
+        var filter = new DevBroadcastDeviceInterface
+        {
+            Size = Marshal.SizeOf<DevBroadcastDeviceInterface>(),
+            DeviceType = DbtDevtypDeviceInterface,
+            ClassGuid = DisplayAdapterInterface,
+        };
+        return RegisterDeviceNotification(window, ref filter, DeviceNotifyWindowHandle);
+    }
+
+    /// <summary>
+    /// A WM_DEVICECHANGE about a display adapter arriving or going, as
+    /// registered for above. Checked by its class as well, since drives and
+    /// volumes send the same two messages to every window unasked.
+    /// </summary>
+    private void NoteDeviceChange(IntPtr wParam, IntPtr lParam)
+    {
+        long eventType = wParam.ToInt64();
+        if ((eventType != DbtDeviceArrival && eventType != DbtDeviceRemoveComplete) || lParam == IntPtr.Zero)
+            return;
+
+        if (Marshal.ReadInt32(lParam, 4) != DbtDevtypDeviceInterface
+            || Marshal.PtrToStructure<Guid>(lParam + 12) != DisplayAdapterInterface)
+            return;
+
+        OnDisplayAdapterChanged(removed: eventType == DbtDeviceRemoveComplete);
+    }
+
+    /// <summary>GUID_DEVINTERFACE_DISPLAY_ADAPTER.</summary>
+    private static readonly Guid DisplayAdapterInterface = new("5B45201D-F2F2-4F3B-85BB-30FF1F953599");
+
+    private const int WM_DEVICECHANGE = 0x0219;
+    private const long DbtDeviceArrival = 0x8000;
+    private const long DbtDeviceRemoveComplete = 0x8004;
+    private const int DbtDevtypDeviceInterface = 5;
+    private const int DeviceNotifyWindowHandle = 0;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DevBroadcastDeviceInterface
+    {
+        public int Size;
+        public int DeviceType;
+        public int Reserved;
+        public Guid ClassGuid;
+        public short Name;   // dbcc_name[1]; nothing is read from it
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr RegisterDeviceNotification(IntPtr recipient, ref DevBroadcastDeviceInterface filter, int flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnregisterDeviceNotification(IntPtr handle);
 
     /// <summary>
     /// The one notification-area icon that stands for the whole program. The
@@ -422,6 +651,7 @@ public partial class MainWindow : Window
         // made says so rather than counting towards a crash.
         _tray.OpenVersions += () => Open("versions window", ShowVersions);
         _tray.OpenSessions += () => Open("sessions window", () => ShowSessions(null));
+        _tray.OpenAchievements += () => Open("achievements window", ShowAchievements);
         _tray.OpenNotes += () => Open("notes window", () => Notes().ShowAndFocus(_gameName));
         _tray.OpenNotesFolder += OpenNotesFolder;
         _tray.OpenSettingsWindow += () => Open("settings window", () => SettingsPanel().ShowAndFocus());
@@ -741,6 +971,13 @@ public partial class MainWindow : Window
         {
             source.AddHook(OnWindowMessage);
 
+            // So a graphics driver being replaced is noticed before the next
+            // GPU read calls into it - see OnDisplayAdapterChanged. Without it
+            // DeskMon runs as before; only the pause is lost.
+            _adapterNotifications = RegisterForDisplayAdapters(_handle);
+            if (_adapterNotifications == IntPtr.Zero)
+                App.Log("graphics driver", $"Couldn't ask to hear about display adapter changes (error {Marshal.GetLastWin32Error()}).");
+
             // Always on top kept on top: Windows can take it away without WPF
             // noticing - see TopmostGuard. Also checked on every tick.
             _topmost = new TopmostGuard(this);
@@ -769,6 +1006,13 @@ public partial class MainWindow : Window
     /// </summary>
     private IntPtr OnWindowMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        // Not handled: the window's own processing of it must still run.
+        if (msg == WM_DEVICECHANGE)
+        {
+            NoteDeviceChange(wParam, lParam);
+            return IntPtr.Zero;
+        }
+
         if (msg != WM_MOUSEACTIVATE)
             return IntPtr.Zero;
 
@@ -820,6 +1064,17 @@ public partial class MainWindow : Window
         };
         _updateTimer.Interval = TimeSpan.FromMinutes(1);
         _updateTimer.Start();
+
+        // The achievements once at start, a little after it, so starting with
+        // Windows isn't slowed by reading every log. The very first run takes
+        // in what the history already earned quietly - see Achievements.Book.Take.
+        var achievementsAtStart = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+        achievementsAtStart.Tick += (_, _) =>
+        {
+            achievementsAtStart.Stop();
+            CheckAchievements(celebrate: true);
+        };
+        achievementsAtStart.Start();
 
         _updateCheckApplied = _settings.CheckForUpdates ? _settings.UpdateRepository.Trim() : string.Empty;
         _updateSoon.Tick += async (_, _) =>
@@ -2372,6 +2627,8 @@ public partial class MainWindow : Window
                     _tray?.Notify("DeskMon", $"The session note couldn't be added to {game}'s notes: {error}.", warning: true);
                     _heldNotes.Start();
                 }
+                else
+                    CountSessionNote();   // Storyteller's count - see Achievements
             }
             catch (Exception ex)
             {
@@ -2421,6 +2678,12 @@ public partial class MainWindow : Window
             {
                 App.Log("adding a session note", error);
                 _heldNotes.Start();
+            }
+            else
+            {
+                // Storyteller's count, as for a SAVE - it missed these. No
+                // check: this is often the way out; the next check counts it.
+                CountSessionNote(check: false);
             }
         }
         catch (Exception ex)
@@ -2518,6 +2781,10 @@ public partial class MainWindow : Window
         {
             App.Log("refreshing after a session", ex);
         }
+
+        // Most achievements are earned by a session, so the check comes with
+        // the line it may have earned them - on disk by now.
+        CheckAchievements(celebrate: true);
     }
 
     /// <summary>
@@ -2820,6 +3087,10 @@ public partial class MainWindow : Window
         // PanelWindow.DimDuringGames.
         foreach (var window in PanelWindows())
             window.SetGameRunning(_inGame);
+
+        // Unlocks held back while a game ran come now it is over.
+        if (!_inGame)
+            ShowNextToast();
     }
 
     /// <summary>
@@ -2834,6 +3105,7 @@ public partial class MainWindow : Window
         if (_versions is not null) yield return _versions;
         if (_sessionsWindow is not null) yield return _sessionsWindow;
         if (_settingsWindow is not null) yield return _settingsWindow;
+        if (_achievementsWindow is not null) yield return _achievementsWindow;
     }
 
     private void UpdateTooltip()
@@ -3526,6 +3798,308 @@ public partial class MainWindow : Window
     private void ToolSettings_Click(object sender, RoutedEventArgs e)
         => ToggleWindow(_settingsWindow, "settings window", () => SettingsPanel().ShowAndFocus());
 
+    private void ToolAchievements_Click(object sender, RoutedEventArgs e)
+        => ToggleWindow(_achievementsWindow, "achievements window", ShowAchievements);
+
+    private void MenuAchievements_Click(object sender, RoutedEventArgs e) => Open("achievements window", ShowAchievements);
+
+    // --- Achievements -----------------------------------------------------
+
+    private AchievementsWindow? _achievementsWindow;
+
+    /// <summary>When each was unlocked and which were seen - achievements.json, read on first use.</summary>
+    private Achievements.Book? _achievementBook;
+
+    /// <summary>The last check's results, for the window to show at once while a new check runs.</summary>
+    private List<Achievements.Result>? _achievementResults;
+
+    /// <summary>
+    /// A card waiting to be shown: one unlock, or with <paramref name="More"/>
+    /// set, the card that stands for that many more - see QueueToasts. With
+    /// no unlock, the player level's card: <paramref name="Level"/> reached
+    /// with <paramref name="Points"/>.
+    /// </summary>
+    private readonly record struct ToastItem(Achievements.Unlock? Unlock, int More = 0, int Level = 0, int Points = 0);
+
+    /// <summary>Cards waiting - one at a time, and only once no game is running.</summary>
+    private readonly Queue<ToastItem> _pendingToasts = new();
+    private AchievementToast? _toast;
+
+    /// <summary>At most this many cards for one check; the rest go on one "and N more" card.</summary>
+    private const int MostToastsAtOnce = 3;
+
+    private bool _checkingAchievements, _checkAchievementsAgain;
+
+    /// <summary>Counted up by each CLEAR ALL, so a check that began before it knows its results are stale.</summary>
+    private int _achievementGeneration;
+    private bool _celebrateAgain;
+
+    /// <summary>
+    /// Session notes saved while achievements.json couldn't be read: added
+    /// in once it can, rather than lost - see AchievementBook.
+    /// </summary>
+    private int _sessionNotesWaiting;
+
+    /// <summary>
+    /// achievements.json, read on first use - or null while it is there but
+    /// can't be read, held by antivirus or a backup, say. Tried again on the
+    /// next call. Null is not taken for "no file": a fresh book saved in its
+    /// place would undo a CLEAR ALL and lose the dates and the Storyteller count.
+    /// </summary>
+    private Achievements.Book? AchievementBook()
+    {
+        if (_achievementBook is null && Achievements.Book.Load() is { } loaded)
+        {
+            _achievementBook = loaded;
+            if (_sessionNotesWaiting > 0)
+            {
+                loaded.SessionNotes += _sessionNotesWaiting;
+                _sessionNotesWaiting = 0;
+                loaded.SaveLater();
+            }
+        }
+        return _achievementBook;
+    }
+
+    /// <summary>
+    /// Works the achievements out again from the logs, notes and screenshots
+    /// - on a worker, it reads them all - and takes in what is newly unlocked.
+    /// Called after each session, at start, when a session note is saved and
+    /// when the window opens. One at a time: a call while one runs is folded
+    /// into a second run after it. Async void, so everything is caught here.
+    /// </summary>
+    /// <param name="celebrate">New unlocks get their card beside the widget - not when the window is up to show them itself.</param>
+    private async void CheckAchievements(bool celebrate)
+    {
+        if (_checkingAchievements)
+        {
+            _checkAchievementsAgain = true;
+            _celebrateAgain |= celebrate;
+            return;
+        }
+
+        // The file there but not readable: nothing is taken in, so nothing
+        // is saved over it; the next check tries again.
+        if (AchievementBook() is not { } book)
+            return;
+
+        _checkingAchievements = true;
+        try
+        {
+            int sessionNotes = book.SessionNotes;
+            var from = book.CountFrom;   // after a CLEAR ALL, only what came since
+            int generation = _achievementGeneration;
+            var results = await Task.Run(() =>
+                Achievements.Check(Achievements.Gather(_sessions, _notesStore, _settings, sessionNotes, from)));
+
+            // Cleared while this read: its results are from before, and taking
+            // them in would unlock everything again. Read once more instead -
+            // by falling through to the re-run below, not returning past it.
+            if (generation != _achievementGeneration)
+                _checkAchievementsAgain = true;
+            else
+            {
+                // The player level before and after: higher gets a card of its
+                // own after the unlocks'. Not on the first, quiet take of a long
+                // history - that is no level-up, only where things stand.
+                bool seeded = book.Seeded;
+                int levelBefore = Achievements.PlayerLevel(book.PointsNow());
+                var fresh = book.Take(results);
+                int points = book.PointsNow();
+                int levelAfter = Achievements.PlayerLevel(points);
+                _achievementResults = results;
+                ShowAchievementCount();
+
+                // On screen, the window plays the new ones itself - they are
+                // not seen yet - so no card for them as well.
+                if (_achievementsWindow is { IsVisible: true } window)
+                    window.Fill(results, book);
+                else if (celebrate)
+                {
+                    QueueToasts(fresh);
+                    if (seeded && levelAfter > levelBefore)
+                        _pendingToasts.Enqueue(new ToastItem(null, Level: levelAfter, Points: points));
+                    ShowNextToast();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log("checking the achievements", ex);
+        }
+        finally
+        {
+            _checkingAchievements = false;
+        }
+
+        if (_checkAchievementsAgain)
+        {
+            _checkAchievementsAgain = false;
+            bool again = _celebrateAgain;
+            _celebrateAgain = false;
+            CheckAchievements(again);
+        }
+    }
+
+    /// <summary>
+    /// The cards for one check's unlocks. One per achievement, with its
+    /// highest new level - Bronze and Silver earned together are one card,
+    /// not two - and no more than MostToastsAtOnce: the rest go on one last
+    /// card that says how many more. A first session after CLEAR ALL can
+    /// unlock eight levels at once, and eight cards of 7 s each held the
+    /// widget's side for a minute.
+    /// </summary>
+    private void QueueToasts(IReadOnlyList<Achievements.Unlock> fresh)
+    {
+        var best = fresh
+            .GroupBy(u => u.Achievement.Id)
+            .Select(g => g.MaxBy(u => u.Level))
+            .ToList();
+
+        bool overflow = best.Count > MostToastsAtOnce;
+        int shown = overflow ? MostToastsAtOnce - 1 : best.Count;
+        foreach (var unlock in best.Take(shown))
+            _pendingToasts.Enqueue(new ToastItem(unlock));
+        if (overflow)
+            _pendingToasts.Enqueue(new ToastItem(best[shown], More: best.Count - shown));
+    }
+
+    /// <summary>"Level 7 · Veteran · 12 of 93 tiers" in the toolbar button's tooltip, once known.</summary>
+    private void ShowAchievementCount()
+    {
+        if (_achievementResults is null || _achievementBook is null)
+            return;
+        // The player level first, as the window's corner shows it - see
+        // AchievementsWindow.Fill - then the tiers it is made of.
+        var book = _achievementBook;
+        int unlocked = _achievementResults.Sum(r => book.LevelOf(r.Achievement));
+        int player = Achievements.PlayerLevel(_achievementResults.Sum(r => Achievements.PointsFor(r.Achievement, book.LevelOf(r.Achievement))));
+        ToolAchievements.ToolTip = $"Achievements  ·  Level {player}, {Achievements.RankName(player)}  ·  {unlocked} of {Achievements.LevelCount} tiers\n" +
+                                   "Badges for how you play - long sessions, late nights, notes and more.";
+    }
+
+    /// <summary>
+    /// The next waiting card, beside the widget - if none is up, no game is
+    /// running, and the widget is on screen to stand beside; called again
+    /// when either of those changes. Below the session-note card when that
+    /// is up, so the two don't cover each other.
+    /// </summary>
+    private void ShowNextToast()
+    {
+        if (_toast is not null || _inGame || _pendingToasts.Count == 0 || !IsVisible)
+            return;
+
+        try
+        {
+            var item = _pendingToasts.Dequeue();
+            var toast = item.Unlock is { } unlock
+                ? new AchievementToast(_theme, unlock, VisiblePanel(), NoteCardBelow(), item.More)
+                : new AchievementToast(_theme, item.Level, item.Points, VisiblePanel(), NoteCardBelow());
+            toast.Opened += () => Open("achievements window", ShowAchievements);
+
+            void Follow(object? sender, EventArgs e) => toast.Follow(VisiblePanel(), NoteCardBelow());
+            LocationChanged += Follow;
+            SizeChanged += Follow;
+            toast.Closed += (_, _) =>
+            {
+                LocationChanged -= Follow;
+                SizeChanged -= Follow;
+                if (ReferenceEquals(_toast, toast))
+                    _toast = null;
+                // The next one a moment after, so two cards don't read as one.
+                var next = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+                next.Tick += (_, _) =>
+                {
+                    next.Stop();
+                    ShowNextToast();
+                };
+                next.Start();
+            };
+            _toast = toast;
+            toast.Show();
+        }
+        catch (Exception ex)
+        {
+            App.Log("showing an achievement", ex);
+        }
+    }
+
+    /// <summary>
+    /// How far down the toast stands so its card starts under the note
+    /// card's: that card's height less its shadow room (6 above and below),
+    /// plus a gap. Nothing when no note card is up.
+    /// </summary>
+    private double NoteCardBelow() => _notePrompt is { IsVisible: true } prompt ? prompt.ActualHeight - 6 : 0;
+
+    /// <summary>
+    /// The achievements window, made on first use like the others. Shown at
+    /// once with the last results, then checked again so it is up to date.
+    /// Cards still waiting are dropped: the window plays those unlocks
+    /// itself, and they kept sliding in beside it after a card was clicked.
+    /// The card on screen is left to go by itself.
+    /// </summary>
+    private void ShowAchievements()
+    {
+        if (_achievementsWindow is null)
+        {
+            _achievementsWindow = Track(new AchievementsWindow(_settings, _theme));
+            _achievementsWindow.ClearRequested += ClearAchievements;
+        }
+        _pendingToasts.Clear();
+        if (_achievementResults is not null && AchievementBook() is { } book)
+            _achievementsWindow.Fill(_achievementResults, book);
+        _achievementsWindow.ShowAndFocus();
+        CheckAchievements(celebrate: false);
+    }
+
+    /// <summary>
+    /// CLEAR ALL in the window, confirmed: everything locked and counted from
+    /// now (Book.Clear). Cards still waiting are dropped - they are for
+    /// unlocks that no longer stand - and the window is filled again at once.
+    /// </summary>
+    private void ClearAchievements()
+    {
+        try
+        {
+            // Not cleared while the file can't be read: the clear would be
+            // saved over it, and it would then be read back as it was.
+            if (AchievementBook() is not { } book)
+            {
+                _tray?.Notify("DeskMon", "The achievements couldn't be cleared - achievements.json can't be read right now. Try again in a moment.", warning: true);
+                return;
+            }
+
+            _achievementGeneration++;   // a check already reading is from before - see CheckAchievements
+            book.Clear();
+            _pendingToasts.Clear();
+            _toast?.Close();
+            CheckAchievements(celebrate: false);
+        }
+        catch (Exception ex)
+        {
+            App.Log("clearing the achievements", ex);
+        }
+    }
+
+    /// <summary>
+    /// A session note saved from the card: the one count no file keeps, for
+    /// Storyteller. Held over if the file can't be read just now.
+    /// </summary>
+    /// <param name="check">False on the way out, where there is no time for a check.</param>
+    private void CountSessionNote(bool check = true)
+    {
+        if (AchievementBook() is { } book)
+        {
+            book.SessionNotes++;
+            book.SaveLater();
+        }
+        else
+            _sessionNotesWaiting++;
+
+        if (check)
+            CheckAchievements(celebrate: true);
+    }
+
     /// <summary>
     /// The settings window, created on first use like the others. Its two
     /// events are subscribed here rather than at the call site, so they are
@@ -3955,6 +4529,7 @@ public partial class MainWindow : Window
         ApplyVersionStyle();   // the version number is the versions window's toggle now
         ToolNotes.IsChecked = _notes is { IsVisible: true };
         ToolSettings.IsChecked = _settingsWindow is { IsVisible: true };
+        ToolAchievements.IsChecked = _achievementsWindow is { IsVisible: true };
     }
 
     /// <summary>
@@ -4391,6 +4966,8 @@ public partial class MainWindow : Window
         _versions?.AllowClose();
         _sessionsWindow?.AllowClose();
         _settingsWindow?.AllowClose();
+        _achievementsWindow?.AllowClose();
+        _toast?.Close();
         _overlay?.AllowClose();
     }
 
@@ -4468,8 +5045,17 @@ public partial class MainWindow : Window
     {
         SystemEvents.SessionSwitch -= OnSessionSwitch;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;   // static event: would keep the closed window alive
+        _closed = true;   // a sensor reopen still under way disposes what it opened - see ReopenSensorsAsync
         _timer.Stop();
         _relayout.Stop();
+        _displayRefit.Stop();
+        _gpuSettle.Stop();
+        if (_adapterNotifications != IntPtr.Zero)
+        {
+            UnregisterDeviceNotification(_adapterNotifications);
+            _adapterNotifications = IntPtr.Zero;
+        }
         _overlayTimer.Stop();
         _clockTimer.Stop();
         _heldNotes.Stop();
@@ -4519,6 +5105,13 @@ public partial class MainWindow : Window
             _versions.AllowClose();
             _versions.Close();
         }
+
+        if (_achievementsWindow is not null)
+        {
+            _achievementsWindow.AllowClose();
+            _achievementsWindow.Close();
+        }
+        _toast?.Close();
 
         if (_sessionsWindow is not null)
         {

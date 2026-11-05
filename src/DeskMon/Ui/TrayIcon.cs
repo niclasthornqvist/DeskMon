@@ -64,6 +64,7 @@ public sealed class TrayIcon : IDisposable
         Add(menu, "Hardware info", () => OpenHardware?.Invoke());
         Add(menu, "Versions", () => OpenVersions?.Invoke());
         Add(menu, "Session history", () => OpenSessions?.Invoke());
+        Add(menu, "Achievements", () => OpenAchievements?.Invoke());
         Add(menu, "Notes", () => OpenNotes?.Invoke());
         Add(menu, "Open notes folder", () => OpenNotesFolder?.Invoke());
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -186,6 +187,8 @@ public sealed class TrayIcon : IDisposable
     public event Action? OpenHardware;
     public event Action? OpenVersions;
     public event Action? OpenSessions;
+    /// <summary>The personal achievements - next to the history they are worked out from.</summary>
+    public event Action? OpenAchievements;
     public event Action? OpenNotes;
     public event Action? OpenNotesFolder;
     /// <summary>The settings window.</summary>

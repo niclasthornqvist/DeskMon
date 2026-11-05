@@ -35,6 +35,11 @@ public sealed class SessionHistory
 
     private readonly string _folder;
 
+    /// <summary>Each log as last parsed, with the write time and size it had - see Sessions.</summary>
+    private readonly Dictionary<string, ((DateTime Written, long Length) Stamp, IReadOnlyList<SessionRecord> Sessions)> _parsed =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _parsedLock = new();
+
     public SessionHistory(string? folderOverride)
     {
         _folder = string.IsNullOrWhiteSpace(folderOverride)
@@ -93,11 +98,35 @@ public sealed class SessionHistory
     /// written in. Lines that don't read as a session are skipped; an empty
     /// list when there is no log or it can't be read.
     /// </summary>
+    /// <remarks>
+    /// Kept once parsed, until the log changes: the achievements read every
+    /// game's log after each session and each time their window opens, and
+    /// parsing each line's dozen figures again every time grew with the
+    /// history. A log is known to have changed by its write time and size -
+    /// every append and delete moves both. Read-only, as the same list may
+    /// now be handed to several callers, and on any thread.
+    /// </remarks>
     public IReadOnlyList<SessionRecord> Sessions(string game)
     {
         try
         {
-            var sessions = Lines(PathFor(game))
+            string path = PathFor(game);
+            var file = new FileInfo(path);
+            // Keyed with the name as given too: each record carries it as its Game.
+            string key = path + "|" + game;
+            if (!file.Exists)
+            {
+                lock (_parsedLock)
+                    _parsed.Remove(key);
+                return Array.Empty<SessionRecord>();
+            }
+
+            var stamp = (file.LastWriteTimeUtc, file.Length);
+            lock (_parsedLock)
+                if (_parsed.TryGetValue(key, out var kept) && kept.Stamp == stamp)
+                    return kept.Sessions;
+
+            var sessions = Lines(path)
                 .Select(SessionRecord.Parse)
                 .OfType<SessionRecord>()
                 .ToList();
@@ -108,7 +137,10 @@ public sealed class SessionHistory
                 sessions[i].Game = game;
             }
 
-            return sessions;
+            var readOnly = sessions.AsReadOnly();
+            lock (_parsedLock)
+                _parsed[key] = (stamp, readOnly);
+            return readOnly;
         }
         catch
         {

@@ -481,6 +481,14 @@ public sealed class AppSettings
     /// <summary>The font of every window but the widget - menus and tooltips too. The notes keep their own.</summary>
     public string WindowFontFamily { get; set; } = "Calibri";
 
+    /// <summary>
+    /// The text size of every window but the widget - menus and tooltips too.
+    /// Fonts differ in how big they look at the same size, so a font picked
+    /// for the windows needs a size to go with it. Not part of any theme, so
+    /// picking a theme keeps the size you set. The notes' own text keeps its size.
+    /// </summary>
+    public double WindowFontSize { get; set; } = UiTheme.DefaultPanelFontSize;
+
     /// <summary>How round the corners of the widget and the windows are, in pixels; 0 is square.</summary>
     public double CornerRadius { get; set; } = 10;
 
@@ -664,6 +672,15 @@ public sealed class AppSettings
     public double? VersionsTop { get; set; }
     public double? VersionsWidth { get; set; }
     public double? VersionsHeight { get; set; }
+
+    // --- Achievements window ---
+    /// <summary>As <see cref="NotesOpacity"/>, for the achievements window.</summary>
+    public double AchievementsOpacity { get; set; } = 1;
+
+    public double? AchievementsLeft { get; set; }
+    public double? AchievementsTop { get; set; }
+    public double? AchievementsWidth { get; set; }
+    public double? AchievementsHeight { get; set; }
 
     // --- Sessions window ---
     /// <summary>As <see cref="NotesOpacity"/>, for the session history window.</summary>
@@ -931,6 +948,10 @@ public sealed class AppSettings
         // The same limits the widget applies where it uses them.
         if (!double.IsFinite(FontSize) || FontSize < 6)
             FontSize = 13;
+        // A hand-edited 0 or nonsense would be clamped to the smallest size;
+        // the old fixed 14 is what the windows always had.
+        if (!double.IsFinite(WindowFontSize) || WindowFontSize < 6)
+            WindowFontSize = UiTheme.DefaultPanelFontSize;
         if (!double.IsFinite(LabelWidth) || LabelWidth < 0)
             LabelWidth = 56;
         if (!double.IsFinite(ValueWidth) || ValueWidth < 0)
@@ -966,6 +987,7 @@ public sealed class AppSettings
         nameof(NotesLeft), nameof(NotesTop), nameof(NotesWidth), nameof(NotesHeight), nameof(NotesListWidened), nameof(NotesListFolded),
         nameof(HardwareLeft), nameof(HardwareTop), nameof(HardwareWidth), nameof(HardwareHeight),
         nameof(VersionsLeft), nameof(VersionsTop), nameof(VersionsWidth), nameof(VersionsHeight),
+        nameof(AchievementsLeft), nameof(AchievementsTop), nameof(AchievementsWidth), nameof(AchievementsHeight),
         nameof(SessionsLeft), nameof(SessionsTop), nameof(SessionsWidth), nameof(SessionsHeight),
         nameof(SessionColumns), nameof(SessionsChart), nameof(SteamAppIds), nameof(GogGames),
         nameof(PicturesLeft), nameof(PicturesTop), nameof(PicturesWidth), nameof(PicturesHeight),
