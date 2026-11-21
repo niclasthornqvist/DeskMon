@@ -380,7 +380,8 @@ public partial class SessionsWindow
     {
         string date = day.ToString("ddd d MMM", CultureInfo.InvariantCulture);
         if (games is null || games.Count == 0)
-            return $"{date} · nothing played";
+            // On two lines like a day that was played, so it is a title and a line, not a lone title.
+            return $"{date}\nNothing played.";
 
         var total = games.Values.Aggregate(TimeSpan.Zero, (a, b) => a + b);
         return $"{date} · {SessionRecord.Describe(total)}\n" +

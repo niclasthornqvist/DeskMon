@@ -547,7 +547,7 @@ public partial class VersionsWindow : PanelWindow
         Stats.Children.Clear();
 
         Stats.Children.Add(StatCard.Make(_theme, "RUNNING", AppUpdate.Running.ToString(),
-                                         "The DeskMon version open now"));
+                                         "Running\nThe DeskMon version open now."));
         Stats.Children.Add(UpdateCard());
 
         // The runtime is always there: this window could not be on screen without it.
@@ -602,7 +602,7 @@ public partial class VersionsWindow : PanelWindow
     {
         if (!_settings.CheckForUpdates || string.IsNullOrWhiteSpace(_settings.UpdateRepository))
             return StatCard.Make(_theme, "UPDATE", "not checked",
-                                 "Set the release page under Alerts and updates in Settings",
+                                 "Update check off\nSet the release page under Alerts and updates in Settings.",
                                  valueBrush: _theme.Unavailable);
 
         if (AppUpdate.Newer is { } release)
@@ -620,11 +620,12 @@ public partial class VersionsWindow : PanelWindow
         }
 
         if (AppUpdate.Problem is { } problem)
-            return StatCard.Make(_theme, "UPDATE", "couldn't check", problem, valueBrush: _theme.Warn);
+            return StatCard.Make(_theme, "UPDATE", "couldn't check", $"Couldn't check for updates\n{problem}", valueBrush: _theme.Warn);
 
+        // A name line over each, as every other card has, not a lone sentence.
         return AppUpdate.CheckedAt is { } at
-            ? StatCard.Make(_theme, "UPDATE", "up to date ✓", $"Checked at {at:HH:mm} - once a day", valueBrush: _theme.Normal)
-            : StatCard.Make(_theme, "UPDATE", "not yet", "Checked once a day, first a minute after start", valueBrush: _theme.Label);
+            ? StatCard.Make(_theme, "UPDATE", "up to date ✓", $"Up to date\nChecked at {at:HH:mm} - once a day.", valueBrush: _theme.Normal)
+            : StatCard.Make(_theme, "UPDATE", "not yet", "Not checked yet\nChecked once a day, first a minute after start.", valueBrush: _theme.Label);
     }
 
     // --- Chrome -----------------------------------------------------------

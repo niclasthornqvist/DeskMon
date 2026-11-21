@@ -207,22 +207,30 @@ public sealed class FrameStats
         if (frameMs <= 0 || double.IsNaN(frameMs))
             return;
 
+        // Judged a stutter here, against the frames just before it, while
+        // the stream is still in order - the frame then goes wherever it
+        // belongs (held back, a second being judged, or counted) carrying
+        // that, so a loading frame left out takes its stutter with it.
+        _pace ??= new PaceWindow();
+        bool stutter = _pace.IsStutter(frameMs);
+        _pace.Push(frameMs);
+
         if (!_settled)
         {
-            Hold(frameMs, shown);
+            Hold(frameMs, shown, stutter);
             return;
         }
 
         if (_lockFps is null && _menuAboveFps is null)
         {
-            Count(frameMs, shown);
+            Count(frameMs, shown, stutter);
             return;
         }
 
         // Settled, with a lock or a menu cut-off: judged a second at a time,
         // as while unsettled.
         _playSecond ??= new FrameStats();
-        _playSecond.Count(frameMs, shown);
+        _playSecond.Count(frameMs, shown, stutter);
         if (AtLock(frameMs))
             _secondAtLock++;
 
@@ -257,16 +265,17 @@ public sealed class FrameStats
         _paced = 0;
         _pacedMs = 0;
         _squares = 0;
+        _stutters = 0;
     }
 
     /// <summary>A frame while unsettled: into the second in progress, and each whole second judged on its own.</summary>
-    private void Hold(double frameMs, int shown)
+    private void Hold(double frameMs, int shown, bool stutter)
     {
         _loading ??= new FrameStats();
         _streak ??= new FrameStats();
         _second ??= new FrameStats();
 
-        _second.Count(frameMs, shown);
+        _second.Count(frameMs, shown, stutter);
         if (frameMs >= LoadingFrameMs)
             _secondClean = false;
         if (AtLock(frameMs))
@@ -353,9 +362,11 @@ public sealed class FrameStats
     /// </summary>
     public long Generated { get; private set; }
 
-    private void Count(double frameMs, int shown = 1)
+    private void Count(double frameMs, int shown = 1, bool stutter = false)
     {
         Generated += shown - 1;
+        if (stutter)
+            _stutters++;
 
         int bin = Math.Min(Bins, (int)(frameMs / BinMs));
         _counts[bin]++;
@@ -391,6 +402,7 @@ public sealed class FrameStats
         _paced += other._paced;
         _pacedMs += other._pacedMs;
         _squares += other._squares;
+        _stutters += other._stutters;
         LoadingMs += other.LoadingMs;
         MenuMs += other.MenuMs;
 
@@ -458,35 +470,109 @@ public sealed class FrameStats
     }
 
     /// <summary>
-    /// How many frames were stutters: at least 2.5 times the session's median
-    /// frame time, and at least 8 ms more than it - so at 120 fps a frame of
-    /// 21 ms or more, at 60 fps one of 42 ms or more. The average and the lows
-    /// can look fine while a game hitches every few seconds; this counts the
-    /// hitches. The 8 ms floor is for high frame rates, where 2.5 times a
-    /// 4 ms frame is a dip nobody feels.
+    /// How many frames were stutters: at least 2.5 times the median frame
+    /// time of the two seconds before it, and at least 8 ms more than that -
+    /// so at 120 fps a frame of 21 ms or more, at 60 fps one of 42 ms or more.
+    /// The average and the lows can look fine while a game hitches every few
+    /// seconds; this counts the hitches. The 8 ms floor is for high frame
+    /// rates, where 2.5 times a 4 ms frame is a dip nobody feels.
     ///
-    /// Frames past the histogram's last bin (100 ms and up) are left out:
-    /// those are loading screens and hangs, which the 0.1% low already shows.
-    /// From the histogram alone, so it is exact across merged runs and costs
-    /// nothing per frame. Null below the 1% low's floor, like the lows.
+    /// Against the frames just before, not the whole session's median: a
+    /// Hogwarts Legacy session with a stretch at 240 fps had its median
+    /// pulled to about 4 ms, every frame slower than about 80 fps counted,
+    /// and ordinary play at 110 came out as 17,099 "stutters". A hitch is a
+    /// frame much slower than the ones around it, wherever the rate is.
+    ///
+    /// Frames of 100 ms and up are left out: those are loading screens and
+    /// hangs, which the 0.1% low already shows. Null below the 1% low's
+    /// floor, like the lows.
     /// </summary>
-    public long? Stutters
+    public long? Stutters => Frames < OnePercentFloor ? null : _stutters;
+
+    /// <summary>Frames judged stutters as they came - see Stutters and PaceWindow.</summary>
+    private long _stutters;
+
+    /// <summary>The frames just before, which each new one is judged against - made on the first frame of a live run.</summary>
+    private PaceWindow? _pace;
+
+    /// <summary>
+    /// The last two seconds of frame times, with their median, for judging
+    /// stutters as frames come. A histogram in the same quarter-millisecond
+    /// bins as the session's, so the median is a scan of 400 counts - done
+    /// every 32 frames, not every frame: on PresentMon's thread at 500 fps
+    /// that is a few scans a second, and a median a few frames old judges
+    /// the same. About 18 KB, for the live run only.
+    /// </summary>
+    private sealed class PaceWindow
     {
-        get
+        private const double SpanMs = 2000;
+
+        /// <summary>Enough for two seconds at 1000 fps; past that the oldest go first.</summary>
+        private const int Capacity = 2048;
+
+        /// <summary>Fewer frames than this before - a run's first moments - judges nothing yet.</summary>
+        private const int Warmup = 60;
+
+        private const int RecountEvery = 32;
+
+        private readonly double[] _ring = new double[Capacity];
+        private readonly int[] _bins = new int[Bins];
+        private int _head, _count, _sinceRecount = RecountEvery;
+        private double _spanMs, _median;
+
+        public bool IsStutter(double frameMs)
         {
-            if (Frames < OnePercentFloor)
-                return null;
+            if (_count < Warmup || frameMs >= Bins * BinMs)
+                return false;
+            if (_sinceRecount >= RecountEvery)
+            {
+                _median = Median();
+                _sinceRecount = 0;
+            }
+            return _median > 0 && frameMs >= Math.Max(2.5 * _median, _median + 8);
+        }
 
-            double median = Median();
-            double threshold = Math.Max(2.5 * median, median + 8);
+        /// <summary>
+        /// Takes the frame in and lets the oldest go past two seconds. Not
+        /// frames of 100 ms or more: one second-long load frame would be the
+        /// whole window, and the play after it judged against nothing.
+        /// </summary>
+        public void Push(double frameMs)
+        {
+            _sinceRecount++;
+            if (frameMs >= Bins * BinMs)
+                return;
 
-            // Whole bins from the one the threshold starts in, short of the
-            // last; the bin it cuts through counts if its frames average above it.
-            long stutters = 0;
-            for (int i = (int)(threshold / BinMs); i < Bins; i++)
-                if (_counts[i] > 0 && _sums[i] / _counts[i] >= threshold)
-                    stutters += _counts[i];
-            return stutters;
+            if (_count == Capacity)
+                Drop();
+            _ring[(_head + _count) % Capacity] = frameMs;
+            _count++;
+            _spanMs += frameMs;
+            _bins[(int)(frameMs / BinMs)]++;
+            while (_spanMs > SpanMs && _count > 1)
+                Drop();
+        }
+
+        private void Drop()
+        {
+            double old = _ring[_head];
+            _head = (_head + 1) % Capacity;
+            _count--;
+            _spanMs -= old;
+            _bins[(int)(old / BinMs)]--;
+        }
+
+        /// <summary>The middle frame's bin, at its centre - within an eighth of a millisecond.</summary>
+        private double Median()
+        {
+            int half = (_count + 1) / 2, seen = 0;
+            for (int i = 0; i < Bins; i++)
+            {
+                seen += _bins[i];
+                if (seen >= half)
+                    return (i + 0.5) * BinMs;
+            }
+            return 0;
         }
     }
 

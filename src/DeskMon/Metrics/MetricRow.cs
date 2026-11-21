@@ -558,10 +558,14 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
         => CanExpand ? Visibility.Visible : Visibility.Hidden;
 
     /// <summary>Says what the arrow unfolds - a sensor list, or which rows.</summary>
+    // A name line and the click under it, as the row's own card has - a lone
+    // "Show the cores" was a one-line card.
     public string IndicatorTooltip
-        => _folded.Count > 0
-            ? $"Show {string.Join(", ", _folded.Select(r => r.Label))}"
-            : "Show " + _metric.DetailsAbout;
+        => _isExpanded
+            ? $"{_metric.Label}\nThe rows under it are shown.\nClick to fold them away."
+            : _folded.Count > 0
+                ? $"{_metric.Label}\nClick to show {string.Join(", ", _folded.Select(r => r.Label))}."
+                : $"{_metric.Label}\nClick to show {_metric.DetailsAbout}.";
 
     /// <summary>
     /// A row folded under another is indented a little, so it reads as part of
@@ -584,6 +588,7 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
             _isExpanded = value;
             Set(nameof(IsExpanded));
             Set(nameof(Indicator));
+            Set(nameof(IndicatorTooltip));   // it says "fold" when open, "show" when not
         }
     }
 

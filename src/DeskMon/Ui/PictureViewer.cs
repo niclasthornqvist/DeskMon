@@ -196,7 +196,7 @@ public sealed class PictureViewer : Window
         _viewTools.Children.Add(star);
         _viewTools.Children.Add(Tool("COPY", "Copy the picture (Ctrl+C)\nPaste it into a chat, a document or Paint.", Copy));
         _viewTools.Children.Add(Tool("MARK UP", "Draw arrows, circles and text on it (M)\nSaved as a copy - this picture stays as it is.", StartMarkup));
-        _viewTools.Children.Add(Tool("PHOTOS ↗", "Open it in Windows' own picture viewer", OpenOutside));
+        _viewTools.Children.Add(Tool("PHOTOS ↗", "Open in Photos\nShows it in Windows' own picture viewer.", OpenOutside));
 
         _deleteButton = Tool("DELETE", "Delete this picture (Del)\nIt goes to the Recycle Bin and is taken out of the notes too.", Delete);
         _deleteButton.Margin = new Thickness(14, 0, 2, 0);   // set apart from the rest
@@ -677,10 +677,10 @@ public sealed class PictureViewer : Window
         }
 
         _markTools.Children.Add(new Border { Width = 1, Margin = new Thickness(8, 3, 8, 3), Background = _theme.Separator });
-        _markTools.Children.Add(Tool("UNDO", "Take the last mark away (Ctrl+Z)", Undo));
+        _markTools.Children.Add(Tool("UNDO", "Undo (Ctrl+Z)\nTakes the last mark away.", Undo));
         _markTools.Children.Add(Tool("SAVE", "Save the marks onto this picture\nThe notes show it marked; the unmarked one goes to the Recycle Bin.", () => SaveMarkup(inPlace: true)));
         _markTools.Children.Add(Tool("SAVE COPY", "Save the marked picture beside this one\nThis one stays as it is.", () => SaveMarkup(inPlace: false)));
-        _markTools.Children.Add(Tool("CANCEL", "Leave without saving (Esc)", EndMarkup));
+        _markTools.Children.Add(Tool("CANCEL", "Cancel (Esc)\nLeaves without saving - the picture stays as it was.", EndMarkup));
 
         _colour = Colours[0];
     }

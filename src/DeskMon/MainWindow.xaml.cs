@@ -461,8 +461,26 @@ public partial class MainWindow : Window
 
         if (_detailsBuilt && !Horizontal)
             RelockWidth();
+        else if (Horizontal)
+            RemakeRows();   // a plain re-fit kept the rows' stale widths - see RemakeRows
         else
             ResizeToContent();
+    }
+
+    /// <summary>
+    /// Side by side, remakes every row and re-fits, as folding a section
+    /// does. Re-fitting alone was not enough after a screen change at start:
+    /// the GAME rows kept a width measured before it, too narrow for them,
+    /// and WPF reuses a measure it thinks is still valid. Each row was
+    /// squeezed down to its label - no value, no bar - and the window,
+    /// sized to those widths, looked right to every check. Freshly made rows
+    /// are measured afresh. Stacked needs none of this: RelockWidth already
+    /// remakes the list.
+    /// </summary>
+    private void RemakeRows()
+    {
+        _visibleItems.Clear();
+        RefreshVisibleItems(refit: true);
     }
 
     // --- The graphics driver changing ------------------------------------------
@@ -1402,6 +1420,10 @@ public partial class MainWindow : Window
     ///
     /// Held to once in ten seconds: a strip wider than every screen together
     /// can never fit, and must not redraw the whole list on each tick.
+    ///
+    /// Also when a row is squeezed inside a column that does fit - see
+    /// RowSqueezed. Both are put right by remaking the rows rather than only
+    /// re-fitting, since a re-fit reuses the stale widths behind the second.
     /// </summary>
     private void KeepColumnsInside()
     {
@@ -1409,11 +1431,38 @@ public partial class MainWindow : Window
             return;
 
         double right = panel.TranslatePoint(new Point(panel.NeededWidth, 0), this).X;
-        if (right <= ActualWidth + 1 || DateTime.UtcNow < _nextColumnFit)
+        if ((right <= ActualWidth + 1 && !RowSqueezed(panel)) || DateTime.UtcNow < _nextColumnFit)
             return;
 
         _nextColumnFit = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        RefreshVisibleItems(refit: true);
+        RemakeRows();
+    }
+
+    /// <summary>
+    /// True when a metric row's value and bar got less room than they asked
+    /// for: the row was laid out from a stale, too-small width, and shows its
+    /// label alone. Nothing about the window gives that away - it is sized to
+    /// the same stale widths - so the parts of the row are compared instead.
+    /// Metric rows only: a heading may trim a long game name on purpose.
+    /// </summary>
+    private static bool RowSqueezed(SectionsPanel panel)
+    {
+        // Through the visual tree: the panel is an items host, whose Children
+        // belong to the list rather than to code poking at it.
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(panel); i++)
+        {
+            if (VisualTreeHelper.GetChild(panel, i) is not UIElement child
+                || child.Visibility != Visibility.Visible
+                || child is not FrameworkElement { DataContext: MetricRow }
+                || VisualTreeHelper.GetChildrenCount(child) == 0
+                || VisualTreeHelper.GetChild(child, 0) is not System.Windows.Controls.Grid strip)
+                continue;
+
+            foreach (UIElement part in strip.Children)
+                if (part.Visibility == Visibility.Visible && part.RenderSize.Width + 1 < part.DesiredSize.Width)
+                    return true;
+        }
+        return false;
     }
 
     /// <summary>

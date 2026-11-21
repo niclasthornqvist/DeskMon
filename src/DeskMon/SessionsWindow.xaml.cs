@@ -1178,12 +1178,17 @@ public partial class SessionsWindow : PanelWindow
         // in front of the other cards when it arrives - see AddPlaytimeAsync.
         _ = AddPlaytimeAsync(game, total);
 
-        AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged", PlaytimeSource.Logged);
-        AddStat("SESSIONS", _sessions.Count.ToString(CultureInfo.InvariantCulture), iconData: SessionsCardIcon);
+        // Every card's tooltip a name line and then what it means, as the rest
+        // of the program's are: a lone sentence was drawn as one bold title,
+        // with nothing under it to say what the card was.
+        AddStat("LOGGED", SessionRecord.Describe(total), LoggedTip, PlaytimeSource.Logged);
+        AddStat("SESSIONS", _sessions.Count.ToString(CultureInfo.InvariantCulture),
+                "Sessions\nHow many times this game was played while DeskMon was running.\nEach one is a row in the table below.",
+                iconData: SessionsCardIcon);
 
         if (WeightedFps(_sessions) is double fps)
             AddStat("AVERAGE", $"{fps:0} fps",
-                    "Weighted by how long each session ran, so a few minutes in a menu don't outweigh an evening",
+                    "Average FPS\nWeighted by how long each session ran, so a few minutes in a menu don't outweigh an evening.",
                     iconData: AverageCardIcon);
 
         if (PerformanceScore.ForGame(_sessions) is int score)
@@ -1192,7 +1197,7 @@ public partial class SessionsWindow : PanelWindow
                 ? $"Full marks need {PerformanceScore.TargetFor(game):0} fps - this game's own target."
                 : $"Full marks need {PerformanceScore.Target:0} fps - the target frame rate in Settings.";
             var card = AddStat("SCORE", $"{score}  {PerformanceScore.Grade(score)}",
-                               $"Performance out of 100, from the last {PerformanceScore.GameSessions} sessions with a frame rate, " +
+                               $"Performance score\nOut of 100, from the last {PerformanceScore.GameSessions} sessions with a frame rate, " +
                                "weighted by how long each ran.\n" +
                                target + "\nClick to give this game a target of its own.\n" +
                                "Point at a session for how its score was reached.",
@@ -1205,8 +1210,10 @@ public partial class SessionsWindow : PanelWindow
         // as a pair, and "Sun" made the second chip wider for nothing.
         const string When = "d MMM yyyy  ·  HH:mm";
         Dates.Children.Add(DatesCard(
-            ("First played", first.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, false),
-            ("Last played", last.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, true)));
+            ("First played", first.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, false,
+             "When the first session DeskMon logged of this game began."),
+            ("Last played", last.ToString(When, CultureInfo.InvariantCulture), CalendarIcon, true,
+             "When the latest session of this game ended.")));
 
         ShowLastSession(_sessions[^1]);
     }
@@ -1232,16 +1239,18 @@ public partial class SessionsWindow : PanelWindow
             return chip;
         }
 
+        // A name line over each, as the cards above have: the chips have no
+        // caption of their own, so the tooltip is where they say what they are.
         Chip(session.Start.ToString("d MMM  ·  HH:mm", CultureInfo.InvariantCulture), CalendarIcon,
-             $"Started {session.Start.ToString("ddd d MMM yyyy HH:mm", CultureInfo.InvariantCulture)}");
-        Chip(SessionRecord.Describe(session.Length), ClockIcon, "How long it ran");
+             $"Started\n{session.Start.ToString("dddd d MMMM yyyy, HH:mm", CultureInfo.InvariantCulture)}.");
+        Chip(SessionRecord.Describe(session.Length), ClockIcon, "Length\nHow long the last session ran.");
 
         if (session.AverageFps is double fps)
-            Chip($"{fps:0} fps", PulseIcon, "Average frame rate over the session");
+            Chip($"{fps:0} fps", PulseIcon, "Average FPS\nThe average frame rate over the last session.");
 
         if (PerformanceScore.For(session)?.Score is int score)
             Chip($"{score}  {PerformanceScore.Grade(score)}", StarIcon,
-                 "Its performance score - point at its row in the table for how it was reached",
+                 "Performance score\nThe last session's score out of 100.\nPoint at its row in the table for how it was reached.",
                  ScoreBrush(score));
     }
 
@@ -1254,6 +1263,10 @@ public partial class SessionsWindow : PanelWindow
 
     // The cards' icons, on PlaytimeIcons' 11 px grid. The chips' pulse and
     // star are drawn bigger, so these are their own, smaller versions.
+
+    /// <summary>LOGGED's tooltip, the same on one game's cards and All games'.</summary>
+    private const string LoggedTip =
+        "Logged\nThe time in the sessions DeskMon logged.\nOnly what it saw - play with DeskMon closed isn't in it.";
 
     /// <summary>A stack of sessions: a card with two more behind it.</summary>
     private const string SessionsCardIcon = "M1.5,4.5 H9.5 V9.5 H1.5 Z M2.5,3 H8.5 M3.5,1.5 H7.5";
@@ -1351,8 +1364,8 @@ public partial class SessionsWindow : PanelWindow
     /// text - while the latest is in the accent and bright, so the eye lands
     /// on "when did I last play" first.
     /// </summary>
-    /// <param name="rows">Caption, figure, icon, and whether it is the bright (latest) row.</param>
-    private Border DatesCard(params (string Caption, string Value, string Icon, bool Latest)[] rows)
+    /// <param name="rows">Caption, figure, icon, whether it is the bright (latest) row, and what the row means for its tooltip.</param>
+    private Border DatesCard(params (string Caption, string Value, string Icon, bool Latest, string About)[] rows)
     {
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1374,7 +1387,7 @@ public partial class SessionsWindow : PanelWindow
 
         for (int i = 0; i < rows.Length; i++)
         {
-            var (caption, value, iconData, latest) = rows[i];
+            var (caption, value, iconData, latest, about) = rows[i];
 
             // A hairline between the rows, so the two read as entries of
             // one list rather than one long line wrapped.
@@ -1432,7 +1445,11 @@ public partial class SessionsWindow : PanelWindow
                 MaxWidth = 240,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = $"{caption}: {value}",
+                // Name, the full figure (cut short on the card) and what it
+                // means - "First played: 3 Oct" alone was a one-line card. The
+                // card's double spaces made single: InfoTip reads "a  b" as a
+                // label / value row, and split "3 Oct 2026  ·  21:19" in two.
+                ToolTip = $"{caption}\n{value.Replace("  ", " ")}\n{about}",
             };
 
             Grid.SetColumn(label, 1);
@@ -1668,7 +1685,10 @@ public partial class SessionsWindow : PanelWindow
                     _ => "PLAYTIME FROM SAVES",
                 },
                 GamePlaytime.Describe(playtime.Time),
-                $"Your whole playtime, {GamePlaytime.Where(playtime.Source)}",
+                // The card's name as the title, then where the figure is from.
+                $"{playtime.Source switch { PlaytimeSource.Steam => "Steam playtime", PlaytimeSource.Gog => "GOG playtime", _ => "Playtime from saves" }}\n" +
+                $"Your whole playtime, {GamePlaytime.Where(playtime.Source)}.\n" +
+                "Counts time played without DeskMon too, so it can be more than LOGGED.",
                 playtime.Source,
                 at: 0);
     }
@@ -1751,17 +1771,25 @@ public partial class SessionsWindow : PanelWindow
                              .GroupBy(g => g.Playtime.Source)
                              .MaxBy(group => group.Sum(g => g.Playtime.Time.Ticks))?.Key;
         if (playtime > total)
-            AddStat("PLAYTIME", GamePlaytime.Describe(playtime), "Every game's whole playtime, from Steam, GOG Galaxy or their saves where known",
+            AddStat("PLAYTIME", GamePlaytime.Describe(playtime),
+                    "Playtime\nEvery game's whole playtime, from Steam, GOG Galaxy or their saves where known.\n" +
+                    "Counts time played without DeskMon too, so it can be more than LOGGED.",
                     mostFrom);
 
-        AddStat("LOGGED", SessionRecord.Describe(total), "Time in the sessions DeskMon logged", PlaytimeSource.Logged);
-        AddStat("SESSIONS", sessions.ToString(CultureInfo.InvariantCulture), iconData: SessionsCardIcon);
-        AddStat("GAMES", _games.Count.ToString(CultureInfo.InvariantCulture), iconData: GamesCardIcon);
+        // Name line first, for the reason one game's cards have one.
+        AddStat("LOGGED", SessionRecord.Describe(total), LoggedTip, PlaytimeSource.Logged);
+        AddStat("SESSIONS", sessions.ToString(CultureInfo.InvariantCulture),
+                "Sessions\nHow many game sessions DeskMon has logged, over every game.",
+                iconData: SessionsCardIcon);
+        AddStat("GAMES", _games.Count.ToString(CultureInfo.InvariantCulture),
+                "Games\nHow many games have at least one session logged.\nEach one is a row in the table below.",
+                iconData: GamesCardIcon);
 
         // As chips, like one game's first and last played in the same place.
         Dates.Children.Add(DatesCard(
-            ("Most played", $"{most.Name}  ·  {GamePlaytime.Describe(most.Playtime.Time)}", TrophyIcon, false),
-            ("Last played", latest.Name, CalendarIcon, true)));
+            ("Most played", $"{most.Name}  ·  {GamePlaytime.Describe(most.Playtime.Time)}", TrophyIcon, false,
+             "The game with the most playtime, from Steam, GOG Galaxy or its saves where known."),
+            ("Last played", latest.Name, CalendarIcon, true, "The game of the latest session DeskMon logged.")));
     }
 
     private void AddSummary(string text, bool bright = false)

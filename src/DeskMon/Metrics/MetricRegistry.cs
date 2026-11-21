@@ -80,7 +80,10 @@ public static class MetricRegistry
                        // show: 85 °C is fine on one chip and throttling on
                        // another. See ThrottleWatch for how it is noticed.
                        Flag: s => s.CpuThrottledFrom is double from && s.CpuClock is double now
-                           ? $"Slowing down to cool off: the clock dropped from {from:0} to {now:0} MHz under load.\n" +
+                           // A short name line over the explanation, as every
+                           // card has - the whole sentence was the bold title.
+                           ? "Thermal throttling\n" +
+                             $"Slowing down to cool off: the clock dropped from {from:0} to {now:0} MHz under load.\n" +
                              "The frame rate drops with it. Better cooling or a cleaner case is the fix."
                            : null),
             // The card's sensors the same way: core, hot spot and memory

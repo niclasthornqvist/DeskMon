@@ -497,7 +497,7 @@ public partial class NotesWindow : PanelWindow
         // Applying the window's own text colour is how a colour is cleared:
         // that colour is stripped out again when the notes are saved, so text
         // in it is text with no colour of its own. See Notes/NotesRtf.cs.
-        Picker.SetNormal(_theme.NotesTextColor, "Back to the normal text colour");
+        Picker.SetNormal(_theme.NotesTextColor, "Normal colour\nTakes the text back to the normal text colour.");
 
         Picker.Picked += colour =>
         {
@@ -4519,7 +4519,9 @@ public partial class NotesWindow : PanelWindow
 
         /// <summary>Folded, the icon in the middle of the strip, not at its left with the spare room after it.</summary>
         public HorizontalAlignment RowAlignment => Folded ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
-        public string? IconToolTip => !Folded ? null : string.IsNullOrEmpty(Detail) ? Name : $"{Name}\n{Detail}";
+        // A line under the name even with no detail, so it is a title and a
+        // line like every other card, not a lone name.
+        public string? IconToolTip => !Folded ? null : $"{Name}\n{(string.IsNullOrEmpty(Detail) ? "Click to open its notes." : Detail)}";
 
         public Visibility HeadingVisibility => IsHeading ? Visibility.Visible : Visibility.Collapsed;
         public Visibility RowVisibility => IsHeading ? Visibility.Collapsed : Visibility.Visible;

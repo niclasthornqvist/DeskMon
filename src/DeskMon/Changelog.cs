@@ -31,6 +31,10 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.79.0", "2026-11-05",
+            "Themes: eight more for the whole program - Midnight (true black for OLED), High contrast, Paper (a warm light one), Ember, Royal, Coffee, Tactical and Sakura",
+            "Sessions: stutters are counted against the two seconds before each frame, not the whole session's median - a stretch at 240 fps no longer turns ordinary 110 fps play into thousands of \"stutters\" (Hogwarts Legacy: 17,099)",
+            "Tooltips: every one now has a name and an explanation under it - the session history's cards (Playtime from saves, Logged, Sessions, Average, Score), first and last played, the last-session chips, and one-liners in Pictures, Versions, Settings, Achievements, notes and the widget"),
         new("1.78.0", "2026-11-05",
             "Achievements: an Almost there row at the top - the three closest to their next tier, so the next goal is in plain sight",
             "Achievements: filters over the cards - All, Unlocked, In progress, Locked - each with how many it shows",
@@ -68,6 +72,7 @@ public static class Changelog
             "Notes: the Last session row is easier to read - figures stand out from their labels, the summary wraps whole items instead of leaving a dot hanging, and Game's readings go on two lines instead of running off the edge",
             "Fixes: the freeze dump is saved zipped (freeze.zip in %LOCALAPPDATA%\\DeskMon), a fraction of the couple of hundred MB it took as freeze.dmp - zipped quickly, and old or unfinished dumps are cleaned up at start",
             "Fixes: the widget no longer starts too small with the GAME section cut off after a reboot or a monitor switch - it re-fits once the screens settle",
+            "Fixes: side by side, the GAME column no longer shows its labels alone, without FPS values or bars, after starting on the other monitor - its rows are remade after a screen change, and every few seconds if one is still squeezed",
             "Fixes: DeskMon comes back by itself after a crash in a driver, such as during a graphics driver update - a small watcher (about 6 MB, no CPU) starts it again after a short wait, up to 3 times in 10 minutes, also when DeskMon was started at logon",
             "Fixes: a graphics driver update no longer reads the card through the old driver - the GPU shows n/a while it is replaced and reconnects by itself, which is when DeskMon crashed",
             "Fixes: GPU temperatures that weren't there yet when DeskMon started show up once the card reports them",

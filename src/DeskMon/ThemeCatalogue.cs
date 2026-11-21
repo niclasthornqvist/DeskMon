@@ -173,6 +173,66 @@ public static class ThemeCatalogue
              normal: "#FFA3BE8C", warn: "#FFEBCB8B", crit: "#FFBF616A", unavailable: "#FF4C566A",
              windowBackground: "#F52E3440", text: "#FFECEFF4", accent: "#FF88C0D0",
              widgetFont: "Consolas", windowFont: "Segoe UI", corner: 8, glow: false),
+
+        // The looks the list above had no answer for: true black for an OLED
+        // screen, a high-contrast one for reading at a glance, a second light
+        // theme that is warm rather than white, and a few more moods. All
+        // opaque where readability is the point, fonts from every Windows PC.
+        Make("Midnight", "True black for OLED screens: the panels vanish, only the figures glow.",
+             background: "#FF000000", border: "#1FFFFFFF", label: "#FF8B93A1", header: "#FF5B6270", section: "#FFF1F5F9",
+             separator: "#1AFFFFFF", track: "#1FFFFFFF", gradientStart: "#FF3B82F6", gradientEnd: "#FF06B6D4",
+             normal: "#FF22C55E", warn: "#FFEAB308", crit: "#FFEF4444", unavailable: "#FF4B5563",
+             windowBackground: "#FF000000", text: "#FFE5E7EB", accent: "#FF3B82F6",
+             widgetFont: "Consolas", windowFont: "Segoe UI", corner: 8, glow: false),
+
+        Make("High contrast", "Solid black, white text and bold colours - the easiest to read at a glance.",
+             background: "#FF000000", border: "#FFFFFFFF", label: "#FFFFFFFF", header: "#FFFFFF00", section: "#FFFFFFFF",
+             separator: "#80FFFFFF", track: "#40FFFFFF", gradientStart: "#FF00FFFF", gradientEnd: "#FF00FFFF",
+             normal: "#FF00FF00", warn: "#FFFFFF00", crit: "#FFFF4040", unavailable: "#FFA0A0A0",
+             windowBackground: "#FF000000", text: "#FFFFFFFF", accent: "#FFFFFF00",
+             widgetFont: "Consolas", windowFont: "Segoe UI", corner: 0, glow: false, bar: "#FF00FFFF"),
+
+        Make("Paper", "Warm cream and ink, a softer light theme for long reading in the notes.",
+             background: "#F0F7F1E3", border: "#33704F2A", label: "#FF6B5A45", header: "#FF8C7A62", section: "#FF2B2116",
+             separator: "#26704F2A", track: "#1F704F2A", gradientStart: "#FFB45309", gradientEnd: "#FF9A3412",
+             normal: "#FF4D7C0F", warn: "#FFB45309", crit: "#FFB91C1C", unavailable: "#FFA8997F",
+             windowBackground: "#FCF7F1E3", text: "#FF2B2116", accent: "#FF9A3412",
+             widgetFont: "Consolas", windowFont: "Georgia", corner: 6, glow: false),
+
+        Make("Ember", "Charcoal and smouldering orange, with a warm glow.",
+             background: "#EB140C0A", border: "#80F97316", label: "#FFE7B9A0", header: "#FFA8735A", section: "#FFFFEDD5",
+             separator: "#40F97316", track: "#26F97316", gradientStart: "#FFDC2626", gradientEnd: "#FFFBBF24",
+             normal: "#FFFBBF24", warn: "#FFF97316", crit: "#FFEF4444", unavailable: "#FF6B4A3A",
+             windowBackground: "#F5140C0A", text: "#FFFFEDD5", accent: "#FFF97316",
+             widgetFont: "Consolas", windowFont: "Bahnschrift", corner: 6, glow: true),
+
+        Make("Royal", "Deep violet velvet trimmed in gold.",
+             background: "#EB170F2A", border: "#80D4AF37", label: "#FFC9BCE6", header: "#FF8A7AB3", section: "#FFF5E6B8",
+             separator: "#40D4AF37", track: "#26C9BCE6", gradientStart: "#FF7C3AED", gradientEnd: "#FFD4AF37",
+             normal: "#FF86EFAC", warn: "#FFFCD34D", crit: "#FFFB7185", unavailable: "#FF5B4E7A",
+             windowBackground: "#F5170F2A", text: "#FFF3EEFF", accent: "#FFD4AF37",
+             widgetFont: "Consolas", windowFont: "Cambria", corner: 10, glow: false),
+
+        Make("Coffee", "Dark roast browns and cream, cosy and easy on the eyes.",
+             background: "#EB1C1410", border: "#4DC8A27A", label: "#FFC8B49C", header: "#FF8F7A66", section: "#FFF5E9DA",
+             separator: "#33C8A27A", track: "#26C8A27A", gradientStart: "#FF8B5A2B", gradientEnd: "#FFE0B07A",
+             normal: "#FFA8C686", warn: "#FFE0A84F", crit: "#FFE06C5A", unavailable: "#FF6A5848",
+             windowBackground: "#F51C1410", text: "#FFF5E9DA", accent: "#FFD9A066",
+             widgetFont: "Consolas", windowFont: "Corbel", corner: 12, glow: false),
+
+        Make("Tactical", "Olive drab and amber, like a heads-up display in the field.",
+             background: "#EB12150D", border: "#66B8A44A", label: "#FFC2C29A", header: "#FF7D8063", section: "#FFFFC857",
+             separator: "#40B8A44A", track: "#26B8A44A", gradientStart: "#FF6B7F3A", gradientEnd: "#FFFFC857",
+             normal: "#FF9ACD32", warn: "#FFFFC857", crit: "#FFFF5A36", unavailable: "#FF555A44",
+             windowBackground: "#F512150D", text: "#FFE8E6CF", accent: "#FFFFC857",
+             widgetFont: "Lucida Console", windowFont: "Bahnschrift", corner: 2, glow: false),
+
+        Make("Sakura", "Cherry blossom pink on soft charcoal.",
+             background: "#EB1E1A1F", border: "#4DF9A8D4", label: "#FFE8C5D6", header: "#FFA88A9A", section: "#FFFFF0F6",
+             separator: "#33F9A8D4", track: "#26F9A8D4", gradientStart: "#FFF472B6", gradientEnd: "#FFFBCFE8",
+             normal: "#FF86EFAC", warn: "#FFFDE68A", crit: "#FFFB7185", unavailable: "#FF6B5A63",
+             windowBackground: "#F51E1A1F", text: "#FFFFF0F6", accent: "#FFF9A8D4",
+             widgetFont: "Consolas", windowFont: "Segoe UI", corner: 14, glow: false),
     };
 
     /// <summary>Custom first, then the presets - what the Theme dropdown lists.</summary>

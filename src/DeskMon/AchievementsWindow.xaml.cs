@@ -256,7 +256,10 @@ public partial class AchievementsWindow : PanelWindow
             Margin = new Thickness(6, Sections.Children.Count == 0 ? 2 : 14, 6, 2),
             Background = Brushes.Transparent,   // so the gaps take the click too
             Cursor = Cursors.Hand,
-            ToolTip = folded ? "Click to unfold" : "Click to fold",
+            // The section's name over the click hint, as the widget's section
+            // headings have it - a lone "Click to fold" was a one-line card.
+            ToolTip = $"{name}\n{(folded ? "Its achievements are folded away." : "The achievements in this section.")}\n" +
+                      (folded ? "Click to show them again." : "Click to fold them away."),
         };
         // A chevron that points down when open, right when folded - the
         // notes window's list fold says the same with it.
@@ -594,7 +597,7 @@ public partial class AchievementsWindow : PanelWindow
                 Background = new SolidColorBrush(bc),
                 HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, -4, -4, 0),
-                ToolTip = "Unlocked",
+                ToolTip = "Unlocked\nYou have reached this tier.",   // name and meaning, as every card has
                 Child = new System.Windows.Shapes.Path
                 {
                     Data = Geometry.Parse("M4.5,9.5 L7.5,12.5 L13.5,6"),

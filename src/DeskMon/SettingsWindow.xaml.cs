@@ -290,10 +290,12 @@ public partial class SettingsWindow : PanelWindow
 
             // The key, so the window still tells you what to look for in the
             // file - the reason the label used to *be* the key. The startup
-            // switch is not in the file, so it says where it is instead.
+            // switch is not in the file, so it says where it is instead. The
+            // setting's name as the title and the key as a "settings.json" row,
+            // as the layout columns' tooltips have it, rather than a lone line.
             ToolTip = setting.Kind == SettingsCatalogue.EditorKind.Startup
-                ? "Stored as a logon task named DeskMon in Windows' Task Scheduler"
-                : $"settings.json: {setting.Key}",
+                ? $"{setting.Label}\nStored as a logon task named DeskMon in Windows' Task Scheduler, not in settings.json."
+                : $"{setting.Label}\nWhere it is kept, for editing the file by hand.\nsettings.json  {setting.Key}",
         };
 
         // Said in words, beside the name: the * it replaced meant nothing
@@ -471,11 +473,12 @@ public partial class SettingsWindow : PanelWindow
             {
                 Text = key,
                 Foreground = _theme.NotesText,
-                ToolTip = $"settings.json: SectionTitles → {key}",
+                // Name line, then what it is, with the key as a row - see Describe.
+                ToolTip = $"{key}\nThe heading this section shows on the widget.\nsettings.json  SectionTitles → {key}",
             };
 
             _settings.SectionTitles.TryGetValue(key, out string? current);
-            var box = NewBox(current ?? string.Empty, $"Leave empty to show {key.ToUpperInvariant()}");
+            var box = NewBox(current ?? string.Empty, $"Section heading\nLeave empty to show {key.ToUpperInvariant()}.");
 
             box.TextChanged += (_, _) =>
             {
@@ -779,7 +782,7 @@ public partial class SettingsWindow : PanelWindow
     private void SetUpColourPicker()
     {
         Picker.SetNormal(null, string.Empty);   // no "normal text" here; Default does that job
-        Picker.SetApplyTooltip("Use this colour");
+        Picker.SetApplyTooltip("Use this colour\nSets the setting to the colour picked.");
 
         Picker.Picked += colour =>
         {
@@ -997,7 +1000,7 @@ public partial class SettingsWindow : PanelWindow
         // a see-through box in the same style rather than a TextBlock: a
         // TextBox insets its text a little past its padding, so a TextBlock
         // with a guessed margin sat a few pixels off from where typing starts.
-        var filter = NewBox(string.Empty, "Show only the programs whose name contains this");
+        var filter = NewBox(string.Empty, "Filter\nShows only the programs whose name contains this.");
         var hint = new TextBox
         {
             Style = (Style)FindResource("DarkTextBox"),
@@ -1355,7 +1358,7 @@ public partial class SettingsWindow : PanelWindow
         };
         combo.Items.Add(new ComboBoxItem { Content = "Off", Tag = string.Empty });
         combo.Items.Add(new ComboBoxItem { Content = "Nearest", Tag = NetworkCheck.DefaultHost,
-                                           ToolTip = "Your line to the internet in general, not any one place" });
+                                           ToolTip = "Nearest\nYour line to the internet in general, not any one place." });
         foreach (var (name, host) in NetworkCheck.Servers)
             combo.Items.Add(new ComboBoxItem { Content = name, Tag = host });
         var custom = new ComboBoxItem { Content = "Custom" };   // no Tag: the box says where
@@ -1365,7 +1368,7 @@ public partial class SettingsWindow : PanelWindow
                          .FirstOrDefault(item => string.Equals(item.Tag as string, current, StringComparison.OrdinalIgnoreCase));
         combo.SelectedItem = known ?? custom;
 
-        var box = NewBox(known is null ? current : string.Empty, "A game server's address. It has to answer pings.");
+        var box = NewBox(known is null ? current : string.Empty, "Custom server\nA game server's address. It has to answer pings.");
         box.Margin = new Thickness(0, 4, 0, 0);
         box.Visibility = known is null ? Visibility.Visible : Visibility.Collapsed;
         box.TextChanged += (_, _) =>

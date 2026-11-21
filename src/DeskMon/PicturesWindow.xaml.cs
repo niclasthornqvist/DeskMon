@@ -633,30 +633,33 @@ public partial class PicturesWindow : PanelWindow
             return;
         }
 
+        // Each card's tooltip a name line and then what it means, as the rest
+        // of the program's are: a lone sentence was drawn as one bold title.
         Stats.Children.Add(StatCard.Make(_theme, "NOTES", _notes.CurrentGame,
-                                         "Whose pictures these are - the notes open in the notepad"));
+                                         "Notes\nWhose pictures these are - the notes open in the notepad."));
 
         // Even at none: the empty picture in the middle of the window says
         // how to take one, and the count still belongs with the other cards.
-        Stats.Children.Add(StatCard.Make(_theme, "PICTURES", pictures.Count.ToString(CultureInfo.InvariantCulture)));
+        Stats.Children.Add(StatCard.Make(_theme, "PICTURES", pictures.Count.ToString(CultureInfo.InvariantCulture),
+                                         "Pictures\nThe screenshots of these notes listed below."));
 
         // Next to PICTURES, which it explains: the notes show more than are
         // listed. In the critical colour - unlike NOT IN NOTES, these can't be
         // put right from here.
         if (missing > 0)
             Stats.Children.Add(StatCard.Make(_theme, "MISSING", missing.ToString(CultureInfo.InvariantCulture),
-                                             "In the notes, but the file is gone - deleted, and not in the Recycle Bin either\n" +
+                                             "Missing\nIn the notes, but the file is gone - deleted, and not in the Recycle Bin either\n" +
                                              "Only the small preview in the notes is left, so it can't be listed here.",
                                              valueBrush: _theme.Crit));
 
         if (pictures.Count > 0)
             Stats.Children.Add(StatCard.Make(_theme, "SIZE", Size(pictures.Sum(p => p.Bytes)),
-                                             "The space the full-size files take on disk"));
+                                             "Size\nThe space the full-size files take on disk."));
 
         int unused = pictures.Count(p => !p.InNotes);
         if (unused > 0)
             Stats.Children.Add(StatCard.Make(_theme, "NOT IN NOTES", unused.ToString(CultureInfo.InvariantCulture),
-                                             "Taken out of the notes, but the files are still here\n" +
+                                             "Not in notes\nTaken out of the notes, but the files are still here.\n" +
                                              "ADD TO NOTES puts one back; DELETE UNUSED clears them all.",
                                              valueBrush: _theme.Warn));
 
