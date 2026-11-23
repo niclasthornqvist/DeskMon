@@ -31,6 +31,9 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.79.1", "2026-11-24",
+            "Fixes: the GAME section is no longer cut off when DeskMon started with Windows - the widget was held to the width of the screen at boot (640 px) for the whole run, and now takes the real screen's once it is up",
+            "Fixes: the widget no longer takes more and more video memory with striped bars - up to 180 MB over a few hours; the stripes are now drawn over the fill rather than cut into it, and it stays at a few MB"),
         new("1.79.0", "2026-11-05",
             "Themes: eight more for the whole program - Midnight (true black for OLED), High contrast, Paper (a warm light one), Ember, Royal, Coffee, Tactical and Sakura",
             "Sessions: stutters are counted against the two seconds before each frame, not the whole session's median - a stretch at 240 fps no longer turns ordinary 110 fps play into thousands of \"stutters\" (Hogwarts Legacy: 17,099)",

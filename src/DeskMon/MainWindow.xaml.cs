@@ -459,12 +459,46 @@ public partial class MainWindow : Window
         if (!IsLoaded || _closed)
             return;
 
+        // First, or the re-fit below is held to the old screen's width - see RefreshSizeLimit.
+        RefreshSizeLimit();
+
         if (_detailsBuilt && !Horizontal)
             RelockWidth();
         else if (Horizontal)
             RemakeRows();   // a plain re-fit kept the rows' stale widths - see RemakeRows
         else
             ResizeToContent();
+    }
+
+    /// <summary>
+    /// Hands WPF today's largest window size. It takes that from Windows
+    /// (WM_GETMINMAXINFO) and never lets the widget grow past it - but Windows
+    /// only sends it while a window is made or resized by its border, and the
+    /// widget has no border. So the size from the moment it was made held for
+    /// the whole run: started while the screen was still at boot resolution,
+    /// 640 px across, the widget was stuck at 660 px with the GAME column cut
+    /// off, and every re-fit since - after the screens settled, on each tick's
+    /// check - was held to that same 660. Sent here by hand with the screen
+    /// as it is now, so WPF reads it in again. Leaves it be when the window
+    /// is not made yet: then the size Windows gives is already today's.
+    /// </summary>
+    private void RefreshSizeLimit()
+    {
+        if (_handle == IntPtr.Zero)
+            return;
+
+        var info = new MINMAXINFO
+        {
+            MaxSize = new POINT { X = GetSystemMetrics(SM_CXMAXIMIZED), Y = GetSystemMetrics(SM_CYMAXIMIZED) },
+            MinTrackSize = new POINT { X = GetSystemMetrics(SM_CXMINTRACK), Y = GetSystemMetrics(SM_CYMINTRACK) },
+            MaxTrackSize = new POINT { X = GetSystemMetrics(SM_CXMAXTRACK), Y = GetSystemMetrics(SM_CYMAXTRACK) },
+        };
+
+        // A metric of 0 means the call failed; better the old limit than none at all.
+        if (info.MaxTrackSize.X <= 0 || info.MaxTrackSize.Y <= 0)
+            return;
+
+        SendMessage(_handle, WM_GETMINMAXINFO, IntPtr.Zero, ref info);
     }
 
     /// <summary>
@@ -1040,6 +1074,10 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // Started with Windows, the window can be made while the screen is
+        // still at boot resolution; the re-fit after the names arrive then
+        // picks up the real limit - see RefreshSizeLimit.
+        RefreshSizeLimit();
         RestorePosition();
 
         // Opening LibreHardwareMonitor loads a kernel driver and enumerates
@@ -1435,6 +1473,11 @@ public partial class MainWindow : Window
             return;
 
         _nextColumnFit = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+
+        // A strip that still doesn't fit after its rows were remade was most
+        // likely held to a size limit from when the screen was smaller - see
+        // RefreshSizeLimit. Remaking alone never got past it.
+        RefreshSizeLimit();
         RemakeRows();
     }
 
@@ -5213,6 +5256,39 @@ public partial class MainWindow : Window
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WM_MOUSEACTIVATE = 0x0021;
     private const int MA_NOACTIVATE = 3;
+
+    // For RefreshSizeLimit: the message WPF learns the window's size limits
+    // from, and the screen metrics Windows itself fills it with.
+    private const int WM_GETMINMAXINFO = 0x0024;
+    private const int SM_CXMINTRACK = 34;
+    private const int SM_CYMINTRACK = 35;
+    private const int SM_CXMAXTRACK = 59;
+    private const int SM_CYMAXTRACK = 60;
+    private const int SM_CXMAXIMIZED = 61;
+    private const int SM_CYMAXIMIZED = 62;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT Reserved;
+        public POINT MaxSize;
+        public POINT MaxPosition;
+        public POINT MinTrackSize;
+        public POINT MaxTrackSize;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref MINMAXINFO lParam);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
     private static extern int GetWindowLong(IntPtr hWnd, int nIndex);

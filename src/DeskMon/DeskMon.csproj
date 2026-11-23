@@ -14,7 +14,7 @@
     <RootNamespace>DeskMon</RootNamespace>
     <!-- Keep in step with the top entry of Changelog.cs, which is what the
          versions window reports as the running version. -->
-    <Version>1.79.0</Version>
+    <Version>1.79.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Our own Main rather than the one WPF generates from App.xaml, so the
          crash watcher can leave before WPF starts - see Program.cs. -->

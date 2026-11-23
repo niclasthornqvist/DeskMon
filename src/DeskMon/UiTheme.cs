@@ -379,8 +379,11 @@ public sealed class UiTheme
     /// </summary>
     public Brush? BarMask { get; private set; }
 
-    /// <summary>The striped style's stripes, over the filled part only - the empty track stays plain.</summary>
-    public Brush? BarFillMask { get; private set; }
+    /// <summary>
+    /// The striped style's stripes, over the filled part only - the empty
+    /// track stays plain. Drawn on top of the fill, not as a mask - see MakeStripes.
+    /// </summary>
+    public Brush? BarFillStripes { get; private set; }
 
     /// <summary>
     /// How many steps the bar fills in - blocks or dots - or null for a smooth
@@ -472,7 +475,7 @@ public sealed class UiTheme
         string style = (settings.BarStyle ?? string.Empty).Trim().ToLowerInvariant();
 
         BarMask = null;
-        BarFillMask = null;
+        BarFillStripes = null;
         BarSteps = null;
         BarRoundEnds = true;
         BarOutlined = false;
@@ -494,7 +497,7 @@ public sealed class UiTheme
                 BarRoundEnds = false;
                 break;
             case "striped":
-                BarFillMask = MakeStripes(height);
+                BarFillStripes = MakeStripes(height);
                 break;
             case "ticks":
                 BarMask = MakeTicks(width, height);
@@ -506,7 +509,7 @@ public sealed class UiTheme
                 // Both at once: the two are independent in MetricRow - the
                 // outline and inset are the track's, the stripes the fill's.
                 BarOutlined = true;
-                BarFillMask = MakeStripes(height);
+                BarFillStripes = MakeStripes(height);
                 break;
             case "line":
                 BarLine = true;
@@ -552,8 +555,17 @@ public sealed class UiTheme
     /// than cut out, so the fill keeps its colour and its length reads as
     /// clearly as a plain one's. A repeating gradient with hard stops - one
     /// brush, no tiles.
+    ///
+    /// Laid over the fill rather than masking it. As an OpacityMask, WPF drew
+    /// each fill into a surface of its own on the graphics card, and since a
+    /// fill's width follows its reading, it kept making new ones: video memory
+    /// climbed by about 0.5 MB every second or two, to some 180 MB over a few
+    /// hours, from the widget alone. Over the fill they are plain drawing.
+    /// The dim stripe is the panel's colour at a third strength, which is
+    /// what the old two-thirds fill let through from behind it, so it looks
+    /// the same on a light theme as on a dark one.
     /// </summary>
-    private static Brush MakeStripes(double height)
+    private Brush MakeStripes(double height)
     {
         double step = Math.Max(4, height);
         var brush = new LinearGradientBrush
@@ -563,10 +575,16 @@ public sealed class UiTheme
             EndPoint = new Point(step, step),
             SpreadMethod = GradientSpreadMethod.Repeat,
         };
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xFF, 0, 0, 0), 0.5));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xA8, 0, 0, 0), 0.5));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0xA8, 0, 0, 0), 1));
+
+        // The panel's colour without its own see-through, since that is laid
+        // over the desktop already and would dim the stripe a second time.
+        var panel = Background is SolidColorBrush solid ? solid.Color : Color.FromRgb(0x12, 0x12, 0x16);
+        var dim = Color.FromArgb(0x57, panel.R, panel.G, panel.B);
+
+        brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0));
+        brush.GradientStops.Add(new GradientStop(Colors.Transparent, 0.5));
+        brush.GradientStops.Add(new GradientStop(dim, 0.5));
+        brush.GradientStops.Add(new GradientStop(dim, 1));
         brush.Freeze();
         return brush;
     }

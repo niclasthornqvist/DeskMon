@@ -271,8 +271,8 @@ public sealed class MetricRow : INotifyPropertyChanged, IPanelRow
     /// <summary>Cuts the bar into blocks, dots or ticks - see <see cref="UiTheme.BarMask"/>.</summary>
     public Brush? BarMask => _theme.BarMask;
 
-    /// <summary>The striped style's stripes, on the fill alone - see <see cref="UiTheme.BarFillMask"/>.</summary>
-    public Brush? FillMask => _theme.BarFillMask;
+    /// <summary>The striped style's stripes, laid over the fill alone - see <see cref="UiTheme.BarFillStripes"/>.</summary>
+    public Brush? FillStripes => _theme.BarFillStripes;
 
     /// <summary>The line style's knob: as big as the bar thickness setting, so that setting still sizes something.</summary>
     public double KnobSize => TrackHeight;

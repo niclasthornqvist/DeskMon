@@ -506,12 +506,16 @@
                                                  from the reading; BarTrackWidth in settings
                                                  is the track it is filled against. The
                                                  stripes, on the striped style, are on the
-                                                 fill alone. -->
+                                                 fill alone: laid over it rather than as an
+                                                 OpacityMask, which cost a graphics-card
+                                                 surface for every width - see UiTheme.MakeStripes. -->
                                             <Border HorizontalAlignment="Left"
                                                     Width="{Binding BarWidth}"
                                                     CornerRadius="{Binding FillCorner}"
-                                                    OpacityMask="{Binding FillMask}"
-                                                    Background="{Binding BarBrush}" />
+                                                    Background="{Binding BarBrush}">
+                                                <Border CornerRadius="{Binding FillCorner}"
+                                                        Background="{Binding FillStripes}" />
+                                            </Border>
                                         </Border>
 
                                         <!-- The line style's knob, at the end of the fill. -->
@@ -590,9 +594,12 @@
                                                         <ColumnDefinition Width="{Binding FillShare}" />
                                                         <ColumnDefinition Width="{Binding RestShare}" />
                                                     </Grid.ColumnDefinitions>
+                                                    <!-- Stripes over the fill, not a mask on it - see UiTheme.MakeStripes. -->
                                                     <Border CornerRadius="{Binding FillCorner}"
-                                                            OpacityMask="{Binding FillMask}"
-                                                            Background="{Binding InBarFillBrush}" />
+                                                            Background="{Binding InBarFillBrush}">
+                                                        <Border CornerRadius="{Binding FillCorner}"
+                                                                Background="{Binding FillStripes}" />
+                                                    </Border>
                                                 </Grid>
                                             </Border>
 
