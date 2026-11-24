@@ -1449,6 +1449,17 @@ public partial class MainWindow : Window
     private DateTime _nextColumnFit;
 
     /// <summary>
+    /// The strip's needed and actual width at the last remake, and how many
+    /// remakes in a row found them the same - so KeepColumnsInside can stop
+    /// trying what a remake can't fix.
+    /// </summary>
+    private (double Needed, double Actual) _lastRemakeWidths = (double.NaN, double.NaN);
+    private int _remakesAtSameWidths;
+
+    /// <summary>Enough for a remake that settles over a pass or two; past it, it isn't going to.</summary>
+    private const int MaxRemakesAtSameWidths = 3;
+
+    /// <summary>
     /// Side by side, the window opens narrow and grows over the next layout
     /// passes, as the columns settle on their widths. When the last of those
     /// was missed, as could happen while Windows was starting, the strip
@@ -1468,11 +1479,35 @@ public partial class MainWindow : Window
         if (_sectionsPanel is not { Columns: true } panel || !IsVisible)
             return;
 
+        // The hold first: RowSqueezed walks every row's parts, and checked
+        // ahead of it that walk ran on every tick, in games too, for an
+        // answer used once in ten seconds.
+        if (DateTime.UtcNow < _nextColumnFit)
+            return;
+
         double right = panel.TranslatePoint(new Point(panel.NeededWidth, 0), this).X;
-        if ((right <= ActualWidth + 1 && !RowSqueezed(panel)) || DateTime.UtcNow < _nextColumnFit)
+        if (right <= ActualWidth + 1 && !RowSqueezed(panel))
             return;
 
         _nextColumnFit = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+
+        // Given up after a few remakes that changed nothing: a strip wider
+        // than every screen together, or a row a remake can't widen, used to
+        // have every row's template rebuilt every ten seconds for the whole
+        // run, to no effect. Any change of either width - a fold, a layout,
+        // a display or DPI re-fit - counts as new and gets its tries again.
+        var widths = (panel.NeededWidth, ActualWidth);
+        if (widths == _lastRemakeWidths)
+        {
+            if (_remakesAtSameWidths >= MaxRemakesAtSameWidths)
+                return;
+            _remakesAtSameWidths++;
+        }
+        else
+        {
+            _lastRemakeWidths = widths;
+            _remakesAtSameWidths = 1;
+        }
 
         // A strip that still doesn't fit after its rows were remade was most
         // likely held to a size limit from when the screen was smaller - see
@@ -1501,9 +1536,20 @@ public partial class MainWindow : Window
                 || VisualTreeHelper.GetChild(child, 0) is not System.Windows.Controls.Grid strip)
                 continue;
 
+            // Without the part's own margin: DesiredSize has it and RenderSize
+            // doesn't, so the throttle flag's 4 px margin read as squeezed
+            // whenever the flag was up, and the rows were remade every ten
+            // seconds of a hot game. Only the outward part of a margin - a
+            // negative one, as the hover strip's, makes nothing squeezed.
             foreach (UIElement part in strip.Children)
-                if (part.Visibility == Visibility.Visible && part.RenderSize.Width + 1 < part.DesiredSize.Width)
+            {
+                if (part.Visibility != Visibility.Visible)
+                    continue;
+                var margin = (part as FrameworkElement)?.Margin ?? default;
+                double asked = part.DesiredSize.Width - Math.Max(0, margin.Left) - Math.Max(0, margin.Right);
+                if (part.RenderSize.Width + 1 < asked)
                     return true;
+            }
         }
         return false;
     }

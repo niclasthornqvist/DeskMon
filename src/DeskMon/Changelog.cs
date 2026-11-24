@@ -31,6 +31,10 @@ public static class Changelog
 
     public static readonly Release[] Releases =
     {
+        new("1.79.2", "2026-11-24",
+            "Fixes: the widget no longer rebuilds every row every 10 s while the thermal throttling flag shows, side by side - the flag's margin read as a squeezed row",
+            "Fixes: leaving a fast menu for play under about 110 fps no longer adds about 150 \"stutters\" - frames are judged against the last few frames too, not only the last two seconds",
+            "Fixes: the side-by-side widget stops remaking its rows after a few tries that change nothing, and no longer checks every row on every tick"),
         new("1.79.1", "2026-11-24",
             "Fixes: the GAME section is no longer cut off when DeskMon started with Windows - the widget was held to the width of the screen at boot (640 px) for the whole run, and now takes the real screen's once it is up",
             "Fixes: the widget no longer takes more and more video memory with striped bars - up to 180 MB over a few hours; the stripes are now drawn over the fill rather than cut into it, and it stays at a few MB"),

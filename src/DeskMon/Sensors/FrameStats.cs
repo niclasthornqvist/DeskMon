@@ -529,7 +529,33 @@ public sealed class FrameStats
                 _median = Median();
                 _sinceRecount = 0;
             }
-            return _median > 0 && frameMs >= Math.Max(2.5 * _median, _median + 8);
+
+            // Against whichever is slower, the two seconds or the last few
+            // frames. The two seconds alone lagged a drop in frame rate: out
+            // of a 1000 fps menu into 90 fps play, every 11 ms frame was over
+            // the menu's 9 ms line until play filled half the window - some
+            // 165 "stutters" per menu exit. The last frames catch up within
+            // a handful, and one hitch among them can't lift their median,
+            // so real hitches still count.
+            double median = Math.Max(_median, RecentMedian());
+            return median > 0 && frameMs >= Math.Max(2.5 * median, median + 8);
+        }
+
+        /// <summary>How many of the latest frames <see cref="RecentMedian"/> takes; even, and well under <see cref="Warmup"/>.</summary>
+        private const int Recent = 8;
+
+        /// <summary>
+        /// The median of the last few frames. Every frame, not every 32 as the
+        /// window's: it is only eight values, sorted on the stack, so at
+        /// 1000 fps it is still nothing - and lagging is what it is here to stop.
+        /// </summary>
+        private double RecentMedian()
+        {
+            Span<double> last = stackalloc double[Recent];
+            for (int i = 0; i < Recent; i++)
+                last[i] = _ring[(_head + _count - 1 - i) % Capacity];
+            last.Sort();
+            return (last[Recent / 2 - 1] + last[Recent / 2]) / 2;
         }
 
         /// <summary>
